@@ -4,6 +4,7 @@ $ErrorActionPreference = "Stop"
 
 $RepoRoot = Resolve-Path (Join-Path $PSScriptRoot "..\..")
 $BackendDir = Join-Path $RepoRoot "apps\backend"
+$BackendTestsDir = Join-Path $RepoRoot "tests/backend"
 
 if ([string]::IsNullOrWhiteSpace($env:UV_CACHE_DIR)) {
     $env:UV_CACHE_DIR = Join-Path $RepoRoot ".uv-cache"
@@ -33,7 +34,7 @@ try {
     Invoke-Step "backend install" { uv sync --frozen }
     Invoke-Step "backend ruff" { uv run ruff check . }
     Invoke-Step "backend pyright" { uv run pyright }
-    Invoke-Step "backend pytest" { uv run pytest ..\..\tests\backend }
+    Invoke-Step "backend pytest" { uv run pytest $BackendTestsDir }
 }
 finally {
     Pop-Location
