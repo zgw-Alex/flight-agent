@@ -30,6 +30,9 @@ RULES = (
             {
                 "fastapi",
                 "httpx",
+                "openai",
+                "pydantic",
+                "requests",
                 "sqlalchemy",
                 "uvicorn",
             }
@@ -53,6 +56,9 @@ RULES = (
             {
                 "fastapi",
                 "httpx",
+                "openai",
+                "pydantic",
+                "requests",
                 "sqlalchemy",
                 "uvicorn",
             }
