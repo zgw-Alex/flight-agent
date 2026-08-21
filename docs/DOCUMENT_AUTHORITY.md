@@ -17,6 +17,7 @@ From highest to lowest authority:
 4. Current approved Milestone or Implementation Unit contract:
    - `project-docs/03_implementation-roadmap/milestones/M2/机票筛选Agent_第三阶段_M2_Core_Domain_Contract_Specification_V1.0.docx`
    - `project-docs/03_implementation-roadmap/milestones/M2/机票筛选Agent_第三阶段_M2_Implementation_Units与验收计划_V1.0.docx`
+   - `project-docs/03_implementation-roadmap/milestones/M2/机票筛选Agent_第三阶段_M2_Core_Domain_Contract正式收口_V1.0.docx`
    - `project-docs/03_implementation-roadmap/milestones/M1/机票筛选Agent_第三阶段_M1_Architecture_Skeleton正式收口_V1.0.docx`
 5. Development Environment Readiness documents, within their own readiness scope.
 6. `project-docs/99_reference/` historical and traceability materials.
@@ -27,7 +28,7 @@ From highest to lowest authority:
 - The Stage 1 closure document is the Product and Domain semantics baseline.
 - The Stage 2 architecture closure document is the Engineering Architecture baseline for Third Stage implementation.
 - The Stage 3 implementation roadmap controls milestone sequencing and unit-level delivery process.
-- The M2 Core Domain Contract controls the current pure Domain representation work, starting with Shared Domain Primitives in M2-U1.
+- The M2 Core Domain Contract Specification remains the Contract Authority for M2 Domain semantics; the M2 formal closure records that M2-U1 through M2-U5 and the M2 Aggregate Exit Gate are complete with Contract Amendment NONE.
 - The M1 Architecture Skeleton closure controls the current architecture dependency guard and composition-root boundary, provided it does not conflict with higher authority.
 
 ## Reference And Traceability Sources
@@ -64,7 +65,7 @@ An approved Contract Amendment must include the decision, affected scope, ration
 For Implementation Unit execution, read the minimum sufficient authoritative context in this order:
 
 1. `docs/DOCUMENT_AUTHORITY.md`
-2. the current approved Implementation Unit or Milestone contract, including the M2 Core Domain Contract Specification and M2 Implementation Units plan during M2 work
+2. the current approved Implementation Unit or Milestone contract, including the M2 Core Domain Contract Specification, M2 Implementation Units plan, and M2 formal closure evidence during post-M2 work
 3. the Stage 3 implementation roadmap sections relevant to the current milestone and unit
 4. the Stage 2 architecture closure sections directly related to the change
 5. the Stage 1 product closure sections if Product or Domain behavior is involved
