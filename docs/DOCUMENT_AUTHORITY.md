@@ -14,7 +14,8 @@ From highest to lowest authority:
    - `project-docs/01_product-baseline/机票筛选Agent_第一阶段正式收口_V0.docx`
 3. Third Stage implementation roadmap:
    - `project-docs/03_implementation-roadmap/机票筛选Agent_第三阶段实施与讨论大纲_V0.docx`
-4. Current approved Milestone or Implementation Unit contract.
+4. Current approved Milestone or Implementation Unit contract:
+   - `project-docs/03_implementation-roadmap/milestones/M1/机票筛选Agent_第三阶段_M1_Architecture_Skeleton正式收口_V1.0.docx`
 5. Development Environment Readiness documents, within their own readiness scope.
 6. `project-docs/99_reference/` historical and traceability materials.
 7. README, development docs, and code comments, which explain the current implementation but do not override higher-level authority.
@@ -24,7 +25,7 @@ From highest to lowest authority:
 - The Stage 1 closure document is the Product and Domain semantics baseline.
 - The Stage 2 architecture closure document is the Engineering Architecture baseline for Third Stage implementation.
 - The Stage 3 implementation roadmap controls milestone sequencing and unit-level delivery process.
-- The current Implementation Unit contract controls the logical change boundary for the active unit, provided it does not conflict with higher authority.
+- The M1 Architecture Skeleton closure controls the current architecture dependency guard and composition-root boundary, provided it does not conflict with higher authority.
 
 ## Reference And Traceability Sources
 
@@ -39,7 +40,7 @@ Phase 1-19 summaries are useful for traceability, but they are not default prima
 
 ## Superseded Documents
 
-No documents are marked superseded in M0-U1.
+No documents are marked superseded in M1.
 
 To mark a document as superseded, record:
 
@@ -60,7 +61,7 @@ An approved Contract Amendment must include the decision, affected scope, ration
 For Implementation Unit execution, read the minimum sufficient authoritative context in this order:
 
 1. `docs/DOCUMENT_AUTHORITY.md`
-2. the current approved Implementation Unit contract
+2. the current approved Implementation Unit or Milestone contract
 3. the Stage 3 implementation roadmap sections relevant to the current milestone and unit
 4. the Stage 2 architecture closure sections directly related to the change
 5. the Stage 1 product closure sections if Product or Domain behavior is involved

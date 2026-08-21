@@ -50,6 +50,10 @@ Scope。历史 Reference 仅用于追溯，不得覆盖正式收口结论。
     -   若正式收口已经锁定某项语义，而实施大纲仅给出建议 Unit
         拆分或执行顺序，以正式收口为语义上游。
 4.  **当前 Milestone / Implementation Unit 已确认规格**
+    -   `03_implementation-roadmap/milestones/M1/机票筛选Agent_第三阶段_M1_Architecture_Skeleton正式收口_V1.0.docx`
+        -   第三阶段 M1 Architecture Skeleton 的当前正式收口基线。
+        -   权威范围包括 M1 package/layer skeleton、Composition Root 边界、Architecture Guard、正反向依赖验证与 M2 入口条件。
+        -   不提前定义 M2 Domain Contract、真实 Provider/LLM、SQLAlchemy ORM、Public API 业务语义或后置基础设施。
     -   例如后续形成的
         `M0-U1 Repository Bootstrap Spec`、`M3-U2 ... Spec` 等。
     -   负责定义当前 Logical Change Boundary 的
@@ -139,7 +143,7 @@ Codex 不需要在每个任务中机械读取全部项目历史。原则是：
 优先读取：
 
 1.  `DOCUMENT_AUTHORITY.md`
-2.  当前已确认的 Implementation Unit Spec
+2.  当前已确认的 Implementation Unit / Milestone Spec
 3.  `03_implementation-roadmap` 中该 Milestone 与 Unit 标准要求
 4.  `02_architecture-baseline` 中直接相关 Contract
 5.  涉及 Product / Domain 行为时读取 `01_product-baseline`

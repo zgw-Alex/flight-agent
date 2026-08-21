@@ -5,6 +5,9 @@ $ErrorActionPreference = "Stop"
 $RepoRoot = Resolve-Path (Join-Path $PSScriptRoot "..\..")
 $BackendDir = Join-Path $RepoRoot "apps\backend"
 $BackendTestsDir = Join-Path $RepoRoot "tests/backend"
+$PytestTempParent = Join-Path $RepoRoot "tmp"
+$PytestTempName = "pytest-$($env:USERNAME)-$PID"
+$PytestTempDir = Join-Path $PytestTempParent $PytestTempName
 
 if ([string]::IsNullOrWhiteSpace($env:UV_CACHE_DIR)) {
     $env:UV_CACHE_DIR = Join-Path $RepoRoot ".uv-cache"
@@ -31,10 +34,14 @@ function Invoke-Step {
 
 Push-Location $BackendDir
 try {
+    New-Item -ItemType Directory -Force -Path $PytestTempParent | Out-Null
+
     Invoke-Step "backend install" { uv sync --frozen }
     Invoke-Step "backend ruff" { uv run ruff check . }
     Invoke-Step "backend pyright" { uv run pyright }
-    Invoke-Step "backend pytest" { uv run pytest $BackendTestsDir }
+    Invoke-Step "backend pytest" {
+        uv run pytest -p no:cacheprovider --basetemp $PytestTempDir $BackendTestsDir
+    }
 }
 finally {
     Pop-Location

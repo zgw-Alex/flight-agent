@@ -1,17 +1,17 @@
 # Flight Agent
 
-Flight Agent is a V0 flight filtering agent for outbound flights from mainland China. This repository is completing the Third Stage M0 Development Baseline.
+Flight Agent is a V0 flight filtering agent for outbound flights from mainland China. This repository is completing the Third Stage M1 Architecture Skeleton.
 
 ## Project Status
 
 - Stage: Third Stage implementation
-- Milestone: M0 Development Baseline
-- Unit: M0-U5 CI / Unified Development Baseline
-- Current state: repository identity, backend toolchain, frontend toolchain, PostgreSQL configuration baseline, local CI wrappers, and GitHub Actions baseline
+- Milestone: M1 Architecture Skeleton
+- Unit: M1 architecture dependency guard and composition-root boundary
+- Current state: M0 development baseline plus backend package skeleton, composition-root wiring, and architecture dependency guard
 
 ## Scope
 
-V0 focuses on a flight filtering agent for outbound flights from mainland China. M0 establishes the reproducible development baseline only. It does not implement product behavior, persistence workflows, provider integrations, LLM integrations, ranking, recommendation, or orchestration.
+V0 focuses on a flight filtering agent for outbound flights from mainland China. M1 establishes the architecture skeleton and dependency guard only. It does not implement product behavior, persistence workflows, provider integrations, LLM integrations, ranking, recommendation, or orchestration.
 
 ## Architecture Overview
 
@@ -20,6 +20,7 @@ This repository is a monorepo. The frontend and backend are separate application
 - `apps/backend/` contains the Python FastAPI backend baseline, managed with `uv`, Ruff, Pyright, and pytest.
 - `apps/frontend/` contains the React and TypeScript frontend baseline, managed with `pnpm`, ESLint, TypeScript, Vitest, and Vite.
 - PostgreSQL is the formal local persistence target for later units. M0 provides Docker Compose configuration and typed settings only; SQLAlchemy, Alembic, schemas, migrations, repositories, and business persistence are not implemented in M0.
+- Backend architecture layers are represented by `api`, `application`, `domain`, `ports`, `adapters`, `infrastructure`, and `bootstrap`; architecture tests enforce the M1 dependency direction before M2 adds domain contracts.
 
 ## Repository Structure
 
