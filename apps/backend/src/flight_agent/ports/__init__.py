@@ -17,8 +17,14 @@ from flight_agent.ports.requirement_interpreter import (
     RequirementInterpreter,
     RequirementProposal,
 )
+from flight_agent.ports.requirement_repository import (
+    CommitStatus,
+    RequirementCommitResult,
+    RequirementRepository,
+)
 
 __all__ = [
+    "CommitStatus",
     "InitialInterpreterPayload",
     "InitialRequirementProposal",
     "InterpreterFailure",
@@ -31,7 +37,9 @@ __all__ = [
     "PatchProposalAction",
     "PatchProposalOperation",
     "PatchRequirementProposal",
+    "RequirementCommitResult",
     "RequirementInterpretationContext",
     "RequirementInterpreter",
     "RequirementProposal",
+    "RequirementRepository",
 ]

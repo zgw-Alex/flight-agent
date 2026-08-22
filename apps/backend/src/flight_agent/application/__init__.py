@@ -1,5 +1,6 @@
 """Application layer for use-case orchestration."""
 
+from flight_agent.application.requirement_commit import commit_requirement_transition
 from flight_agent.application.requirement_interpretation import interpret_requirement
 from flight_agent.application.requirement_normalization import (
     AirportCanonicalization,
@@ -28,6 +29,7 @@ __all__ = [
     "RequirementValidationIssueCode",
     "RequirementValidationResult",
     "SearchReadinessStatus",
+    "commit_requirement_transition",
     "interpret_requirement",
     "normalize_initial_requirement",
     "normalize_patch_requirement",
