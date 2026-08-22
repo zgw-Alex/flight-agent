@@ -17,6 +17,15 @@ from flight_agent.application.requirement_normalization import (
     normalize_patch_requirement,
     validate_requirement,
 )
+from flight_agent.application.requirement_transition import (
+    PatchApplicationResult,
+    PatchConstructionResult,
+    PatchTransitionIssue,
+    PatchTransitionIssueCode,
+    PatchTransitionStatus,
+    apply_patch_proposal,
+    construct_patch_set,
+)
 
 __all__ = [
     "AirportCanonicalization",
@@ -25,11 +34,18 @@ __all__ = [
     "NormalizationIssueCode",
     "NormalizationResult",
     "NormalizedRequirementCandidate",
+    "PatchApplicationResult",
+    "PatchConstructionResult",
+    "PatchTransitionIssue",
+    "PatchTransitionIssueCode",
+    "PatchTransitionStatus",
     "RequirementValidationIssue",
     "RequirementValidationIssueCode",
     "RequirementValidationResult",
     "SearchReadinessStatus",
+    "apply_patch_proposal",
     "commit_requirement_transition",
+    "construct_patch_set",
     "interpret_requirement",
     "normalize_initial_requirement",
     "normalize_patch_requirement",
