@@ -1,5 +1,37 @@
-"""Abstract ports owned by the backend core boundary.
+"""Abstract ports owned by the backend core boundary."""
 
-Concrete adapters implement these contracts from the outside in. M1 does not
-define business port signatures yet.
-"""
+from flight_agent.ports.requirement_interpreter import (
+    InitialInterpreterPayload,
+    InitialRequirementProposal,
+    InterpreterFailure,
+    InterpreterInput,
+    InterpreterMode,
+    InterpreterPayload,
+    InterpreterResult,
+    InterpreterResultStatus,
+    PatchInterpreterPayload,
+    PatchProposalAction,
+    PatchProposalOperation,
+    PatchRequirementProposal,
+    RequirementInterpretationContext,
+    RequirementInterpreter,
+    RequirementProposal,
+)
+
+__all__ = [
+    "InitialInterpreterPayload",
+    "InitialRequirementProposal",
+    "InterpreterFailure",
+    "InterpreterInput",
+    "InterpreterMode",
+    "InterpreterPayload",
+    "InterpreterResult",
+    "InterpreterResultStatus",
+    "PatchInterpreterPayload",
+    "PatchProposalAction",
+    "PatchProposalOperation",
+    "PatchRequirementProposal",
+    "RequirementInterpretationContext",
+    "RequirementInterpreter",
+    "RequirementProposal",
+]

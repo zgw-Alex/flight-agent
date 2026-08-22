@@ -1,5 +1,5 @@
-"""Application layer for use-case orchestration.
+"""Application layer for use-case orchestration."""
 
-Application code may depend on ``flight_agent.domain`` and ``flight_agent.ports``
-only; concrete adapters and infrastructure are wired in bootstrap.
-"""
+from flight_agent.application.requirement_interpretation import interpret_requirement
+
+__all__ = ["interpret_requirement"]

@@ -38,8 +38,7 @@ RULES = (
             }
         ),
         forbidden_message=(
-            "Domain must not depend on outer layers or web, ORM, HTTP, provider, "
-            "or LLM SDKs"
+            "Domain must not depend on outer layers or web, ORM, HTTP, provider, or LLM SDKs"
         ),
     ),
     DependencyRule(
@@ -100,7 +99,19 @@ def test_application_concrete_dependency_negative_control_fails(tmp_path: Path) 
     violations = collect_dependency_violations(package_root)
 
     assert any("application-boundary" in violation for violation in violations)
-    assert any("Application must depend only on Domain and Ports" in violation for violation in violations)
+    assert any(
+        "Application must depend only on Domain and Ports" in violation for violation in violations
+    )
+
+
+def test_requirement_interpreter_fake_stays_outside_application_boundary() -> None:
+    application_imports = {
+        imported_module
+        for module_path in (SOURCE_ROOT / "application").rglob("*.py")
+        for imported_module in imported_modules(module_path)
+    }
+
+    assert "flight_agent.adapters.requirement_interpreter_fake" not in application_imports
 
 
 def collect_dependency_violations(package_root: Path) -> list[str]:
