@@ -17,6 +17,14 @@ from flight_agent.application.requirement_normalization import (
     normalize_patch_requirement,
     validate_requirement,
 )
+from flight_agent.application.requirement_pipeline import (
+    PostCommitProcessingStatus,
+    RequirementPipelineOutcome,
+    RequirementPipelineOutcomeStatus,
+    execute_initial_requirement,
+    execute_patch_requirement,
+    execute_patch_requirement_from_current,
+)
 from flight_agent.application.requirement_transition import (
     PatchApplicationResult,
     PatchConstructionResult,
@@ -39,6 +47,9 @@ __all__ = [
     "PatchTransitionIssue",
     "PatchTransitionIssueCode",
     "PatchTransitionStatus",
+    "PostCommitProcessingStatus",
+    "RequirementPipelineOutcome",
+    "RequirementPipelineOutcomeStatus",
     "RequirementValidationIssue",
     "RequirementValidationIssueCode",
     "RequirementValidationResult",
@@ -46,6 +57,9 @@ __all__ = [
     "apply_patch_proposal",
     "commit_requirement_transition",
     "construct_patch_set",
+    "execute_initial_requirement",
+    "execute_patch_requirement",
+    "execute_patch_requirement_from_current",
     "interpret_requirement",
     "normalize_initial_requirement",
     "normalize_patch_requirement",
