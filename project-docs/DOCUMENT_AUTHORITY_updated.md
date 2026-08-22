@@ -50,6 +50,15 @@ Scope。历史 Reference 仅用于追溯，不得覆盖正式收口结论。
     -   若正式收口已经锁定某项语义，而实施大纲仅给出建议 Unit
         拆分或执行顺序，以正式收口为语义上游。
 4.  **当前 Milestone / Implementation Unit 已确认规格**
+    -   `03_implementation-roadmap/milestones/M3/机票筛选Agent_第三阶段_M3_Requirement_Pipeline_Specification_V1.0.docx`
+        -   第三阶段 M3 Requirement Pipeline 的正式 Contract Authority。
+        -   权威范围包括 INITIAL/PATCH pipeline、Interpreter boundary、Normalization/Validation、RequirementRepository、Patch construction/application、Golden Scenarios 与 Aggregate Exit Gate。
+        -   不重新定义 M2 Core Domain Contract，不提前定义 M4 Provider/Snapshot 或后续 Milestone 能力。
+    -   `03_implementation-roadmap/milestones/M3/机票筛选Agent_第三阶段_M3_Requirement_Pipeline正式收口_V1.0.docx`
+        -   第三阶段 M3 Requirement Pipeline 的正式 Milestone Closure Evidence。
+        -   记录 M3-U1～M3-U5、GS-01～GS-13、Aggregate Exit Gate G1～G9 已 PASS，Contract Amendment NONE。
+        -   M3 Milestone Status：CLOSED。
+        -   不替代 M3 Requirement Pipeline Specification 的 Contract Authority。
     -   `03_implementation-roadmap/milestones/M1/机票筛选Agent_第三阶段_M1_Architecture_Skeleton正式收口_V1.0.docx`
         -   第三阶段 M1 Architecture Skeleton 的当前正式收口基线。
         -   权威范围包括 M1 package/layer skeleton、Composition Root 边界、Architecture Guard、正反向依赖验证与 M2 入口条件。
@@ -217,6 +226,18 @@ Codex 在第三阶段默认遵守：
 -   真实工程事实若要求改变稳定 Contract，必须走受控 Contract Amendment。
 
 ## 8. 当前阶段入口与后续流转
+
+当前 Milestone 状态：
+
+-   M1 Architecture Skeleton：CLOSED。
+-   M2 Core Domain Contract：CLOSED。
+-   M3 Requirement Pipeline：CLOSED。
+
+M3 Requirement Pipeline 的正式 Contract 由
+`03_implementation-roadmap/milestones/M3/机票筛选Agent_第三阶段_M3_Requirement_Pipeline_Specification_V1.0.docx`
+定义；`03_implementation-roadmap/milestones/M3/机票筛选Agent_第三阶段_M3_Requirement_Pipeline正式收口_V1.0.docx`
+作为正式收口证据，证明该 Contract 已通过 Implementation Units、Golden
+Scenarios 与 Aggregate Exit Gate，并完成 Milestone Closure。
 
 当前首先完成：
 
