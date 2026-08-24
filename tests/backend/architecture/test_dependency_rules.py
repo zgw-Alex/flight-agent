@@ -199,6 +199,24 @@ def test_provider_mapper_snapshot_dependency_negative_control_fails(tmp_path: Pa
     assert any("flight_agent.domain.flights.snapshot" in violation for violation in violations)
 
 
+def test_candidate_normalization_stays_out_of_downstream_and_provider_specific_boundaries() -> None:
+    violations = collect_candidate_normalization_boundary_violations(SOURCE_ROOT)
+
+    assert violations == []
+
+
+def test_candidate_normalization_downstream_dependency_negative_control_fails(tmp_path: Path) -> None:
+    package_root = make_package_fixture(tmp_path)
+    write_module(
+        package_root / "ports" / "candidate_normalization.py",
+        "from flight_agent.domain.workflow.recommendation import Recommendation\n",
+    )
+
+    violations = collect_candidate_normalization_boundary_violations(package_root)
+
+    assert any("flight_agent.domain.workflow.recommendation" in violation for violation in violations)
+
+
 def collect_provider_acl_downstream_violations(package_root: Path) -> list[str]:
     mock_root = package_root / "adapters" / "flight_providers" / "mock"
     if not mock_root.exists():
@@ -218,6 +236,31 @@ def collect_provider_acl_downstream_violations(package_root: Path) -> list[str]:
                     f"{relative(module_path)} imports {imported_module}. "
                     "Mock provider must not depend on downstream candidate processing"
                 )
+    return violations
+
+
+def collect_candidate_normalization_boundary_violations(package_root: Path) -> list[str]:
+    module_path = package_root / "ports" / "candidate_normalization.py"
+    if not module_path.exists():
+        return []
+    forbidden_imports = {
+        "flight_agent.adapters.flight_providers.mock",
+        "flight_agent.adapters.flight_providers.mock.mapper",
+        "flight_agent.domain.requirements",
+        "flight_agent.domain.workflow",
+        "flight_agent.domain.workflow.recommendation",
+        "flight_agent.domain.flights.snapshot",
+        "httpx",
+        "requests",
+    }
+    violations: list[str] = []
+    for imported_module in imported_modules(module_path):
+        if imported_module in forbidden_imports:
+            violations.append(
+                "candidate-normalization-boundary: "
+                f"{relative(module_path)} imports {imported_module}. "
+                "Normalizer/Merger must not depend on downstream, provider-specific, or request authority"
+            )
     return violations
 
 

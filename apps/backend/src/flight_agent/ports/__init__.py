@@ -1,5 +1,22 @@
 """Abstract ports owned by the backend core boundary."""
 
+from flight_agent.ports.candidate_normalization import (
+    CandidateMerger,
+    CommonNormalizer,
+    EquivalenceDecision,
+    MergedCandidateGraph,
+    MergeEvidence,
+    MergeEvidenceCategory,
+    MergerVersion,
+    NormalizationContext,
+    NormalizationIssue,
+    NormalizationIssueCategory,
+    NormalizationResult,
+    NormalizationStatistics,
+    NormalizerVersion,
+    ReferenceData,
+    ReferenceDataVersion,
+)
 from flight_agent.ports.flight_providers import (
     CoverageCompleteness,
     FlightProvider,
@@ -52,8 +69,11 @@ from flight_agent.ports.requirement_repository import (
 )
 
 __all__ = [
+    "CandidateMerger",
     "CommitStatus",
+    "CommonNormalizer",
     "CoverageCompleteness",
+    "EquivalenceDecision",
     "FlightProvider",
     "InitialInterpreterPayload",
     "InitialRequirementProposal",
@@ -74,6 +94,16 @@ __all__ = [
     "MappingIssue",
     "MappingIssueCategory",
     "MappingStatistics",
+    "MergeEvidence",
+    "MergeEvidenceCategory",
+    "MergedCandidateGraph",
+    "MergerVersion",
+    "NormalizationContext",
+    "NormalizationIssue",
+    "NormalizationIssueCategory",
+    "NormalizationResult",
+    "NormalizationStatistics",
+    "NormalizerVersion",
     "PatchInterpreterPayload",
     "PatchProposalAction",
     "PatchProposalOperation",
@@ -88,6 +118,8 @@ __all__ = [
     "ProviderMappingResult",
     "ProviderRawEvidence",
     "ProviderSearchResult",
+    "ReferenceData",
+    "ReferenceDataVersion",
     "RequirementCommitResult",
     "RequirementInterpretationContext",
     "RequirementInterpreter",
