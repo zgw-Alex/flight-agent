@@ -15,6 +15,7 @@ From highest to lowest authority:
 3. Third Stage implementation roadmap:
    - `project-docs/03_implementation-roadmap/机票筛选Agent_第三阶段实施与讨论大纲_V0.docx`
 4. Current approved Milestone or Implementation Unit contract:
+   - `project-docs/03_implementation-roadmap/milestones/M4/机票筛选Agent_第三阶段_M4_Mock_Provider_Snapshot_Specification_V1.0.docx`
    - `project-docs/03_implementation-roadmap/milestones/M3/机票筛选Agent_第三阶段_M3_Requirement_Pipeline_Specification_V1.0.docx`
    - `project-docs/03_implementation-roadmap/milestones/M3/机票筛选Agent_第三阶段_M3_Requirement_Pipeline正式收口_V1.0.docx`
    - `project-docs/03_implementation-roadmap/milestones/M2/机票筛选Agent_第三阶段_M2_Core_Domain_Contract_Specification_V1.0.docx`
@@ -31,6 +32,7 @@ From highest to lowest authority:
 - The Stage 2 architecture closure document is the Engineering Architecture baseline for Third Stage implementation.
 - The Stage 3 implementation roadmap controls milestone sequencing and unit-level delivery process.
 - The M3 Requirement Pipeline Specification remains the Contract Authority for M3 Requirement Pipeline semantics; the M3 formal closure records that M3-U1 through M3-U5, Golden Scenarios GS-01 through GS-13, and Aggregate Exit Gate G1 through G9 are complete with Contract Amendment NONE. M3 status: CLOSED.
+- The M4 Mock Provider + Snapshot Specification is the Contract Authority for M4 Provider acquisition, Mock Provider, Mapper, Normalizer, Merger, and CandidateSnapshot assembly implementation units. For M4-U1, it authorizes only SearchPlan, Provider execution/data/coverage core types, ProviderSearchResult, and the FlightProvider port. M4 specification status: APPROVED BASELINE; M4 milestone status: OPEN.
 - The M2 Core Domain Contract Specification remains the Contract Authority for M2 Domain semantics; the M2 formal closure records that M2-U1 through M2-U5 and the M2 Aggregate Exit Gate are complete with Contract Amendment NONE.
 - The M1 Architecture Skeleton closure controls the current architecture dependency guard and composition-root boundary, provided it does not conflict with higher authority.
 
