@@ -45,6 +45,17 @@ RULES = (
         name="ports-boundary",
         layer="ports",
         allowed_first_party_layers=frozenset({"domain", "ports"}),
+        forbidden_external_roots=frozenset(
+            {
+                "fastapi",
+                "httpx",
+                "openai",
+                "pydantic",
+                "requests",
+                "sqlalchemy",
+                "uvicorn",
+            }
+        ),
         forbidden_message="Ports must not depend on concrete adapters or infrastructure",
     ),
     DependencyRule(
@@ -102,6 +113,32 @@ def test_application_concrete_dependency_negative_control_fails(tmp_path: Path) 
     assert any(
         "Application must depend only on Domain and Ports" in violation for violation in violations
     )
+
+
+def test_domain_flight_provider_port_dependency_negative_control_fails(tmp_path: Path) -> None:
+    package_root = make_package_fixture(tmp_path)
+    write_module(
+        package_root / "domain" / "leak.py",
+        "from flight_agent.ports.flight_providers import FlightProvider\n",
+    )
+
+    violations = collect_dependency_violations(package_root)
+
+    assert any("domain-boundary" in violation for violation in violations)
+    assert any("flight_agent.ports.flight_providers" in violation for violation in violations)
+
+
+def test_provider_port_transport_dependency_negative_control_fails(tmp_path: Path) -> None:
+    package_root = make_package_fixture(tmp_path)
+    write_module(
+        package_root / "ports" / "leak.py",
+        "import httpx\n",
+    )
+
+    violations = collect_dependency_violations(package_root)
+
+    assert any("ports-boundary" in violation for violation in violations)
+    assert any("httpx" in violation for violation in violations)
 
 
 def test_requirement_interpreter_fake_stays_outside_application_boundary() -> None:

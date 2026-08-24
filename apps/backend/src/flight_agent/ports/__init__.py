@@ -1,5 +1,16 @@
 """Abstract ports owned by the backend core boundary."""
 
+from flight_agent.ports.flight_providers import (
+    CoverageCompleteness,
+    FlightProvider,
+    ProviderAcquisitionId,
+    ProviderCoverage,
+    ProviderCoverageLimitation,
+    ProviderDataStatus,
+    ProviderExecutionStatus,
+    ProviderId,
+    ProviderSearchResult,
+)
 from flight_agent.ports.requirement_interpreter import (
     InitialInterpreterPayload,
     InitialRequirementProposal,
@@ -25,6 +36,8 @@ from flight_agent.ports.requirement_repository import (
 
 __all__ = [
     "CommitStatus",
+    "CoverageCompleteness",
+    "FlightProvider",
     "InitialInterpreterPayload",
     "InitialRequirementProposal",
     "InterpreterFailure",
@@ -37,6 +50,13 @@ __all__ = [
     "PatchProposalAction",
     "PatchProposalOperation",
     "PatchRequirementProposal",
+    "ProviderAcquisitionId",
+    "ProviderCoverage",
+    "ProviderCoverageLimitation",
+    "ProviderDataStatus",
+    "ProviderExecutionStatus",
+    "ProviderId",
+    "ProviderSearchResult",
     "RequirementCommitResult",
     "RequirementInterpretationContext",
     "RequirementInterpreter",
