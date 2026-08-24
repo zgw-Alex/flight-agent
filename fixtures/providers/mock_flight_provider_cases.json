@@ -204,6 +204,92 @@
           }
         ]
       }
+    },
+    {
+      "case_id": "mapper-edge-cases",
+      "match": {
+        "origin": "XMN",
+        "destination": "LAX",
+        "departure_date": "2026-09-01"
+      },
+      "acquisition_id": "mock-acquisition-mapper-edge-cases",
+      "retrieved_at": "2026-08-24T01:04:00Z",
+      "execution_status": "SUCCESS",
+      "data_status": "COMPLETE",
+      "coverage": {
+        "actual_scope": {
+          "origin": "XMN",
+          "destination": "LAX",
+          "departure_date": "2026-09-01"
+        },
+        "completeness": "COMPLETE",
+        "limitations": []
+      },
+      "raw_source_refs": ["mapper-edge-response"],
+      "raw_payload": {
+        "provider_case_id": "mapper-edge-cases",
+        "provider_segments": [
+          {
+            "provider_segment_id": "mock-seg-good",
+            "carrier": " mu ",
+            "flight_number": " mu583 ",
+            "departure_airport": "xmn",
+            "arrival_airport": "lax",
+            "depart_local": "2026-09-01T07:15:00",
+            "arrive_local": "2026-09-01T12:20:00",
+            "operating_carrier": null,
+            "aircraft_type": 789,
+            "checked_baggage_pieces": 0,
+            "overnight": false
+          },
+          {
+            "provider_segment_id": "mock-seg-bad-required",
+            "carrier": "MF",
+            "flight_number": "MF001",
+            "departure_airport": "XMN",
+            "depart_local": "2026-09-01T09:00:00",
+            "arrive_local": "2026-09-01T14:00:00"
+          }
+        ],
+        "provider_itineraries": [
+          {
+            "provider_itinerary_id": "mock-itin-good",
+            "segment_refs": ["mock-seg-good"]
+          },
+          {
+            "provider_itinerary_id": "mock-itin-broken-segment",
+            "segment_refs": ["mock-seg-bad-required"]
+          },
+          {
+            "provider_itinerary_id": "mock-itin-missing-segment",
+            "segment_refs": ["mock-seg-missing"]
+          }
+        ],
+        "provider_offers": [
+          {
+            "provider_offer_id": "mock-offer-good",
+            "provider_itinerary_id": "mock-itin-good",
+            "amount": 0,
+            "currency": "cny",
+            "refundable": false,
+            "booking_reference": "NOT_APPLICABLE"
+          },
+          {
+            "provider_offer_id": "mock-offer-bad-amount",
+            "provider_itinerary_id": "mock-itin-good",
+            "amount": "not-a-number",
+            "currency": "CNY",
+            "refundable": true
+          },
+          {
+            "provider_offer_id": "mock-offer-orphan",
+            "provider_itinerary_id": "mock-itin-missing-segment",
+            "amount": 1200,
+            "currency": "CNY",
+            "refundable": true
+          }
+        ]
+      }
     }
   ]
 }

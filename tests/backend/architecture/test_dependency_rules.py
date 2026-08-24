@@ -160,10 +160,11 @@ def test_application_does_not_depend_on_mock_flight_provider() -> None:
 
     assert "flight_agent.adapters.flight_providers.mock" not in application_imports
     assert "flight_agent.adapters.flight_providers.mock.provider" not in application_imports
+    assert "flight_agent.adapters.flight_providers.mock.mapper" not in application_imports
 
 
 def test_mock_flight_provider_stays_out_of_downstream_candidate_processing() -> None:
-    violations = collect_mock_provider_downstream_violations(SOURCE_ROOT)
+    violations = collect_provider_acl_downstream_violations(SOURCE_ROOT)
 
     assert violations == []
 
@@ -178,18 +179,35 @@ def test_mock_provider_downstream_dependency_negative_control_fails(tmp_path: Pa
         "from flight_agent.domain.workflow.recommendation import Recommendation\n",
     )
 
-    violations = collect_mock_provider_downstream_violations(package_root)
+    violations = collect_provider_acl_downstream_violations(package_root)
 
     assert any("flight_agent.domain.workflow.recommendation" in violation for violation in violations)
 
 
-def collect_mock_provider_downstream_violations(package_root: Path) -> list[str]:
+def test_provider_mapper_snapshot_dependency_negative_control_fails(tmp_path: Path) -> None:
+    package_root = make_package_fixture(tmp_path)
+    mock_root = package_root / "adapters" / "flight_providers" / "mock"
+    mock_root.mkdir(parents=True)
+    write_module(mock_root / "__init__.py", "")
+    write_module(
+        mock_root / "mapper.py",
+        "from flight_agent.domain.flights.snapshot import CandidateSnapshot\n",
+    )
+
+    violations = collect_provider_acl_downstream_violations(package_root)
+
+    assert any("flight_agent.domain.flights.snapshot" in violation for violation in violations)
+
+
+def collect_provider_acl_downstream_violations(package_root: Path) -> list[str]:
     mock_root = package_root / "adapters" / "flight_providers" / "mock"
     if not mock_root.exists():
         return []
     forbidden_imports = {
         "flight_agent.domain.workflow.recommendation",
         "flight_agent.domain.flights.snapshot",
+        "httpx",
+        "requests",
     }
     violations: list[str] = []
     for module_path in mock_root.rglob("*.py"):
