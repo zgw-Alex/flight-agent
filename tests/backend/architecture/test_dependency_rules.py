@@ -217,6 +217,24 @@ def test_candidate_normalization_downstream_dependency_negative_control_fails(tm
     assert any("flight_agent.domain.workflow.recommendation" in violation for violation in violations)
 
 
+def test_snapshot_assembler_stays_out_of_downstream_and_provider_runtime_boundaries() -> None:
+    violations = collect_snapshot_assembler_boundary_violations(SOURCE_ROOT)
+
+    assert violations == []
+
+
+def test_snapshot_assembler_downstream_dependency_negative_control_fails(tmp_path: Path) -> None:
+    package_root = make_package_fixture(tmp_path)
+    write_module(
+        package_root / "application" / "snapshot_assembly.py",
+        "from flight_agent.domain.workflow.recommendation import RecommendationResult\n",
+    )
+
+    violations = collect_snapshot_assembler_boundary_violations(package_root)
+
+    assert any("flight_agent.domain.workflow.recommendation" in violation for violation in violations)
+
+
 def collect_provider_acl_downstream_violations(package_root: Path) -> list[str]:
     mock_root = package_root / "adapters" / "flight_providers" / "mock"
     if not mock_root.exists():
@@ -236,6 +254,48 @@ def collect_provider_acl_downstream_violations(package_root: Path) -> list[str]:
                     f"{relative(module_path)} imports {imported_module}. "
                     "Mock provider must not depend on downstream candidate processing"
                 )
+    return violations
+
+
+def collect_snapshot_assembler_boundary_violations(package_root: Path) -> list[str]:
+    module_path = package_root / "application" / "snapshot_assembly.py"
+    if not module_path.exists():
+        return []
+    forbidden_imports = {
+        "flight_agent.adapters.flight_providers.mock",
+        "flight_agent.adapters.flight_providers.mock.provider",
+        "flight_agent.adapters.flight_providers.mock.mapper",
+        "flight_agent.domain.workflow",
+        "flight_agent.domain.workflow.recommendation",
+        "flight_agent.domain.workflow.execution",
+        "flight_agent.domain.workflow.publication",
+        "httpx",
+        "requests",
+    }
+    forbidden_names = {
+        "Filter",
+        "Ranking",
+        "Recommendation",
+        "ImpactResolver",
+        "Reuse",
+        "Refresh",
+    }
+    violations: list[str] = []
+    for imported_module in imported_modules(module_path):
+        if imported_module in forbidden_imports:
+            violations.append(
+                "snapshot-assembler-boundary: "
+                f"{relative(module_path)} imports {imported_module}. "
+                "Snapshot assembler must not depend on downstream policy or provider runtime"
+            )
+    source = module_path.read_text(encoding="utf-8")
+    for forbidden_name in forbidden_names:
+        if forbidden_name in source:
+            violations.append(
+                "snapshot-assembler-boundary: "
+                f"{relative(module_path)} mentions {forbidden_name}. "
+                "Snapshot assembler must not implement downstream policy"
+            )
     return violations
 
 
