@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import FrozenInstanceError
-from datetime import date
+from datetime import UTC, date, datetime
 
 import pytest
 
@@ -25,6 +25,7 @@ from flight_agent.ports import (
     ProviderDataStatus,
     ProviderExecutionStatus,
     ProviderId,
+    ProviderRawEvidence,
     ProviderSearchResult,
 )
 
@@ -78,6 +79,7 @@ def result(
     execution_status: ProviderExecutionStatus = ProviderExecutionStatus.SUCCESS,
     data_status: ProviderDataStatus = ProviderDataStatus.COMPLETE,
     coverage: ProviderCoverage | None = None,
+    raw_evidence: ProviderRawEvidence | None = None,
 ) -> ProviderSearchResult:
     return ProviderSearchResult.for_search_plan(
         provider_id=ProviderId("fixture-provider"),
@@ -86,6 +88,7 @@ def result(
         execution_status=execution_status,
         data_status=data_status,
         coverage=coverage or complete_coverage(),
+        raw_evidence=raw_evidence,
     )
 
 
@@ -163,6 +166,60 @@ def test_provider_search_result_preserves_provider_identity_and_search_plan_line
     assert not hasattr(provider_result, "offers")
     with pytest.raises(FrozenInstanceError):
         provider_result.data_status = ProviderDataStatus.COMPLETE  # type: ignore[misc]
+
+
+def test_provider_raw_evidence_is_immutable_and_provider_shaped() -> None:
+    raw_evidence = ProviderRawEvidence(
+        provider_id=ProviderId("fixture-provider"),
+        acquisition_id=ProviderAcquisitionId("acquisition-1"),
+        search_plan_id=SearchPlanId("search-plan-1"),
+        retrieved_at=datetime(2026, 8, 24, 1, 0, tzinfo=UTC),
+        payload={
+            "provider_itineraries": [
+                {
+                    "provider_itinerary_id": "provider-itinerary-1",
+                    "provider_offer_ids": ["provider-offer-1"],
+                }
+            ]
+        },
+        source_refs=("provider-response-1",),
+    )
+    provider_result = result(raw_evidence=raw_evidence)
+
+    assert provider_result.raw_evidence == raw_evidence
+    assert provider_result.raw_evidence is not None
+    assert provider_result.raw_evidence.payload == (
+        (
+            "provider_itineraries",
+            (
+                (
+                    (
+                        "provider_itinerary_id",
+                        "provider-itinerary-1",
+                    ),
+                    ("provider_offer_ids", ("provider-offer-1",)),
+                ),
+            ),
+        ),
+    )
+    assert not hasattr(raw_evidence, "canonical_itinerary_id")
+    assert not hasattr(raw_evidence, "segments")
+    assert not isinstance(raw_evidence, CandidateSnapshot)
+    with pytest.raises(FrozenInstanceError):
+        raw_evidence.payload = ()  # type: ignore[misc]
+
+
+def test_provider_search_result_rejects_raw_evidence_lineage_mismatch() -> None:
+    raw_evidence = ProviderRawEvidence(
+        provider_id=ProviderId("other-provider"),
+        acquisition_id=ProviderAcquisitionId("acquisition-1"),
+        search_plan_id=SearchPlanId("search-plan-1"),
+        retrieved_at=datetime(2026, 8, 24, 1, 0, tzinfo=UTC),
+        payload={"provider_status": "ok"},
+    )
+
+    with pytest.raises(DomainInvariantViolation):
+        result(raw_evidence=raw_evidence)
 
 
 def test_empty_data_requires_known_coverage_evidence() -> None:

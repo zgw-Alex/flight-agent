@@ -9,6 +9,7 @@ from flight_agent.ports.flight_providers import (
     ProviderDataStatus,
     ProviderExecutionStatus,
     ProviderId,
+    ProviderRawEvidence,
     ProviderSearchResult,
 )
 from flight_agent.ports.requirement_interpreter import (
@@ -56,6 +57,7 @@ __all__ = [
     "ProviderDataStatus",
     "ProviderExecutionStatus",
     "ProviderId",
+    "ProviderRawEvidence",
     "ProviderSearchResult",
     "RequirementCommitResult",
     "RequirementInterpretationContext",

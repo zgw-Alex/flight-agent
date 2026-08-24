@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from enum import Enum
 from typing import Protocol
 
@@ -19,6 +20,50 @@ class ProviderId(DomainId):
 @dataclass(frozen=True)
 class ProviderAcquisitionId(DomainId):
     """Opaque identity for one provider acquisition attempt."""
+
+
+type RawEvidenceValue = (
+    str
+    | int
+    | float
+    | bool
+    | None
+    | tuple["RawEvidenceValue", ...]
+    | tuple[tuple[str, "RawEvidenceValue"], ...]
+)
+
+
+@dataclass(frozen=True, init=False)
+class ProviderRawEvidence:
+    """Immutable provider-shaped raw evidence for one acquisition."""
+
+    provider_id: ProviderId
+    acquisition_id: ProviderAcquisitionId
+    search_plan_id: SearchPlanId
+    retrieved_at: datetime
+    payload: RawEvidenceValue
+    source_refs: tuple[str, ...]
+
+    def __init__(
+        self,
+        provider_id: ProviderId,
+        acquisition_id: ProviderAcquisitionId,
+        search_plan_id: SearchPlanId,
+        retrieved_at: datetime,
+        payload: object,
+        source_refs: tuple[str, ...] = (),
+    ) -> None:
+        if retrieved_at.tzinfo is None:
+            raise DomainInvariantViolation("ProviderRawEvidence retrieved_at must be timezone-aware")
+        source_refs_tuple = tuple(source_refs)
+        if any(ref.strip() == "" for ref in source_refs_tuple):
+            raise DomainInvariantViolation("ProviderRawEvidence source_refs must be non-empty strings")
+        object.__setattr__(self, "provider_id", provider_id)
+        object.__setattr__(self, "acquisition_id", acquisition_id)
+        object.__setattr__(self, "search_plan_id", search_plan_id)
+        object.__setattr__(self, "retrieved_at", retrieved_at)
+        object.__setattr__(self, "payload", _freeze_raw_value(payload))
+        object.__setattr__(self, "source_refs", source_refs_tuple)
 
 
 class ProviderExecutionStatus(str, Enum):
@@ -89,6 +134,7 @@ class ProviderSearchResult:
     execution_status: ProviderExecutionStatus
     data_status: ProviderDataStatus
     coverage: ProviderCoverage
+    raw_evidence: ProviderRawEvidence | None
 
     def __init__(
         self,
@@ -100,11 +146,19 @@ class ProviderSearchResult:
         execution_status: ProviderExecutionStatus,
         data_status: ProviderDataStatus,
         coverage: ProviderCoverage,
+        raw_evidence: ProviderRawEvidence | None = None,
     ) -> None:
         if execution_status is not ProviderExecutionStatus.SUCCESS and data_status is ProviderDataStatus.EMPTY:
             raise DomainInvariantViolation("Failed provider execution must not be encoded as EMPTY data")
         if data_status is ProviderDataStatus.EMPTY and coverage.completeness is CoverageCompleteness.UNKNOWN:
             raise DomainInvariantViolation("EMPTY data requires known provider coverage evidence")
+        if raw_evidence is not None:
+            if raw_evidence.provider_id != provider_id:
+                raise DomainInvariantViolation("ProviderSearchResult raw evidence provider mismatch")
+            if raw_evidence.acquisition_id != acquisition_id:
+                raise DomainInvariantViolation("ProviderSearchResult raw evidence acquisition mismatch")
+            if raw_evidence.search_plan_id != search_plan_id:
+                raise DomainInvariantViolation("ProviderSearchResult raw evidence search plan mismatch")
         object.__setattr__(self, "provider_id", provider_id)
         object.__setattr__(self, "acquisition_id", acquisition_id)
         object.__setattr__(self, "search_plan_id", search_plan_id)
@@ -113,6 +167,7 @@ class ProviderSearchResult:
         object.__setattr__(self, "execution_status", execution_status)
         object.__setattr__(self, "data_status", data_status)
         object.__setattr__(self, "coverage", coverage)
+        object.__setattr__(self, "raw_evidence", raw_evidence)
 
     @classmethod
     def for_search_plan(
@@ -123,6 +178,7 @@ class ProviderSearchResult:
         execution_status: ProviderExecutionStatus,
         data_status: ProviderDataStatus,
         coverage: ProviderCoverage,
+        raw_evidence: ProviderRawEvidence | None = None,
     ) -> ProviderSearchResult:
         return cls(
             provider_id=provider_id,
@@ -133,6 +189,7 @@ class ProviderSearchResult:
             execution_status=execution_status,
             data_status=data_status,
             coverage=coverage,
+            raw_evidence=raw_evidence,
         )
 
 
@@ -140,3 +197,18 @@ class FlightProvider(Protocol):
     def search(self, search_plan: SearchPlan) -> ProviderSearchResult:
         """Acquire provider search data for a provider-neutral SearchPlan."""
         ...
+
+
+def _freeze_raw_value(value: object) -> RawEvidenceValue:
+    if isinstance(value, str | int | float | bool) or value is None:
+        return value
+    if isinstance(value, list | tuple):
+        return tuple(_freeze_raw_value(item) for item in value)
+    if isinstance(value, dict):
+        frozen_items: list[tuple[str, RawEvidenceValue]] = []
+        for key, item in sorted(value.items(), key=lambda pair: str(pair[0])):
+            if not isinstance(key, str) or key.strip() == "":
+                raise DomainInvariantViolation("ProviderRawEvidence payload mapping keys must be strings")
+            frozen_items.append((key, _freeze_raw_value(item)))
+        return tuple(frozen_items)
+    raise DomainInvariantViolation("ProviderRawEvidence payload contains unsupported value")

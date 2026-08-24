@@ -151,6 +151,58 @@ def test_requirement_interpreter_fake_stays_outside_application_boundary() -> No
     assert "flight_agent.adapters.requirement_interpreter_fake" not in application_imports
 
 
+def test_application_does_not_depend_on_mock_flight_provider() -> None:
+    application_imports = {
+        imported_module
+        for module_path in (SOURCE_ROOT / "application").rglob("*.py")
+        for imported_module in imported_modules(module_path)
+    }
+
+    assert "flight_agent.adapters.flight_providers.mock" not in application_imports
+    assert "flight_agent.adapters.flight_providers.mock.provider" not in application_imports
+
+
+def test_mock_flight_provider_stays_out_of_downstream_candidate_processing() -> None:
+    violations = collect_mock_provider_downstream_violations(SOURCE_ROOT)
+
+    assert violations == []
+
+
+def test_mock_provider_downstream_dependency_negative_control_fails(tmp_path: Path) -> None:
+    package_root = make_package_fixture(tmp_path)
+    mock_root = package_root / "adapters" / "flight_providers" / "mock"
+    mock_root.mkdir(parents=True)
+    write_module(mock_root / "__init__.py", "")
+    write_module(
+        mock_root / "leak.py",
+        "from flight_agent.domain.workflow.recommendation import Recommendation\n",
+    )
+
+    violations = collect_mock_provider_downstream_violations(package_root)
+
+    assert any("flight_agent.domain.workflow.recommendation" in violation for violation in violations)
+
+
+def collect_mock_provider_downstream_violations(package_root: Path) -> list[str]:
+    mock_root = package_root / "adapters" / "flight_providers" / "mock"
+    if not mock_root.exists():
+        return []
+    forbidden_imports = {
+        "flight_agent.domain.workflow.recommendation",
+        "flight_agent.domain.flights.snapshot",
+    }
+    violations: list[str] = []
+    for module_path in mock_root.rglob("*.py"):
+        for imported_module in imported_modules(module_path):
+            if imported_module in forbidden_imports:
+                violations.append(
+                    "mock-provider-boundary: "
+                    f"{relative(module_path)} imports {imported_module}. "
+                    "Mock provider must not depend on downstream candidate processing"
+                )
+    return violations
+
+
 def collect_dependency_violations(package_root: Path) -> list[str]:
     violations: list[str] = []
     for rule in RULES:

@@ -1,0 +1,209 @@
+{
+  "fixture_schema_version": "m4-u2-v1",
+  "provider_id": "mock-flight-provider",
+  "cases": [
+    {
+      "case_id": "normal-success",
+      "match": {
+        "origin": "PVG",
+        "destination": "LAX",
+        "departure_date": "2026-09-01"
+      },
+      "acquisition_id": "mock-acquisition-normal-success",
+      "retrieved_at": "2026-08-24T01:00:00Z",
+      "execution_status": "SUCCESS",
+      "data_status": "COMPLETE",
+      "coverage": {
+        "actual_scope": {
+          "origin": "PVG",
+          "destination": "LAX",
+          "departure_date": "2026-09-01"
+        },
+        "completeness": "COMPLETE",
+        "limitations": []
+      },
+      "raw_source_refs": ["normal-success-response"],
+      "raw_payload": {
+        "provider_case_id": "normal-success",
+        "provider_request": {
+          "from": "PVG",
+          "to": "LAX",
+          "date": "2026-09-01"
+        },
+        "provider_itineraries": [
+          {
+            "provider_itinerary_id": "mock-itin-100",
+            "segments": [
+              {
+                "provider_segment_id": "mock-seg-100",
+                "carrier": "MU",
+                "flight_number": "MU583",
+                "depart_local": "2026-09-01T13:20:00",
+                "arrive_local": "2026-09-01T10:05:00"
+              }
+            ],
+            "offers": [
+              {
+                "provider_offer_id": "mock-offer-100",
+                "amount": 8800,
+                "currency": "CNY"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "case_id": "legitimate-empty",
+      "match": {
+        "origin": "PEK",
+        "destination": "LAX",
+        "departure_date": "2026-09-01"
+      },
+      "acquisition_id": "mock-acquisition-legitimate-empty",
+      "retrieved_at": "2026-08-24T01:01:00Z",
+      "execution_status": "SUCCESS",
+      "data_status": "EMPTY",
+      "coverage": {
+        "actual_scope": {
+          "origin": "PEK",
+          "destination": "LAX",
+          "departure_date": "2026-09-01"
+        },
+        "completeness": "COMPLETE",
+        "limitations": []
+      },
+      "raw_source_refs": ["legitimate-empty-response"],
+      "raw_payload": {
+        "provider_case_id": "legitimate-empty",
+        "provider_request": {
+          "from": "PEK",
+          "to": "LAX",
+          "date": "2026-09-01"
+        },
+        "provider_itineraries": []
+      }
+    },
+    {
+      "case_id": "timeout",
+      "match": {
+        "origin": "SHA",
+        "destination": "LAX",
+        "departure_date": "2026-09-01"
+      },
+      "acquisition_id": "mock-acquisition-timeout",
+      "execution_status": "TIMEOUT",
+      "data_status": "UNKNOWN",
+      "coverage": {
+        "actual_scope": null,
+        "completeness": "UNKNOWN",
+        "limitations": []
+      }
+    },
+    {
+      "case_id": "rate-limited",
+      "match": {
+        "origin": "CAN",
+        "destination": "LAX",
+        "departure_date": "2026-09-01"
+      },
+      "acquisition_id": "mock-acquisition-rate-limited",
+      "execution_status": "RATE_LIMITED",
+      "data_status": "UNKNOWN",
+      "coverage": {
+        "actual_scope": null,
+        "completeness": "UNKNOWN",
+        "limitations": []
+      }
+    },
+    {
+      "case_id": "auth-error",
+      "match": {
+        "origin": "SZX",
+        "destination": "LAX",
+        "departure_date": "2026-09-01"
+      },
+      "acquisition_id": "mock-acquisition-auth-error",
+      "execution_status": "AUTH_ERROR",
+      "data_status": "UNKNOWN",
+      "coverage": {
+        "actual_scope": null,
+        "completeness": "UNKNOWN",
+        "limitations": []
+      }
+    },
+    {
+      "case_id": "upstream-error",
+      "match": {
+        "origin": "CTU",
+        "destination": "LAX",
+        "departure_date": "2026-09-01"
+      },
+      "acquisition_id": "mock-acquisition-upstream-error",
+      "execution_status": "UPSTREAM_ERROR",
+      "data_status": "UNKNOWN",
+      "coverage": {
+        "actual_scope": null,
+        "completeness": "UNKNOWN",
+        "limitations": []
+      }
+    },
+    {
+      "case_id": "invalid-response",
+      "match": {
+        "origin": "HGH",
+        "destination": "LAX",
+        "departure_date": "2026-09-01"
+      },
+      "acquisition_id": "mock-acquisition-invalid-response",
+      "retrieved_at": "2026-08-24T01:02:00Z",
+      "execution_status": "INVALID_RESPONSE",
+      "data_status": "UNUSABLE",
+      "coverage": {
+        "actual_scope": null,
+        "completeness": "UNKNOWN",
+        "limitations": []
+      },
+      "raw_source_refs": ["invalid-response-envelope"],
+      "raw_payload": {
+        "provider_case_id": "invalid-response",
+        "response_envelope": "not-interpretable"
+      }
+    },
+    {
+      "case_id": "success-partial-coverage",
+      "match": {
+        "origin": "NKG",
+        "destination": "LAX",
+        "departure_date": "2026-09-01"
+      },
+      "acquisition_id": "mock-acquisition-partial-coverage",
+      "retrieved_at": "2026-08-24T01:03:00Z",
+      "execution_status": "SUCCESS",
+      "data_status": "COMPLETE",
+      "coverage": {
+        "actual_scope": {
+          "origin": "SHA",
+          "destination": "LAX",
+          "departure_date": "2026-09-01"
+        },
+        "completeness": "PARTIAL",
+        "limitations": [
+          {
+            "code": "PROVIDER_SCOPE_SUBSTITUTION",
+            "detail": "Provider searched a nearby origin airport only"
+          }
+        ]
+      },
+      "raw_source_refs": ["partial-coverage-response"],
+      "raw_payload": {
+        "provider_case_id": "success-partial-coverage",
+        "provider_itineraries": [
+          {
+            "provider_itinerary_id": "mock-itin-partial"
+          }
+        ]
+      }
+    }
+  ]
+}
