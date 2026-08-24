@@ -515,9 +515,13 @@ def _logical_segments(payload: dict[str, object]) -> tuple[object, ...]:
     if isinstance(payload.get("provider_segments"), list):
         return tuple(payload["provider_segments"])  # type: ignore[index]
     segments: list[object] = []
+    route_defaults = _provider_request_route_defaults(payload)
     for itinerary in _logical_itineraries(payload):
         if isinstance(itinerary, dict) and isinstance(itinerary.get("segments"), list):
-            segments.extend(itinerary["segments"])  # type: ignore[arg-type,index]
+            for segment in itinerary["segments"]:  # type: ignore[index]
+                if isinstance(segment, dict) and route_defaults is not None:
+                    segment = {**route_defaults, **segment}
+                segments.append(segment)
     return tuple(segments)
 
 
@@ -580,3 +584,17 @@ def _thaw_raw_value(value: RawEvidenceValue) -> object:
 
 def _is_raw_mapping_item(value: object) -> TypeGuard[tuple[str, RawEvidenceValue]]:
     return isinstance(value, tuple) and len(value) == 2 and isinstance(value[0], str)
+
+
+def _provider_request_route_defaults(payload: dict[str, object]) -> dict[str, object] | None:
+    provider_request = payload.get("provider_request")
+    if not isinstance(provider_request, dict):
+        return None
+    origin = provider_request.get("from")
+    destination = provider_request.get("to")
+    if not isinstance(origin, str) or not isinstance(destination, str):
+        return None
+    return {
+        "departure_airport": origin,
+        "arrival_airport": destination,
+    }
