@@ -238,6 +238,28 @@ def test_m5_public_api_projection_does_not_import_decision_or_provider_internals
     assert "RecommendationResult" not in source
 
 
+def test_m5_frontend_consumes_only_conversation_public_projection() -> None:
+    frontend_source_root = REPO_ROOT / "apps" / "frontend" / "src"
+    source = "\n".join(
+        module_path.read_text(encoding="utf-8")
+        for module_path in frontend_source_root.rglob("*")
+        if module_path.suffix in {".ts", ".tsx"}
+    )
+
+    assert "/provider-search" not in source
+    assert "/snapshot" not in source
+    assert "/filter" not in source
+    assert "/rank" not in source
+    assert "/recommendation-result" not in source
+    assert "fixtures" not in source
+    assert "ProviderRawEvidence" not in source
+    assert "filter_result" not in source
+    assert "ranking_result" not in source
+    assert "RequirementState" not in source
+    assert "current_published_recommendation" in source
+    assert "/conversations" in source
+
+
 def test_m5_decision_domain_does_not_depend_on_provider_raw_fixture_publication_or_llm() -> None:
     decision_root = SOURCE_ROOT / "domain" / "decision"
     imports = {

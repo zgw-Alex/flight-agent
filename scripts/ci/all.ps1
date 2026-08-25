@@ -5,6 +5,7 @@ $ErrorActionPreference = "Continue"
 $Scripts = @(
     @{ Name = "backend"; Path = Join-Path $PSScriptRoot "backend.ps1" },
     @{ Name = "frontend"; Path = Join-Path $PSScriptRoot "frontend.ps1" },
+    @{ Name = "e2e"; Path = Join-Path $PSScriptRoot "e2e.ps1" },
     @{ Name = "postgres"; Path = Join-Path $PSScriptRoot "postgres.ps1" }
 )
 
