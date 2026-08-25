@@ -209,6 +209,35 @@ def test_m5_minimal_decision_application_has_no_inline_filter_rank_or_select_sho
     assert "RecommendationItem(" not in source
 
 
+def test_m5_publication_application_does_not_rerun_decision_or_provider_pipeline() -> None:
+    publication_application = SOURCE_ROOT / "application" / "publication.py"
+    imports = set(imported_modules(publication_application))
+    source = publication_application.read_text(encoding="utf-8")
+
+    assert "flight_agent.adapters.flight_providers.mock" not in imports
+    assert "flight_agent.ports.flight_providers" not in imports
+    assert "flight_agent.domain.decision" not in imports
+    assert "LowerPriceRanking" not in source
+    assert "MaxPriceFilter" not in source
+    assert "RecommendationSelector" not in source
+    assert "provider_result" not in source
+    assert "mapping_result" not in source
+    assert "fixtures/" not in source
+
+
+def test_m5_public_api_projection_does_not_import_decision_or_provider_internals() -> None:
+    structured_api = SOURCE_ROOT / "api" / "structured_entry.py"
+    imports = set(imported_modules(structured_api))
+    source = structured_api.read_text(encoding="utf-8")
+
+    assert "flight_agent.domain.decision" not in imports
+    assert "flight_agent.ports.flight_providers" not in imports
+    assert "flight_agent.adapters.flight_providers.mock" not in imports
+    assert "FilterResult" not in source
+    assert "RankingResult" not in source
+    assert "RecommendationResult" not in source
+
+
 def test_m5_decision_domain_does_not_depend_on_provider_raw_fixture_publication_or_llm() -> None:
     decision_root = SOURCE_ROOT / "domain" / "decision"
     imports = {

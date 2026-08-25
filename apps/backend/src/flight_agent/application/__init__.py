@@ -5,6 +5,14 @@ from flight_agent.application.minimal_decision import (
     MinimalDecisionResult,
     MinimalDecisionStatus,
 )
+from flight_agent.application.publication import (
+    ConversationReadState,
+    PublicationRepository,
+    PublicWorkflowOutcome,
+    PublishedRecommendationRecord,
+    PublishRecommendation,
+    outcome_from_decision,
+)
 from flight_agent.application.requirement_commit import commit_requirement_transition
 from flight_agent.application.requirement_interpretation import interpret_requirement
 from flight_agent.application.requirement_normalization import (
@@ -70,6 +78,7 @@ __all__ = [
     "AirportCanonicalization",
     "AssemblerVersion",
     "CandidateSnapshotAssembler",
+    "ConversationReadState",
     "ExecuteMinimalDecision",
     "ExecuteReadyRequirementSearch",
     "FixtureSchemaVersion",
@@ -86,6 +95,10 @@ __all__ = [
     "PatchTransitionIssueCode",
     "PatchTransitionStatus",
     "PostCommitProcessingStatus",
+    "PublicWorkflowOutcome",
+    "PublicationRepository",
+    "PublishRecommendation",
+    "PublishedRecommendationRecord",
     "RequirementPipelineOutcome",
     "RequirementPipelineOutcomeStatus",
     "RequirementValidationIssue",
@@ -115,6 +128,7 @@ __all__ = [
     "interpret_requirement",
     "normalize_initial_requirement",
     "normalize_patch_requirement",
+    "outcome_from_decision",
     "plan_search",
     "structured_command_to_initial_proposal",
     "validate_requirement",
