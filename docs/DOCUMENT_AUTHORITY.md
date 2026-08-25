@@ -16,6 +16,7 @@ From highest to lowest authority:
    - `project-docs/03_implementation-roadmap/机票筛选Agent_第三阶段实施与讨论大纲_V0.docx`
 4. Current approved Milestone or Implementation Unit contract:
    - `project-docs/03_implementation-roadmap/milestones/M5/机票筛选Agent_第三阶段_M5_Walking_Skeleton_Specification_V1.0.docx`
+   - `project-docs/03_implementation-roadmap/milestones/M5/机票筛选Agent_第三阶段_M5_Walking_Skeleton正式收口_V1.0.docx`
    - `project-docs/03_implementation-roadmap/milestones/M4/机票筛选Agent_第三阶段_M4_Mock_Provider_Snapshot_Specification_V1.0.docx`
    - `project-docs/03_implementation-roadmap/milestones/M4/机票筛选Agent_第三阶段_M4_Mock_Provider_Snapshot正式收口_V1.0.docx`
    - `project-docs/03_implementation-roadmap/milestones/M3/机票筛选Agent_第三阶段_M3_Requirement_Pipeline_Specification_V1.0.docx`
@@ -34,8 +35,8 @@ From highest to lowest authority:
 - The Stage 2 architecture closure document is the Engineering Architecture baseline for Third Stage implementation.
 - The Stage 3 implementation roadmap controls milestone sequencing and unit-level delivery process.
 - The M3 Requirement Pipeline Specification remains the Contract Authority for M3 Requirement Pipeline semantics; the M3 formal closure records that M3-U1 through M3-U5, Golden Scenarios GS-01 through GS-13, and Aggregate Exit Gate G1 through G9 are complete with Contract Amendment NONE. M3 status: CLOSED.
-- The M4 Mock Provider + Snapshot Specification remains the Contract Authority for M4 Provider acquisition, Mock Provider, Mapper, Normalizer, Merger, and CandidateSnapshot assembly semantics; the M4 formal closure records that M4-U1 through M4-U6, Golden Scenarios GS-01 through GS-09, Negative Controls NC-01 through NC-08, and Aggregate Exit Gate G1 through G10 are complete with Contract Amendment NONE. M4 status: CLOSED. M5 status: READY.
-- The M5 Walking Skeleton Specification is the Contract Authority for M5-U1 through M5-U5 integration work. M5 status: IN_PROGRESS.
+- The M4 Mock Provider + Snapshot Specification remains the Contract Authority for M4 Provider acquisition, Mock Provider, Mapper, Normalizer, Merger, and CandidateSnapshot assembly semantics; the M4 formal closure records that M4-U1 through M4-U6, Golden Scenarios GS-01 through GS-09, Negative Controls NC-01 through NC-08, and Aggregate Exit Gate G1 through G10 are complete with Contract Amendment NONE. M4 status: CLOSED.
+- The M5 Walking Skeleton Specification remains the Contract Authority for M5 integration semantics. The M5 formal closure records that M5-U1 through M5-U5, Golden Scenarios GS-01 through GS-05, GS-P1 Partial Usable at P1 scope, Determinism, Lineage, No-Shortcut, and Aggregate Exit Gate G1 through G10 are complete with Contract Amendment NONE. M5 status: CLOSED. M6 status: READY / eligible to begin.
 - The M2 Core Domain Contract Specification remains the Contract Authority for M2 Domain semantics; the M2 formal closure records that M2-U1 through M2-U5 and the M2 Aggregate Exit Gate are complete with Contract Amendment NONE.
 - The M1 Architecture Skeleton closure controls the current architecture dependency guard and composition-root boundary, provided it does not conflict with higher authority.
 
