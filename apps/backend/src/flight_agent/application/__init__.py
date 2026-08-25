@@ -34,6 +34,12 @@ from flight_agent.application.requirement_transition import (
     apply_patch_proposal,
     construct_patch_set,
 )
+from flight_agent.application.search_execution import (
+    ExecuteReadyRequirementSearch,
+    SearchExecutionResult,
+    SearchExecutionStatus,
+    plan_search,
+)
 from flight_agent.application.snapshot_assembly import (
     AssemblerVersion,
     CandidateSnapshotAssembler,
@@ -59,6 +65,7 @@ __all__ = [
     "AirportCanonicalization",
     "AssemblerVersion",
     "CandidateSnapshotAssembler",
+    "ExecuteReadyRequirementSearch",
     "FixtureSchemaVersion",
     "NormalizationContext",
     "NormalizationIssue",
@@ -77,6 +84,8 @@ __all__ = [
     "RequirementValidationIssueCode",
     "RequirementValidationResult",
     "SearchEligibleRequirement",
+    "SearchExecutionResult",
+    "SearchExecutionStatus",
     "SearchReadinessStatus",
     "SnapshotAssemblyInput",
     "SnapshotAssemblyIssue",
@@ -98,6 +107,7 @@ __all__ = [
     "interpret_requirement",
     "normalize_initial_requirement",
     "normalize_patch_requirement",
+    "plan_search",
     "structured_command_to_initial_proposal",
     "validate_requirement",
 ]

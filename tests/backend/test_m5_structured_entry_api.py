@@ -94,7 +94,7 @@ def test_default_app_includes_structured_entry_router() -> None:
 
     response = client.post(
         "/conversations",
-        json={"origin": "PEK", "destination": "SHA", "departure_date": "2026-09-01"},
+        json={"origin": "PEK", "destination": "LAX", "departure_date": "2026-09-01"},
     )
 
     assert response.status_code == 201

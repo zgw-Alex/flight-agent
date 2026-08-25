@@ -169,16 +169,34 @@ def test_m5_structured_api_does_not_import_requirement_state() -> None:
     assert "RequirementState" not in structured_api.read_text(encoding="utf-8")
 
 
-def test_m5_structured_entry_application_does_not_depend_on_provider_or_fixture() -> None:
-    structured_entry = SOURCE_ROOT / "application" / "structured_entry.py"
-    imports = set(imported_modules(structured_entry))
-    source = structured_entry.read_text(encoding="utf-8")
+def test_m5_api_does_not_call_provider_or_snapshot_pipeline_directly() -> None:
+    api_imports = {
+        imported_module
+        for module_path in (SOURCE_ROOT / "api").rglob("*.py")
+        for imported_module in imported_modules(module_path)
+    }
 
-    assert "flight_agent.adapters.flight_providers.mock" not in imports
-    assert "flight_agent.adapters.flight_providers.mock.provider" not in imports
-    assert "flight_agent.adapters.flight_providers.mock.mapper" not in imports
-    assert "fixtures/" not in source
-    assert "mock_flight_provider_cases" not in source
+    assert "flight_agent.adapters.flight_providers.mock" not in api_imports
+    assert "flight_agent.ports.flight_providers" not in api_imports
+    assert "flight_agent.domain.flights" not in api_imports
+
+
+def test_m5_structured_entry_application_does_not_depend_on_provider_or_fixture() -> None:
+    application_imports = {
+        imported_module
+        for module_path in (SOURCE_ROOT / "application").rglob("*.py")
+        for imported_module in imported_modules(module_path)
+    }
+    application_source = "\n".join(
+        module_path.read_text(encoding="utf-8")
+        for module_path in (SOURCE_ROOT / "application").rglob("*.py")
+    )
+
+    assert "flight_agent.adapters.flight_providers.mock" not in application_imports
+    assert "flight_agent.adapters.flight_providers.mock.provider" not in application_imports
+    assert "flight_agent.adapters.flight_providers.mock.mapper" not in application_imports
+    assert "fixtures/" not in application_source
+    assert "mock_flight_provider_cases" not in application_source
 
 
 def test_mock_flight_provider_stays_out_of_downstream_candidate_processing() -> None:

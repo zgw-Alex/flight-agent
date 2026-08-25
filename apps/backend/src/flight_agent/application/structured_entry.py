@@ -9,6 +9,7 @@ from enum import Enum
 
 from flight_agent.application.requirement_normalization import (
     NormalizationContext,
+    RequirementValidationResult,
     SearchReadinessStatus,
 )
 from flight_agent.application.requirement_pipeline import (
@@ -28,6 +29,7 @@ from flight_agent.domain.requirements import (
     PreferenceImportance,
     PreferenceScope,
     RequirementId,
+    RequirementState,
     SoftPreference,
 )
 from flight_agent.domain.shared import DomainInstant
@@ -67,6 +69,8 @@ class SearchEligibleRequirement:
     execution_id: str
     requirement_id: RequirementId
     requirement_version: int
+    requirement: RequirementState
+    validation: RequirementValidationResult
     command: StructuredRequirementCommand
 
 
@@ -145,7 +149,8 @@ class StartStructuredRequirement:
         )
         if downstream_search_eligible and self._on_search_eligible is not None:
             committed_requirement = outcome.requirement
-            if committed_requirement is None:
+            committed_validation = outcome.validation
+            if committed_requirement is None or committed_validation is None:
                 raise RuntimeError("Search eligibility requires a committed requirement")
             self._on_search_eligible(
                 SearchEligibleRequirement(
@@ -153,6 +158,8 @@ class StartStructuredRequirement:
                     execution_id=execution_id,
                     requirement_id=committed_requirement.requirement_id,
                     requirement_version=committed_requirement.version.value,
+                    requirement=committed_requirement,
+                    validation=committed_validation,
                     command=command,
                 )
             )
