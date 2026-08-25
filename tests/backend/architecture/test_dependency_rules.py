@@ -199,6 +199,36 @@ def test_m5_structured_entry_application_does_not_depend_on_provider_or_fixture(
     assert "mock_flight_provider_cases" not in application_source
 
 
+def test_m5_minimal_decision_application_has_no_inline_filter_rank_or_select_shortcut() -> None:
+    decision_application = SOURCE_ROOT / "application" / "minimal_decision.py"
+    source = decision_application.read_text(encoding="utf-8")
+
+    assert ".total_price" not in source
+    assert "sorted(" not in source
+    assert "ranked_candidates[0]" not in source
+    assert "RecommendationItem(" not in source
+
+
+def test_m5_decision_domain_does_not_depend_on_provider_raw_fixture_publication_or_llm() -> None:
+    decision_root = SOURCE_ROOT / "domain" / "decision"
+    imports = {
+        imported_module
+        for module_path in decision_root.rglob("*.py")
+        for imported_module in imported_modules(module_path)
+    }
+    source = "\n".join(
+        module_path.read_text(encoding="utf-8")
+        for module_path in decision_root.rglob("*.py")
+    )
+
+    assert "flight_agent.ports.flight_providers" not in imports
+    assert "flight_agent.adapters.flight_providers.mock" not in imports
+    assert "flight_agent.domain.workflow.publication" not in imports
+    assert "fixtures/" not in source
+    assert "ProviderRawEvidence" not in source
+    assert "openai" not in source
+
+
 def test_mock_flight_provider_stays_out_of_downstream_candidate_processing() -> None:
     violations = collect_provider_acl_downstream_violations(SOURCE_ROOT)
 

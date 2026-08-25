@@ -13,6 +13,7 @@ from flight_agent.api.structured_entry import create_structured_entry_router
 from flight_agent.application import (
     AssemblerVersion,
     CandidateSnapshotAssembler,
+    ExecuteMinimalDecision,
     ExecuteReadyRequirementSearch,
     FixtureSchemaVersion,
     SearchEligibleRequirement,
@@ -21,7 +22,9 @@ from flight_agent.application import (
     NormalizationContext as RequirementNormalizationContext,
 )
 from flight_agent.application.structured_entry import StartStructuredRequirement
+from flight_agent.domain.decision import LowerPriceRanking, MaxPriceFilter, RecommendationSelector
 from flight_agent.domain.shared import DomainInstant
+from flight_agent.domain.workflow import ExecutionId
 from flight_agent.ports import (
     CandidateMerger,
     CommonNormalizer,
@@ -42,12 +45,19 @@ def create_app() -> FastAPI:
     """Create the backend ASGI application and wire outer transport routes."""
     app = FastAPI(title="Flight Agent Backend")
     search_execution = _build_search_execution()
+    minimal_decision = _build_minimal_decision()
 
     def execute_ready_search(eligible: SearchEligibleRequirement) -> None:
-        search_execution.execute(
+        search_result = search_execution.execute(
             requirement=eligible.requirement,
             validation=eligible.validation,
         )
+        if eligible.command.max_price_cny is not None:
+            app.state.last_minimal_decision = minimal_decision.execute(
+                search_result=search_result,
+                execution_id=ExecutionId(eligible.execution_id),
+                max_price_cny=eligible.command.max_price_cny,
+            )
 
     structured_entry = StartStructuredRequirement(
         repository=InMemoryRequirementRepository(),
@@ -64,6 +74,8 @@ def create_app() -> FastAPI:
     app.include_router(health_router)
     app.include_router(create_structured_entry_router(structured_entry))
     app.state.search_execution = search_execution
+    app.state.minimal_decision = minimal_decision
+    app.state.last_minimal_decision = None
 
     return app
 
@@ -81,6 +93,16 @@ def _build_search_execution() -> ExecuteReadyRequirementSearch:
         fixture_schema_versions=(FixtureSchemaVersion("m4-u2-v1"),),
         id_factory=lambda: str(uuid4()),
         created_at=lambda: DomainInstant(datetime.now(UTC)),
+    )
+
+
+def _build_minimal_decision() -> ExecuteMinimalDecision:
+    return ExecuteMinimalDecision(
+        max_price_filter_factory=MaxPriceFilter.cny,
+        ranking=LowerPriceRanking(),
+        selector=RecommendationSelector(),
+        id_factory=lambda: str(uuid4()),
+        generated_at=lambda: DomainInstant(datetime.now(UTC)),
     )
 
 

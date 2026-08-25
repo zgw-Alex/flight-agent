@@ -54,6 +54,95 @@
       }
     },
     {
+      "case_id": "m5-golden-peking-shanghai",
+      "match": {
+        "origin": "PEK",
+        "destination": "SHA",
+        "departure_date": "2026-09-01"
+      },
+      "acquisition_id": "mock-acquisition-m5-golden",
+      "retrieved_at": "2026-08-25T01:00:00Z",
+      "execution_status": "SUCCESS",
+      "data_status": "COMPLETE",
+      "coverage": {
+        "actual_scope": {
+          "origin": "PEK",
+          "destination": "SHA",
+          "departure_date": "2026-09-01"
+        },
+        "completeness": "COMPLETE",
+        "limitations": []
+      },
+      "raw_source_refs": ["m5-golden-response"],
+      "raw_payload": {
+        "provider_case_id": "m5-golden-peking-shanghai",
+        "provider_request": {
+          "from": "PEK",
+          "to": "SHA",
+          "date": "2026-09-01"
+        },
+        "provider_itineraries": [
+          {
+            "provider_itinerary_id": "m5-itin-a",
+            "segments": [
+              {
+                "provider_segment_id": "m5-seg-a",
+                "carrier": "MU",
+                "flight_number": "MU5101",
+                "depart_local": "2026-09-01T08:00:00",
+                "arrive_local": "2026-09-01T10:15:00"
+              }
+            ],
+            "offers": [
+              {
+                "provider_offer_id": "m5-offer-a",
+                "amount": 980,
+                "currency": "CNY"
+              }
+            ]
+          },
+          {
+            "provider_itinerary_id": "m5-itin-b",
+            "segments": [
+              {
+                "provider_segment_id": "m5-seg-b",
+                "carrier": "MU",
+                "flight_number": "MU5103",
+                "depart_local": "2026-09-01T09:30:00",
+                "arrive_local": "2026-09-01T11:40:00"
+              }
+            ],
+            "offers": [
+              {
+                "provider_offer_id": "m5-offer-b",
+                "amount": 1080,
+                "currency": "CNY"
+              }
+            ]
+          },
+          {
+            "provider_itinerary_id": "m5-itin-c",
+            "segments": [
+              {
+                "provider_segment_id": "m5-seg-c",
+                "carrier": "MU",
+                "flight_number": "MU5105",
+                "depart_local": "2026-09-01T12:15:00",
+                "arrive_local": "2026-09-01T14:30:00"
+              }
+            ],
+            "offers": [
+              {
+                "provider_offer_id": "m5-offer-c",
+                "amount": 1350,
+                "currency": "CNY"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
       "case_id": "legitimate-empty",
       "match": {
         "origin": "PEK",

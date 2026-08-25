@@ -1,5 +1,10 @@
 """Application layer for use-case orchestration."""
 
+from flight_agent.application.minimal_decision import (
+    ExecuteMinimalDecision,
+    MinimalDecisionResult,
+    MinimalDecisionStatus,
+)
 from flight_agent.application.requirement_commit import commit_requirement_transition
 from flight_agent.application.requirement_interpretation import interpret_requirement
 from flight_agent.application.requirement_normalization import (
@@ -65,8 +70,11 @@ __all__ = [
     "AirportCanonicalization",
     "AssemblerVersion",
     "CandidateSnapshotAssembler",
+    "ExecuteMinimalDecision",
     "ExecuteReadyRequirementSearch",
     "FixtureSchemaVersion",
+    "MinimalDecisionResult",
+    "MinimalDecisionStatus",
     "NormalizationContext",
     "NormalizationIssue",
     "NormalizationIssueCode",
