@@ -46,6 +46,14 @@ from flight_agent.application.snapshot_assembly import (
     SnapshotProcessingManifest,
     build_processing_manifest,
 )
+from flight_agent.application.structured_entry import (
+    SearchEligibleRequirement,
+    StartStructuredRequirement,
+    StructuredEntryResult,
+    StructuredEntryStatus,
+    StructuredRequirementCommand,
+    structured_command_to_initial_proposal,
+)
 
 __all__ = [
     "AirportCanonicalization",
@@ -68,6 +76,7 @@ __all__ = [
     "RequirementValidationIssue",
     "RequirementValidationIssueCode",
     "RequirementValidationResult",
+    "SearchEligibleRequirement",
     "SearchReadinessStatus",
     "SnapshotAssemblyInput",
     "SnapshotAssemblyIssue",
@@ -75,6 +84,10 @@ __all__ = [
     "SnapshotCreationStatus",
     "SnapshotFreshnessEvidence",
     "SnapshotProcessingManifest",
+    "StartStructuredRequirement",
+    "StructuredEntryResult",
+    "StructuredEntryStatus",
+    "StructuredRequirementCommand",
     "apply_patch_proposal",
     "build_processing_manifest",
     "commit_requirement_transition",
@@ -85,5 +98,6 @@ __all__ = [
     "interpret_requirement",
     "normalize_initial_requirement",
     "normalize_patch_requirement",
+    "structured_command_to_initial_proposal",
     "validate_requirement",
 ]

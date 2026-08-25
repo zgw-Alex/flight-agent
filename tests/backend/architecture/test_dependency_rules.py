@@ -6,7 +6,6 @@ import ast
 from dataclasses import dataclass
 from pathlib import Path
 
-
 BACKEND_PACKAGE = "flight_agent"
 REPO_ROOT = Path(__file__).resolve().parents[3]
 SOURCE_ROOT = REPO_ROOT / "apps" / "backend" / "src" / BACKEND_PACKAGE
@@ -161,6 +160,25 @@ def test_application_does_not_depend_on_mock_flight_provider() -> None:
     assert "flight_agent.adapters.flight_providers.mock" not in application_imports
     assert "flight_agent.adapters.flight_providers.mock.provider" not in application_imports
     assert "flight_agent.adapters.flight_providers.mock.mapper" not in application_imports
+
+
+def test_m5_structured_api_does_not_import_requirement_state() -> None:
+    structured_api = SOURCE_ROOT / "api" / "structured_entry.py"
+
+    assert "flight_agent.domain.requirements" not in imported_modules(structured_api)
+    assert "RequirementState" not in structured_api.read_text(encoding="utf-8")
+
+
+def test_m5_structured_entry_application_does_not_depend_on_provider_or_fixture() -> None:
+    structured_entry = SOURCE_ROOT / "application" / "structured_entry.py"
+    imports = set(imported_modules(structured_entry))
+    source = structured_entry.read_text(encoding="utf-8")
+
+    assert "flight_agent.adapters.flight_providers.mock" not in imports
+    assert "flight_agent.adapters.flight_providers.mock.provider" not in imports
+    assert "flight_agent.adapters.flight_providers.mock.mapper" not in imports
+    assert "fixtures/" not in source
+    assert "mock_flight_provider_cases" not in source
 
 
 def test_mock_flight_provider_stays_out_of_downstream_candidate_processing() -> None:
