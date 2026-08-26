@@ -50,6 +50,29 @@ Scope。历史 Reference 仅用于追溯，不得覆盖正式收口结论。
     -   若正式收口已经锁定某项语义，而实施大纲仅给出建议 Unit
         拆分或执行顺序，以正式收口为语义上游。
 4.  **当前 Milestone / Implementation Unit 已确认规格**
+    -   `03_implementation-roadmap/milestones/M6/机票筛选Agent_第三阶段_M6_Complete_Decision_Engine_Specification_V1.0.docx`
+        -   第三阶段 M6 Complete Decision Engine 的正式 Contract Authority / Implementation & Acceptance Baseline。
+        -   权威范围包括 Derived Feature、Complete Filtering、Complete Ranking、Recommendation Selector、Deterministic Relaxation、Golden Scenarios 与 Aggregate Exit Gate。
+        -   M6 Specification 已接纳；M6 Implementation Status：READY / IMPLEMENTATION ACTIVE，可开始 M6-U1，但 M6 Milestone 尚未 CLOSED。
+        -   不重新定义 M2/M3/M4/M5 已稳定 Authority；不提前定义 M7 Semantic Diff、ImpactDecision、SEARCH / REFRESH / ENRICH / REUSE、execution lifecycle 或完整 Publication Guard。
+    -   `03_implementation-roadmap/milestones/M5/机票筛选Agent_第三阶段_M5_Walking_Skeleton_Specification_V1.0.docx`
+        -   第三阶段 M5 Walking Skeleton 的正式 Contract Authority。
+        -   权威范围包括 Structured Entry、Search Execution Composition、Minimal Decision、Publication、Public Projection、Minimal Frontend 与 Aggregate Golden E2E。
+        -   不重新定义 M2/M3/M4 已稳定 Authority，不提前实现 M6 Complete Decision Engine 或 M7 后续能力。
+    -   `03_implementation-roadmap/milestones/M5/机票筛选Agent_第三阶段_M5_Walking_Skeleton正式收口_V1.0.docx`
+        -   第三阶段 M5 Walking Skeleton 的正式 Milestone Closure Evidence。
+        -   记录 M5-U1～M5-U5、Golden Scenario Matrix 与 Aggregate Exit Gate G1～G10 已 PASS，Contract Amendment NONE。
+        -   M5 Milestone Status：CLOSED。
+        -   不替代 M5 Walking Skeleton Specification 的 Contract Authority。
+    -   `03_implementation-roadmap/milestones/M4/机票筛选Agent_第三阶段_M4_Mock_Provider_Snapshot_Specification_V1.0.docx`
+        -   第三阶段 M4 Mock Provider + Snapshot 的正式 Contract Authority。
+        -   权威范围包括 SearchPlan、FlightProvider Port、Mock Provider、Provider Mapper、Common Normalizer、Candidate Merger、CandidateSnapshotAssembler、Golden Scenarios 与 Aggregate Exit Gate。
+        -   不重新定义 M2 Core Domain Contract 或 M3 Requirement Pipeline，不提前定义 M5/M6 后续能力。
+    -   `03_implementation-roadmap/milestones/M4/机票筛选Agent_第三阶段_M4_Mock_Provider_Snapshot正式收口_V1.0.docx`
+        -   第三阶段 M4 Mock Provider + Snapshot 的正式 Milestone Closure Evidence。
+        -   记录 M4 Implementation Units、Golden Scenarios 与 Aggregate Exit Gate 已 PASS，Contract Amendment NONE。
+        -   M4 Milestone Status：CLOSED。
+        -   不替代 M4 Mock Provider + Snapshot Specification 的 Contract Authority。
     -   `03_implementation-roadmap/milestones/M3/机票筛选Agent_第三阶段_M3_Requirement_Pipeline_Specification_V1.0.docx`
         -   第三阶段 M3 Requirement Pipeline 的正式 Contract Authority。
         -   权威范围包括 INITIAL/PATCH pipeline、Interpreter boundary、Normalization/Validation、RequirementRepository、Patch construction/application、Golden Scenarios 与 Aggregate Exit Gate。
@@ -232,12 +255,21 @@ Codex 在第三阶段默认遵守：
 -   M1 Architecture Skeleton：CLOSED。
 -   M2 Core Domain Contract：CLOSED。
 -   M3 Requirement Pipeline：CLOSED。
+-   M4 Mock Provider + Snapshot：CLOSED。
+-   M5 Walking Skeleton：CLOSED。
+-   M6 Complete Decision Engine：READY / IMPLEMENTATION ACTIVE，可开始 M6-U1；M6 Milestone 尚未 CLOSED。
 
-M3 Requirement Pipeline 的正式 Contract 由
-`03_implementation-roadmap/milestones/M3/机票筛选Agent_第三阶段_M3_Requirement_Pipeline_Specification_V1.0.docx`
-定义；`03_implementation-roadmap/milestones/M3/机票筛选Agent_第三阶段_M3_Requirement_Pipeline正式收口_V1.0.docx`
-作为正式收口证据，证明该 Contract 已通过 Implementation Units、Golden
-Scenarios 与 Aggregate Exit Gate，并完成 Milestone Closure。
+M6 Complete Decision Engine 的正式 Contract Authority / Implementation
+& Acceptance Baseline 由
+`03_implementation-roadmap/milestones/M6/机票筛选Agent_第三阶段_M6_Complete_Decision_Engine_Specification_V1.0.docx`
+定义。M6 当前已具备开始 M6-U1 的治理前提；M6 只有在 Implementation
+Units、Golden Scenarios 与 Aggregate Exit Gate 完成并形成正式 Closure
+Authority 后，才可登记为 CLOSED 并推动 M7 进入 READY。
+
+M3、M4、M5 的正式 Contract 与 Closure Authority 保持既有权威；M6
+Specification 不替代 M1～M5 已稳定 Contract，不提前授权 M7 Semantic
+Diff、ImpactDecision、SEARCH / REFRESH / ENRICH / REUSE、execution
+lifecycle 或完整 Publication Guard。
 
 当前首先完成：
 
