@@ -50,6 +50,11 @@ Scope。历史 Reference 仅用于追溯，不得覆盖正式收口结论。
     -   若正式收口已经锁定某项语义，而实施大纲仅给出建议 Unit
         拆分或执行顺序，以正式收口为语义上游。
 4.  **当前 Milestone / Implementation Unit 已确认规格**
+    -   `03_implementation-roadmap/milestones/M7/机票筛选Agent_第三阶段_M7_Patch_Impact_Orchestrator_Specification_V1.0.docx`
+        -   第三阶段 M7 Patch + Impact + Orchestrator 的正式 Contract Authority / Implementation & Acceptance Baseline。
+        -   权威范围包括 Requirement Semantic Diff、ImpactDecision、DataAction、selective ExecutionPlan、execution concurrency、Version Guard 与 Publication Guard。
+        -   M7 Specification 已接纳；M7-U1 Requirement Semantic Diff Foundation 进入 READY / eligible to start；当前 Contract Amendment：NONE。
+        -   不重新定义 M1～M6 已稳定 Authority；不得为了 M7 实现静默改变 Requirement、Snapshot、Decision、Publication 或 Architecture Contract。
     -   `03_implementation-roadmap/milestones/M6/机票筛选Agent_第三阶段_M6_Complete_Decision_Engine正式收口_V1.0.docx`
         -   第三阶段 M6 Complete Decision Engine 的正式 Milestone Closure Evidence。
         -   记录 M6-U1～M6-U6、M6-CA01-I1、GS-01～GS-08、P0-01～P0-14 与 Aggregate Exit Gate G1～G12 已 PASS。
@@ -269,7 +274,7 @@ Codex 在第三阶段默认遵守：
 -   M4 Mock Provider + Snapshot：CLOSED。
 -   M5 Walking Skeleton：CLOSED。
 -   M6 Complete Decision Engine：CLOSED；M6-U1～M6-U6、M6-CA01-I1、GS-01～GS-08、P0-01～P0-14 与 Aggregate Exit Gate G1～G12 全部 PASS；M6-CA01 已接纳并实现；Additional Contract Amendment NONE。
--   M7：READY / eligible for planning and specification；M7 implementation 尚未开始。
+-   M7：Specification ACCEPTED；M7-U1 Requirement Semantic Diff Foundation READY / eligible to start。
 
 当前 effective Requirement Contract：
 
@@ -291,6 +296,12 @@ M6 Complete Decision Engine 的正式 Contract Authority / Implementation
 定义。M6 已完成 Implementation Units、Golden Scenarios 与 Aggregate Exit
 Gate，并已形成正式 Closure Authority；M6 登记为 CLOSED，M7 进入 READY /
 eligible for planning and specification。
+
+M7 Patch + Impact + Orchestrator 的正式 Contract Authority /
+Implementation & Acceptance Baseline 由
+`03_implementation-roadmap/milestones/M7/机票筛选Agent_第三阶段_M7_Patch_Impact_Orchestrator_Specification_V1.0.docx`
+定义。M7 Specification 已进入 Repository Authority；当前执行入口为
+M7-U1 Requirement Semantic Diff Foundation。
 
 M3、M4、M5 的正式 Contract 与 Closure Authority 保持既有权威；M6
 Specification 不替代 M1～M5 已稳定 Contract，不提前授权 M7 Semantic
