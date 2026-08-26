@@ -326,11 +326,32 @@ def test_m6_filtering_engine_does_not_depend_on_ranking_recommendation_or_extern
     assert "recommendation_role" not in source
 
 
+def test_m6_ranking_engine_does_not_depend_on_recommendation_relaxation_or_external_runtime() -> None:
+    ranking_engine = SOURCE_ROOT / "domain" / "decision" / "ranking.py"
+    imports = set(imported_modules(ranking_engine))
+    source = ranking_engine.read_text(encoding="utf-8")
+
+    assert "flight_agent.domain.decision.selection" not in imports
+    assert "flight_agent.domain.workflow.recommendation" not in imports
+    assert "flight_agent.domain.decision.relaxation" not in imports
+    assert "flight_agent.application" not in imports
+    assert "flight_agent.ports.flight_providers" not in imports
+    assert "flight_agent.adapters.flight_providers.mock" not in imports
+    assert "flight_agent.api" not in imports
+    assert "fastapi" not in imports
+    assert "sqlalchemy" not in imports
+    assert "openai" not in imports
+    assert "ProviderRawEvidence" not in source
+    assert "RecommendationSelector" not in source
+    assert "Relaxation" not in source
+
+
 def test_m6_feature_layer_does_not_depend_on_filtering_engine() -> None:
     feature_engine = SOURCE_ROOT / "domain" / "decision" / "features.py"
     imports = set(imported_modules(feature_engine))
 
     assert "flight_agent.domain.decision.filtering" not in imports
+    assert "flight_agent.domain.decision.ranking" not in imports
 
 
 def test_mock_flight_provider_stays_out_of_downstream_candidate_processing() -> None:
