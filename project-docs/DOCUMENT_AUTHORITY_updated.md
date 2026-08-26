@@ -50,10 +50,15 @@ Scope。历史 Reference 仅用于追溯，不得覆盖正式收口结论。
     -   若正式收口已经锁定某项语义，而实施大纲仅给出建议 Unit
         拆分或执行顺序，以正式收口为语义上游。
 4.  **当前 Milestone / Implementation Unit 已确认规格**
+    -   `03_implementation-roadmap/milestones/M6/机票筛选Agent_第三阶段_M6_CA01_MAX_PRICE_Hard_Constraint_Contract_Amendment_V1.0.docx`
+        -   第三阶段 M6 的正式 additive Contract Amendment Authority。
+        -   对 M3 Requirement Contract 仅增量补充 `MAX_PRICE`：formal Hard Constraint、Money-valued、OFFER scope，并保持与 `PRICE` Soft Preference 分离。
+        -   默认不改变 SearchPlan / Candidate Universe，不授权 Provider-side price pushdown、FX conversion、RequirementState mutation、Patch commit、Search/Provider invocation、MAX_STOPS、M7 capability 或 Publication Guard。
+        -   CA01 Decision Status：ACCEPTED；Implementation Status：PENDING。
     -   `03_implementation-roadmap/milestones/M6/机票筛选Agent_第三阶段_M6_Complete_Decision_Engine_Specification_V1.0.docx`
         -   第三阶段 M6 Complete Decision Engine 的正式 Contract Authority / Implementation & Acceptance Baseline。
         -   权威范围包括 Derived Feature、Complete Filtering、Complete Ranking、Recommendation Selector、Deterministic Relaxation、Golden Scenarios 与 Aggregate Exit Gate。
-        -   M6 Specification 已接纳；M6 Implementation Status：READY / IMPLEMENTATION ACTIVE，可开始 M6-U1，但 M6 Milestone 尚未 CLOSED。
+        -   M6 Specification 已接纳；M6 Implementation Status：READY / IMPLEMENTATION ACTIVE；CA01 已接纳但 implementation pending；M6-U6 在 CA01 implementation 完成前不得恢复；M6 Milestone 尚未 CLOSED。
         -   不重新定义 M2/M3/M4/M5 已稳定 Authority；不提前定义 M7 Semantic Diff、ImpactDecision、SEARCH / REFRESH / ENRICH / REUSE、execution lifecycle 或完整 Publication Guard。
     -   `03_implementation-roadmap/milestones/M5/机票筛选Agent_第三阶段_M5_Walking_Skeleton_Specification_V1.0.docx`
         -   第三阶段 M5 Walking Skeleton 的正式 Contract Authority。
@@ -257,7 +262,22 @@ Codex 在第三阶段默认遵守：
 -   M3 Requirement Pipeline：CLOSED。
 -   M4 Mock Provider + Snapshot：CLOSED。
 -   M5 Walking Skeleton：CLOSED。
--   M6 Complete Decision Engine：READY / IMPLEMENTATION ACTIVE，可开始 M6-U1；M6 Milestone 尚未 CLOSED。
+-   M6 Complete Decision Engine：READY / IMPLEMENTATION ACTIVE；M6-CA01 已接纳为 additive Contract Amendment Authority，CA01 implementation pending；M6-U6 尚未恢复；M6 Milestone 尚未 CLOSED。
+-   M7：NOT READY。M7 只有在 M6 implementation、Aggregate Exit Gate、formal closure 与 authority closure update 完成后才可进入 READY。
+
+当前 effective Requirement Contract：
+
+`M3 Requirement Pipeline Specification + M3 Closure + M6-CA01 additive amendment`
+
+其中 CA01 仅补充：
+
+-   `MAX_PRICE` 是 formal Hard Constraint。
+-   value type 为 Money。
+-   decision scope 为 OFFER。
+-   `MAX_PRICE` 与 `PRICE` Soft Preference 保持分离。
+-   其他 M3 semantics 保持 unchanged。
+
+CA01 接纳只完成治理登记，不代表 MAX_PRICE source implementation 已完成。下一工程动作应是实现 CA01 MAX_PRICE Requirement + Complete Filtering support，然后再恢复 M6-U6 Deterministic Relaxation + Aggregate Golden Gates。
 
 M6 Complete Decision Engine 的正式 Contract Authority / Implementation
 & Acceptance Baseline 由
