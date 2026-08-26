@@ -1,21 +1,80 @@
-"""Minimal deterministic decision seams for M5."""
+"""Deterministic decision seams and M6 foundation contracts."""
 
+from flight_agent.domain.decision.evaluation import (
+    CandidateEligibility,
+    CandidateEligibilityStatus,
+    CandidatePoolDirection,
+    CandidatePoolPartition,
+    ConstraintEvaluation,
+    ConstraintEvaluationLineage,
+    ConstraintEvaluationScope,
+    ConstraintEvaluationStatus,
+    ConstraintReasonCode,
+    DecisionConstraintScope,
+    EvaluationValueEvidence,
+    OfferBackedItineraryCandidate,
+    SegmentSelection,
+    aggregate_candidate_eligibility,
+    classify_candidate_pool_direction,
+    partition_candidate_pool,
+)
 from flight_agent.domain.decision.filtering import (
     FilterEvaluation,
     FilterEvaluationStatus,
     FilterResult,
     MaxPriceFilter,
 )
+from flight_agent.domain.decision.identity import (
+    ConstraintEvaluationId,
+    DerivedFeatureRunId,
+    DerivedFeatureSetId,
+    FilterResultId,
+    FilterRunId,
+    RankingResultId,
+    RankingRunId,
+    RecommendationRunId,
+    RelaxationResultId,
+    RelaxationRunId,
+)
+from flight_agent.domain.decision.policy import DecisionPolicySet, DecisionPolicyVersion
 from flight_agent.domain.decision.ranking import LowerPriceRanking, RankedCandidate, RankingResult
 from flight_agent.domain.decision.selection import RecommendationSelector
 
 __all__ = [
+    "CandidateEligibility",
+    "CandidateEligibilityStatus",
+    "CandidatePoolDirection",
+    "CandidatePoolPartition",
+    "ConstraintEvaluation",
+    "ConstraintEvaluationId",
+    "ConstraintEvaluationLineage",
+    "ConstraintEvaluationScope",
+    "ConstraintEvaluationStatus",
+    "ConstraintReasonCode",
+    "DecisionConstraintScope",
+    "DecisionPolicySet",
+    "DecisionPolicyVersion",
+    "DerivedFeatureRunId",
+    "DerivedFeatureSetId",
+    "EvaluationValueEvidence",
     "FilterEvaluation",
     "FilterEvaluationStatus",
     "FilterResult",
+    "FilterResultId",
+    "FilterRunId",
     "LowerPriceRanking",
     "MaxPriceFilter",
+    "OfferBackedItineraryCandidate",
     "RankedCandidate",
     "RankingResult",
+    "RankingResultId",
+    "RankingRunId",
+    "RecommendationRunId",
     "RecommendationSelector",
+    "RelaxationResultId",
+    "RelaxationRunId",
+    "SegmentSelection",
+    "aggregate_candidate_eligibility",
+    "classify_candidate_pool_direction",
+    "partition_candidate_pool",
 ]

@@ -280,6 +280,16 @@ def test_m5_decision_domain_does_not_depend_on_provider_raw_fixture_publication_
     assert "openai" not in source
 
 
+def test_m6_evaluation_foundation_does_not_depend_on_downstream_decision_engines() -> None:
+    evaluation_foundation = SOURCE_ROOT / "domain" / "decision" / "evaluation.py"
+    imports = set(imported_modules(evaluation_foundation))
+
+    assert "flight_agent.domain.decision.ranking" not in imports
+    assert "flight_agent.domain.decision.selection" not in imports
+    assert "flight_agent.application.minimal_decision" not in imports
+    assert "flight_agent.application" not in imports
+
+
 def test_mock_flight_provider_stays_out_of_downstream_candidate_processing() -> None:
     violations = collect_provider_acl_downstream_violations(SOURCE_ROOT)
 
