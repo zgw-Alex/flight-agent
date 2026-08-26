@@ -400,6 +400,21 @@ def test_m7_orchestrator_stays_thin_and_out_of_business_correctness() -> None:
     assert "GUARDED_ATTEMPT" not in source
 
 
+def test_m7_execution_guards_stay_in_process_and_out_of_outer_layers() -> None:
+    guards = SOURCE_ROOT / "application" / "execution_guards.py"
+    imports = set(imported_modules(guards))
+    source = guards.read_text(encoding="utf-8")
+
+    assert "flight_agent.adapters" not in imports
+    assert "flight_agent.infrastructure" not in imports
+    assert "flight_agent.api" not in imports
+    assert "sqlalchemy" not in imports
+    assert "celery" not in imports
+    assert "kafka" not in imports
+    assert "Temporal" not in source
+    assert "distributed lock" not in source
+
+
 def test_m6_feature_layer_does_not_depend_on_filtering_engine() -> None:
     feature_engine = SOURCE_ROOT / "domain" / "decision" / "features.py"
     imports = set(imported_modules(feature_engine))
