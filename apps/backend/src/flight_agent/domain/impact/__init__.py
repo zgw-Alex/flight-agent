@@ -12,6 +12,17 @@ from flight_agent.domain.impact.decision import (
     M6ArtifactFacts,
     SnapshotCompatibilityFacts,
 )
+from flight_agent.domain.impact.execution_plan import (
+    ExecutionPlan,
+    ExecutionPlanArtifactRef,
+    ExecutionPlanBuilder,
+    ExecutionPlanInput,
+    ExecutionPlanReasonCode,
+    ExecutionPlanVersionRef,
+    ExecutionStage,
+    ExecutionStagePlan,
+    StageDisposition,
+)
 from flight_agent.domain.impact.semantic_diff import (
     HardConstraintSemanticEffect,
     RequirementDependencyKey,
@@ -27,6 +38,14 @@ from flight_agent.domain.impact.semantic_diff import (
 __all__ = [
     "AssetImpact",
     "DataAction",
+    "ExecutionPlan",
+    "ExecutionPlanArtifactRef",
+    "ExecutionPlanBuilder",
+    "ExecutionPlanInput",
+    "ExecutionPlanReasonCode",
+    "ExecutionPlanVersionRef",
+    "ExecutionStage",
+    "ExecutionStagePlan",
     "HardConstraintSemanticEffect",
     "ImpactAssetKind",
     "ImpactCompatibility",
@@ -43,5 +62,6 @@ __all__ = [
     "SemanticSubjectType",
     "SnapshotCompatibilityFacts",
     "SoftPreferenceSemanticEffect",
+    "StageDisposition",
     "StructuralChangeKind",
 ]
