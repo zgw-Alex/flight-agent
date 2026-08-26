@@ -290,6 +290,24 @@ def test_m6_evaluation_foundation_does_not_depend_on_downstream_decision_engines
     assert "flight_agent.application" not in imports
 
 
+def test_m6_feature_engine_does_not_depend_on_downstream_engines_or_external_runtime() -> None:
+    feature_engine = SOURCE_ROOT / "domain" / "decision" / "features.py"
+    imports = set(imported_modules(feature_engine))
+    source = feature_engine.read_text(encoding="utf-8")
+
+    assert "flight_agent.domain.decision.ranking" not in imports
+    assert "flight_agent.domain.decision.selection" not in imports
+    assert "flight_agent.application" not in imports
+    assert "flight_agent.ports.flight_providers" not in imports
+    assert "flight_agent.adapters.flight_providers.mock" not in imports
+    assert "fastapi" not in imports
+    assert "sqlalchemy" not in imports
+    assert "openai" not in imports
+    assert "ProviderRawEvidence" not in source
+    assert "normalized_value" not in source
+    assert "aggregate_score" not in source
+
+
 def test_mock_flight_provider_stays_out_of_downstream_candidate_processing() -> None:
     violations = collect_provider_acl_downstream_violations(SOURCE_ROOT)
 

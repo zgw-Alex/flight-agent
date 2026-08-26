@@ -19,6 +19,17 @@ class DecisionPolicyVersion:
 
 
 @dataclass(frozen=True)
+class FeatureDefinitionVersion:
+    """Opaque version for one feature definition's calculation semantics."""
+
+    value: str
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.value, str) or self.value.strip() == "":
+            raise DomainInvariantViolation("FeatureDefinitionVersion requires a non-empty value")
+
+
+@dataclass(frozen=True)
 class DecisionPolicySet:
     """Independent policy versions for the M6 decision pipeline components."""
 
