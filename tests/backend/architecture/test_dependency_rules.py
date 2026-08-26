@@ -315,6 +315,7 @@ def test_m6_filtering_engine_does_not_depend_on_ranking_recommendation_or_extern
 
     assert "flight_agent.domain.decision.ranking" not in imports
     assert "flight_agent.domain.decision.selection" not in imports
+    assert "flight_agent.domain.decision.relaxation" not in imports
     assert "flight_agent.application" not in imports
     assert "flight_agent.ports.flight_providers" not in imports
     assert "flight_agent.adapters.flight_providers.mock" not in imports
@@ -324,6 +325,25 @@ def test_m6_filtering_engine_does_not_depend_on_ranking_recommendation_or_extern
     assert "ProviderRawEvidence" not in source
     assert "ranking_score" not in source
     assert "recommendation_role" not in source
+
+
+def test_m6_relaxation_engine_does_not_depend_on_provider_search_or_external_runtime() -> None:
+    relaxation_engine = SOURCE_ROOT / "domain" / "decision" / "relaxation.py"
+    imports = set(imported_modules(relaxation_engine))
+    source = relaxation_engine.read_text(encoding="utf-8")
+
+    assert "flight_agent.domain.decision.ranking" not in imports
+    assert "flight_agent.domain.decision.selection" not in imports
+    assert "flight_agent.application" not in imports
+    assert "flight_agent.ports.flight_providers" not in imports
+    assert "flight_agent.adapters.flight_providers.mock" not in imports
+    assert "flight_agent.api" not in imports
+    assert "fastapi" not in imports
+    assert "sqlalchemy" not in imports
+    assert "openai" not in imports
+    assert "ProviderRawEvidence" not in source
+    assert "SearchPlan" not in source
+    assert "PatchSet" not in source
 
 
 def test_m6_ranking_engine_does_not_depend_on_recommendation_relaxation_or_external_runtime() -> None:
@@ -352,6 +372,7 @@ def test_m6_recommendation_selector_does_not_depend_on_publication_provider_or_e
     source = selector.read_text(encoding="utf-8")
 
     assert "flight_agent.domain.workflow.publication" not in imports
+    assert "flight_agent.domain.decision.relaxation" not in imports
     assert "flight_agent.application" not in imports
     assert "flight_agent.ports.flight_providers" not in imports
     assert "flight_agent.adapters.flight_providers.mock" not in imports
