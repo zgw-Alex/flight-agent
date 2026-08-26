@@ -308,6 +308,31 @@ def test_m6_feature_engine_does_not_depend_on_downstream_engines_or_external_run
     assert "aggregate_score" not in source
 
 
+def test_m6_filtering_engine_does_not_depend_on_ranking_recommendation_or_external_runtime() -> None:
+    filtering_engine = SOURCE_ROOT / "domain" / "decision" / "filtering.py"
+    imports = set(imported_modules(filtering_engine))
+    source = filtering_engine.read_text(encoding="utf-8")
+
+    assert "flight_agent.domain.decision.ranking" not in imports
+    assert "flight_agent.domain.decision.selection" not in imports
+    assert "flight_agent.application" not in imports
+    assert "flight_agent.ports.flight_providers" not in imports
+    assert "flight_agent.adapters.flight_providers.mock" not in imports
+    assert "fastapi" not in imports
+    assert "sqlalchemy" not in imports
+    assert "openai" not in imports
+    assert "ProviderRawEvidence" not in source
+    assert "ranking_score" not in source
+    assert "recommendation_role" not in source
+
+
+def test_m6_feature_layer_does_not_depend_on_filtering_engine() -> None:
+    feature_engine = SOURCE_ROOT / "domain" / "decision" / "features.py"
+    imports = set(imported_modules(feature_engine))
+
+    assert "flight_agent.domain.decision.filtering" not in imports
+
+
 def test_mock_flight_provider_stays_out_of_downstream_candidate_processing() -> None:
     violations = collect_provider_acl_downstream_violations(SOURCE_ROOT)
 
