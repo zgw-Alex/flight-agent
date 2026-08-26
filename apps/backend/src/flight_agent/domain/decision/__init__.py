@@ -99,7 +99,16 @@ from flight_agent.domain.decision.ranking import (
     m6_default_normalizer_registry,
     m6_default_ranking_policy_set,
 )
-from flight_agent.domain.decision.selection import RecommendationSelector
+from flight_agent.domain.decision.selection import (
+    CompleteRecommendationSelector,
+    RecommendationPolicy,
+    RecommendationRun,
+    RecommendationSelector,
+    RoleCandidate,
+    SelectionCandidateSource,
+    m6_default_complete_recommendation_selector,
+    m6_default_recommendation_policy,
+)
 
 __all__ = [
     "DEPARTURE_DATE_MATCHES_REQUIREMENT",
@@ -113,6 +122,7 @@ __all__ = [
     "CompleteFilteringEngine",
     "CompleteRankingEngine",
     "CompleteRankingResult",
+    "CompleteRecommendationSelector",
     "ConstraintEvaluation",
     "ConstraintEvaluationId",
     "ConstraintEvaluationLineage",
@@ -168,13 +178,17 @@ __all__ = [
     "RankingRun",
     "RankingRunId",
     "RankingViewKind",
+    "RecommendationPolicy",
+    "RecommendationRun",
     "RecommendationRunId",
     "RecommendationSelector",
     "ReferenceDataDependency",
     "RelaxationResultId",
     "RelaxationRunId",
     "RequirementFeatureDependency",
+    "RoleCandidate",
     "SegmentSelection",
+    "SelectionCandidateSource",
     "TieBreakEvidence",
     "aggregate_candidate_eligibility",
     "aggregate_segment_evaluations",
@@ -184,10 +198,12 @@ __all__ = [
     "classify_candidate_pool_direction",
     "m6_default_complete_filtering_engine",
     "m6_default_complete_ranking_engine",
+    "m6_default_complete_recommendation_selector",
     "m6_default_derived_feature_engine",
     "m6_default_feature_registry",
     "m6_default_filter_evaluator_registry",
     "m6_default_normalizer_registry",
     "m6_default_ranking_policy_set",
+    "m6_default_recommendation_policy",
     "partition_candidate_pool",
 ]

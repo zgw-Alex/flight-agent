@@ -15,14 +15,17 @@ from flight_agent.domain.workflow.identity import (
 )
 from flight_agent.domain.workflow.publication import PublishedRecommendation
 from flight_agent.domain.workflow.recommendation import (
+    CandidateComparison,
     RecommendationItem,
     RecommendationResult,
     RecommendationResultStatus,
     RecommendationRole,
+    RecommendationRoleAssignment,
 )
 
 __all__ = [
     "AgentExecution",
+    "CandidateComparison",
     "EvidenceRef",
     "EvidenceSource",
     "ExecutionId",
@@ -38,5 +41,6 @@ __all__ = [
     "RecommendationResultId",
     "RecommendationResultStatus",
     "RecommendationRole",
+    "RecommendationRoleAssignment",
     "WorkflowState",
 ]
