@@ -307,6 +307,7 @@ def _conflict_issues(requirement: RequirementState) -> tuple[RequirementValidati
     issues.extend(_scope_conflicts(requirement, ConstraintScope.DESTINATION_AIRPORT))
     issues.extend(_scope_conflicts(requirement, ConstraintScope.CABIN_CLASS))
     issues.extend(_scope_conflicts(requirement, ConstraintScope.PASSENGER_COUNT))
+    issues.extend(_scope_conflicts(requirement, ConstraintScope.MAX_PRICE))
     return tuple(issues)
 
 
@@ -353,6 +354,8 @@ def _conflict_code_for_scope(scope: ConstraintScope) -> RequirementValidationIss
         return RequirementValidationIssueCode.INCOMPATIBLE_TIME_CONSTRAINTS
     if scope in {ConstraintScope.ORIGIN_AIRPORT, ConstraintScope.DESTINATION_AIRPORT}:
         return RequirementValidationIssueCode.INCOMPATIBLE_LOCATION_CONSTRAINTS
+    if scope is ConstraintScope.MAX_PRICE:
+        return RequirementValidationIssueCode.INCOMPATIBLE_PRICE_CONSTRAINTS
     return RequirementValidationIssueCode.INCOMPATIBLE_FLIGHT_STRUCTURE_CONSTRAINTS
 
 

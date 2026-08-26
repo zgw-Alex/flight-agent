@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date, time
 
+from flight_agent.domain.flights.entities import Money
 from flight_agent.domain.shared import DomainInvariantViolation
 
 
@@ -52,7 +53,7 @@ class PassengerCount:
             raise DomainInvariantViolation("PassengerCount requires a positive integer")
 
 
-RequirementValue = AirportCode | CabinClass | LocalDate | LocalTime | PassengerCount
+RequirementValue = AirportCode | CabinClass | LocalDate | LocalTime | Money | PassengerCount
 
 
 @dataclass(frozen=True, init=False)

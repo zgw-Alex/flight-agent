@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date
+from decimal import Decimal
 from enum import Enum
 
 from flight_agent.application.requirement_normalization import (
@@ -17,6 +18,7 @@ from flight_agent.application.requirement_pipeline import (
     RequirementPipelineOutcomeStatus,
     execute_initial_requirement,
 )
+from flight_agent.domain.flights import Money
 from flight_agent.domain.requirements import (
     AirportCode,
     ConstraintId,
@@ -24,7 +26,6 @@ from flight_agent.domain.requirements import (
     ConstraintScope,
     HardConstraint,
     LocalDate,
-    PassengerCount,
     PreferenceId,
     PreferenceImportance,
     PreferenceScope,
@@ -193,19 +194,24 @@ def structured_command_to_initial_proposal(
                 value=LocalDate(command.departure_date),
             )
         )
+    if command.max_price_cny is not None:
+        constraints.append(
+            HardConstraint(
+                constraint_id=ConstraintId("structured-max-price"),
+                scope=ConstraintScope.MAX_PRICE,
+                operator=ConstraintOperator.AT_OR_BEFORE,
+                value=Money(Decimal(command.max_price_cny), "CNY"),
+            )
+        )
 
     preferences: list[SoftPreference] = []
-    if command.max_price_cny is not None or command.lower_price_preferred:
+    if command.lower_price_preferred:
         preferences.append(
             SoftPreference(
                 preference_id=PreferenceId("structured-lower-price"),
                 scope=PreferenceScope.PRICE,
-                importance=PreferenceImportance.HIGH
-                if command.lower_price_preferred
-                else PreferenceImportance.MEDIUM,
-                value=PassengerCount(command.max_price_cny)
-                if command.max_price_cny is not None
-                else None,
+                importance=PreferenceImportance.HIGH,
+                value=None,
             )
         )
 

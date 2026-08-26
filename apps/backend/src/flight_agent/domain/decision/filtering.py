@@ -27,6 +27,7 @@ from flight_agent.domain.decision.evaluation import (
 )
 from flight_agent.domain.decision.features import (
     DEPARTURE_DATE_MATCHES_REQUIREMENT,
+    TOTAL_PRICE,
     DerivedFeatureSet,
     FeatureValue,
     FeatureValueType,
@@ -316,6 +317,52 @@ class DepartureDateConstraintEvaluator:
 
 
 @dataclass(frozen=True)
+class MaxPriceConstraintEvaluator:
+    constraint_scope: ConstraintScope = ConstraintScope.MAX_PRICE
+    required_feature_keys: tuple = (TOTAL_PRICE,)
+
+    def evaluate(
+        self,
+        *,
+        constraint: HardConstraint,
+        candidate: OfferBackedItineraryCandidate,
+        feature_set: DerivedFeatureSet,
+        lineage: ConstraintEvaluationLineage,
+        evaluation_id: ConstraintEvaluationId,
+    ) -> ConstraintEvaluation:
+        if constraint.operator is not ConstraintOperator.AT_OR_BEFORE or not isinstance(
+            constraint.value,
+            Money,
+        ):
+            raise DomainInvariantViolation("Max price evaluator requires AT_OR_BEFORE Money")
+        feature_value = feature_set.value_for(candidate, TOTAL_PRICE)
+        _validate_feature_value(feature_value, FeatureValueType.MONEY)
+        actual = _actual_total_price(feature_value)
+        status = _status_from_money_threshold(feature_value, constraint.value)
+        return _constraint_evaluation(
+            evaluation_id=evaluation_id,
+            constraint_id=constraint.constraint_id,
+            candidate=candidate,
+            scope=ConstraintEvaluationScope(DecisionConstraintScope.OFFER),
+            status=status,
+            expected=DomainValue.known(constraint.value),
+            actual=actual,
+            expected_label="max_price",
+            actual_label="total_price",
+            evidence=(
+                *feature_value.evidence,
+                EvidenceRef(EvidenceSource.CONSTRAINT, constraint.constraint_id),
+            ),
+            lineage=lineage,
+            reason_code={
+                ConstraintEvaluationStatus.PASS: ConstraintReasonCode.MAX_PRICE_SATISFIED,
+                ConstraintEvaluationStatus.FAIL: ConstraintReasonCode.MAX_PRICE_EXCEEDED,
+                ConstraintEvaluationStatus.UNKNOWN: ConstraintReasonCode.MAX_PRICE_INSUFFICIENT_EVIDENCE,
+            }[status],
+        )
+
+
+@dataclass(frozen=True)
 class CompleteFilteringEngine:
     evaluator_registry: FilterEvaluatorRegistry
 
@@ -403,7 +450,7 @@ class CompleteFilteringEngine:
 
 def m6_default_filter_evaluator_registry() -> FilterEvaluatorRegistry:
     return FilterEvaluatorRegistry(
-        evaluators=(DepartureDateConstraintEvaluator(),),
+        evaluators=(DepartureDateConstraintEvaluator(), MaxPriceConstraintEvaluator()),
         registry_version=DecisionPolicyVersion("filter-evaluator-registry-v1"),
     )
 
@@ -449,6 +496,7 @@ def _constraint_evaluation(
     actual_label: str,
     evidence: tuple[EvidenceRef, ...],
     lineage: ConstraintEvaluationLineage,
+    reason_code: ConstraintReasonCode | None = None,
 ) -> ConstraintEvaluation:
     return ConstraintEvaluation(
         evaluation_id=evaluation_id,
@@ -458,7 +506,7 @@ def _constraint_evaluation(
         status=status,
         expected=EvaluationValueEvidence(expected_label, expected, evidence),
         actual=EvaluationValueEvidence(actual_label, actual, evidence),
-        reason_code={
+        reason_code=reason_code or {
             ConstraintEvaluationStatus.PASS: ConstraintReasonCode.CONSTRAINT_SATISFIED,
             ConstraintEvaluationStatus.FAIL: ConstraintReasonCode.CONSTRAINT_VIOLATED,
             ConstraintEvaluationStatus.UNKNOWN: ConstraintReasonCode.INSUFFICIENT_EVIDENCE,
@@ -479,6 +527,28 @@ def _status_from_bool_feature(feature_value: FeatureValue) -> ConstraintEvaluati
 
 
 def _actual_departure_date_match(feature_value: FeatureValue) -> DomainValue[object]:
+    if feature_value.value_status is not ValueState.KNOWN:
+        return DomainValue.not_provided()
+    return DomainValue.known(feature_value.value.value)
+
+
+def _status_from_money_threshold(
+    feature_value: FeatureValue,
+    max_price: Money,
+) -> ConstraintEvaluationStatus:
+    if feature_value.value_status is not ValueState.KNOWN:
+        return ConstraintEvaluationStatus.UNKNOWN
+    actual = feature_value.value.value
+    if not isinstance(actual, Money):
+        raise DomainInvariantViolation("Money feature produced a non-Money value")
+    if actual.currency != max_price.currency:
+        return ConstraintEvaluationStatus.UNKNOWN
+    if actual.amount <= max_price.amount:
+        return ConstraintEvaluationStatus.PASS
+    return ConstraintEvaluationStatus.FAIL
+
+
+def _actual_total_price(feature_value: FeatureValue) -> DomainValue[object]:
     if feature_value.value_status is not ValueState.KNOWN:
         return DomainValue.not_provided()
     return DomainValue.known(feature_value.value.value)

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import FrozenInstanceError
 from datetime import UTC, date, datetime, time
+from decimal import Decimal
 
 import pytest
 
@@ -16,6 +17,7 @@ from flight_agent.application import (
     normalize_patch_requirement,
     validate_requirement,
 )
+from flight_agent.domain.flights import Money
 from flight_agent.domain.requirements import (
     AirportCode,
     CabinClass,
@@ -84,6 +86,23 @@ def test_normalizer_preserves_hard_soft_shape_and_does_not_invent_or_delete_inte
     assert isinstance(result.candidate.preferences[0], SoftPreference)
     assert result.candidate.constraints[0].scope is ConstraintScope.ORIGIN_AIRPORT
     assert result.candidate.preferences[0].scope is PreferenceScope.DEPARTURE_TIME
+
+
+def test_normalizer_preserves_max_price_money_constraint_without_price_aliasing() -> None:
+    max_price = max_price_constraint("constraint-max-price", Decimal(800))
+    price_preference_item = price_preference("preference-price", 1)
+    proposal = InitialRequirementProposal(
+        constraints=(max_price,),
+        preferences=(price_preference_item,),
+        source_input="already canonical max price",
+    )
+
+    result = normalize_initial_requirement(proposal, normalization_context())
+
+    assert result.candidate is not None
+    assert result.candidate.constraints == (max_price,)
+    assert result.candidate.constraints[0].value == Money(Decimal(800), "CNY")
+    assert result.candidate.preferences == (price_preference_item,)
 
 
 def test_normalizer_returns_structured_issue_for_ambiguous_reference_before_commit() -> None:
@@ -161,6 +180,34 @@ def test_validation_ready_missing_and_version_binding_are_separate_from_requirem
     }
     assert not hasattr(ready, "search_readiness")
     assert not hasattr(ready, "validation_result")
+
+
+def test_validation_search_readiness_is_independent_of_max_price() -> None:
+    without_max = requirement_state(
+        constraints=(
+            origin_constraint("constraint-origin", "PVG"),
+            destination_constraint("LAX"),
+            date_constraint(),
+        )
+    )
+    with_max = requirement_state(
+        constraints=(
+            origin_constraint("constraint-origin", "PVG"),
+            destination_constraint("LAX"),
+            date_constraint(),
+            max_price_constraint("constraint-max-price", Decimal(800)),
+        )
+    )
+    max_only = requirement_state(
+        constraints=(max_price_constraint("constraint-max-price", Decimal(800)),)
+    )
+
+    assert validate_requirement(without_max).readiness is SearchReadinessStatus.READY
+    assert validate_requirement(with_max).readiness is SearchReadinessStatus.READY
+    assert validate_requirement(max_only).readiness is SearchReadinessStatus.NOT_READY
+    assert RequirementValidationIssueCode.MISSING_ORIGIN in {
+        issue.code for issue in validate_requirement(max_only).issues
+    }
 
 
 def test_validation_aggregates_multiple_missing_reasons() -> None:
@@ -319,6 +366,15 @@ def time_constraint(raw_id: str, value: time) -> HardConstraint:
         scope=ConstraintScope.DEPARTURE_TIME,
         operator=ConstraintOperator.EQUALS,
         value=LocalTime(value),
+    )
+
+
+def max_price_constraint(raw_id: str, amount: Decimal) -> HardConstraint:
+    return HardConstraint(
+        constraint_id=ConstraintId(raw_id),
+        scope=ConstraintScope.MAX_PRICE,
+        operator=ConstraintOperator.AT_OR_BEFORE,
+        value=Money(amount, "CNY"),
     )
 
 

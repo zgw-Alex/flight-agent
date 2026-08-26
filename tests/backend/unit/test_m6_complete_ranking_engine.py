@@ -169,6 +169,51 @@ def test_no_soft_preferences_still_orders_by_stable_canonical_identity() -> None
     assert all(entry.coverage.evaluated_preference_coverage == Decimal(1) for entry in result.entries)
 
 
+def test_max_price_hard_constraint_does_not_enter_soft_ranking_contributions() -> None:
+    requirement = RequirementState.initial(
+        requirement_id=RequirementId("requirement-1"),
+        recorded_at=instant(2026, 8, 26, 8, 0),
+        constraints=(
+            HardConstraint(
+                constraint_id=ConstraintId("departure-date"),
+                scope=ConstraintScope.DEPARTURE_DATE,
+                operator=ConstraintOperator.EQUALS,
+                value=LocalDate(date(2026, 9, 1)),
+            ),
+            HardConstraint(
+                constraint_id=ConstraintId("max-price"),
+                scope=ConstraintScope.MAX_PRICE,
+                operator=ConstraintOperator.AT_OR_BEFORE,
+                value=Money(Decimal(2000), "CNY"),
+            ),
+        ),
+        preferences=(
+            SoftPreference(
+                preference_id=PreferenceId("prefer-price"),
+                scope=PreferenceScope.PRICE,
+                importance=PreferenceImportance.HIGH,
+            ),
+        ),
+    )
+    snapshot = sample_snapshot()
+    feature_set = feature_set_for(snapshot=snapshot, requirement=requirement)
+    filtered = filter_result(snapshot=snapshot, requirement=requirement, feature_set=feature_set)
+
+    result = ranking_result(
+        RankingViewKind.QUALIFIED,
+        requirement=requirement,
+        snapshot=snapshot,
+        feature_set=feature_set,
+        filtered=filtered,
+    )
+
+    assert all(
+        contribution.preference_scope is PreferenceScope.PRICE
+        for entry in result.entries
+        for contribution in entry.preference_contributions
+    )
+
+
 def test_degenerate_pool_has_deterministic_normalization_without_division_by_zero() -> None:
     result = ranking_result(RankingViewKind.QUALIFIED, snapshot=equal_snapshot())
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, date, datetime
+from decimal import Decimal
 
 from flight_agent.adapters.requirement_repository_memory import InMemoryRequirementRepository
 from flight_agent.application import (
@@ -14,11 +15,13 @@ from flight_agent.application import (
 )
 from flight_agent.application.requirement_pipeline import RequirementPipelineOutcomeStatus
 from flight_agent.domain.requirements import (
+    ConstraintOperator,
     ConstraintScope,
     PreferenceScope,
     RequirementId,
     RequirementState,
 )
+from flight_agent.domain.flights import Money
 from flight_agent.domain.shared import DomainInstant
 
 
@@ -98,8 +101,27 @@ def test_structured_command_maps_only_to_non_authoritative_m3_proposal_boundary(
         ConstraintScope.ORIGIN_AIRPORT,
         ConstraintScope.DESTINATION_AIRPORT,
         ConstraintScope.DEPARTURE_DATE,
+        ConstraintScope.MAX_PRICE,
     }
     assert [preference.scope for preference in proposal.preferences] == [PreferenceScope.PRICE]
+    max_price = next(constraint for constraint in proposal.constraints if constraint.scope is ConstraintScope.MAX_PRICE)
+    assert max_price.operator is ConstraintOperator.AT_OR_BEFORE
+    assert max_price.value == Money(Decimal(1200), "CNY")
+
+
+def test_structured_max_price_does_not_create_price_soft_preference_by_itself() -> None:
+    proposal = structured_command_to_initial_proposal(
+        StructuredRequirementCommand(
+            origin="PEK",
+            destination="SHA",
+            departure_date=date(2026, 9, 1),
+            max_price_cny=1200,
+            lower_price_preferred=False,
+        )
+    )
+
+    assert any(constraint.scope is ConstraintScope.MAX_PRICE for constraint in proposal.constraints)
+    assert proposal.preferences == ()
 
 
 def use_case_with(

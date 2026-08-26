@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 
+from flight_agent.domain.flights.entities import Money
 from flight_agent.domain.requirements.identity import ConstraintId, PreferenceId
 from flight_agent.domain.requirements.values import (
     AirportCode,
@@ -26,6 +27,7 @@ class ConstraintScope(str, Enum):
     DEPARTURE_TIME = "DEPARTURE_TIME"
     CABIN_CLASS = "CABIN_CLASS"
     PASSENGER_COUNT = "PASSENGER_COUNT"
+    MAX_PRICE = "MAX_PRICE"
 
 
 class ConstraintOperator(str, Enum):
@@ -115,6 +117,7 @@ _CONSTRAINT_ALLOWED_VALUE_TYPES = {
     ConstraintScope.DEPARTURE_TIME: (LocalTime,),
     ConstraintScope.CABIN_CLASS: (CabinClass,),
     ConstraintScope.PASSENGER_COUNT: (PassengerCount,),
+    ConstraintScope.MAX_PRICE: (Money,),
 }
 
 _PREFERENCE_ALLOWED_VALUE_TYPES = {

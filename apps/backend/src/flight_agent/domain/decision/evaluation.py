@@ -50,6 +50,9 @@ class ConstraintReasonCode(str, Enum):
     CONSTRAINT_SATISFIED = "CONSTRAINT_SATISFIED"
     CONSTRAINT_VIOLATED = "CONSTRAINT_VIOLATED"
     INSUFFICIENT_EVIDENCE = "INSUFFICIENT_EVIDENCE"
+    MAX_PRICE_SATISFIED = "MAX_PRICE_SATISFIED"
+    MAX_PRICE_EXCEEDED = "MAX_PRICE_EXCEEDED"
+    MAX_PRICE_INSUFFICIENT_EVIDENCE = "MAX_PRICE_INSUFFICIENT_EVIDENCE"
 
 
 class CandidateEligibilityStatus(str, Enum):
@@ -254,10 +257,19 @@ def _validate_reason_matches_status(
     status: ConstraintEvaluationStatus,
     reason_code: ConstraintReasonCode,
 ) -> None:
-    expected = {
-        ConstraintEvaluationStatus.PASS: ConstraintReasonCode.CONSTRAINT_SATISFIED,
-        ConstraintEvaluationStatus.FAIL: ConstraintReasonCode.CONSTRAINT_VIOLATED,
-        ConstraintEvaluationStatus.UNKNOWN: ConstraintReasonCode.INSUFFICIENT_EVIDENCE,
+    allowed = {
+        ConstraintEvaluationStatus.PASS: {
+            ConstraintReasonCode.CONSTRAINT_SATISFIED,
+            ConstraintReasonCode.MAX_PRICE_SATISFIED,
+        },
+        ConstraintEvaluationStatus.FAIL: {
+            ConstraintReasonCode.CONSTRAINT_VIOLATED,
+            ConstraintReasonCode.MAX_PRICE_EXCEEDED,
+        },
+        ConstraintEvaluationStatus.UNKNOWN: {
+            ConstraintReasonCode.INSUFFICIENT_EVIDENCE,
+            ConstraintReasonCode.MAX_PRICE_INSUFFICIENT_EVIDENCE,
+        },
     }[status]
-    if reason_code is not expected:
+    if reason_code not in allowed:
         raise DomainInvariantViolation("ConstraintEvaluation reason code must match status")

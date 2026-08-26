@@ -2,10 +2,12 @@ from __future__ import annotations
 
 from dataclasses import FrozenInstanceError
 from datetime import UTC, date, datetime, time
+from decimal import Decimal
 from typing import Callable
 
 import pytest
 
+from flight_agent.domain.flights import Money
 from flight_agent.domain.requirements import (
     AirportCode,
     CabinClass,
@@ -54,6 +56,15 @@ def destination_constraint(
         scope=ConstraintScope.DESTINATION_AIRPORT,
         operator=ConstraintOperator.EQUALS,
         value=AirportCode(airport),
+    )
+
+
+def max_price_constraint(raw_id: str, amount: Decimal) -> HardConstraint:
+    return HardConstraint(
+        constraint_id=ConstraintId(raw_id),
+        scope=ConstraintScope.MAX_PRICE,
+        operator=ConstraintOperator.AT_OR_BEFORE,
+        value=Money(amount, "CNY"),
     )
 
 
@@ -175,6 +186,42 @@ def test_constraints_and_preferences_reject_incompatible_typed_values() -> None:
             scope=PreferenceScope.AIRPORT_MATCH,
             importance=PreferenceImportance.LOW,
             value=LocalTime(time(9, 0)),
+        )
+
+
+def test_max_price_is_money_valued_hard_constraint_distinct_from_price_preference() -> None:
+    max_price = HardConstraint(
+        constraint_id=ConstraintId("constraint-max-price"),
+        scope=ConstraintScope.MAX_PRICE,
+        operator=ConstraintOperator.AT_OR_BEFORE,
+        value=Money(Decimal(800), "cny"),
+    )
+    price_preference = SoftPreference(
+        preference_id=PreferenceId("preference-price"),
+        scope=PreferenceScope.PRICE,
+        importance=PreferenceImportance.HIGH,
+    )
+    state = RequirementState.initial(
+        requirement_id=RequirementId("requirement-1"),
+        recorded_at=instant(),
+        constraints=(max_price,),
+        preferences=(price_preference,),
+    )
+
+    assert state.constraints == (max_price,)
+    assert state.preferences == (price_preference,)
+    assert max_price.value == Money(Decimal(800), "CNY")
+    assert max_price.scope is ConstraintScope.MAX_PRICE
+    assert price_preference.scope is PreferenceScope.PRICE
+
+
+def test_max_price_rejects_non_money_requirement_values() -> None:
+    with pytest.raises(DomainInvariantViolation):
+        HardConstraint(
+            constraint_id=ConstraintId("bad-max-price"),
+            scope=ConstraintScope.MAX_PRICE,
+            operator=ConstraintOperator.AT_OR_BEFORE,
+            value=PassengerCount(800),
         )
 
 
@@ -306,6 +353,50 @@ def test_patchset_remove_and_clear_success() -> None:
 
     assert destination_constraint() not in removed.constraints
     assert cleared.preferences == ()
+
+
+def test_max_price_uses_generic_patch_lifecycle_and_preserves_old_version() -> None:
+    state = initial_state()
+    added_constraint = max_price_constraint("constraint-max-price", Decimal(800))
+
+    added = state.apply(
+        PatchSet(
+            base_requirement_version=RequirementVersion(1),
+            patches=(RequirementPatch.add(added_constraint),),
+        ),
+        recorded_at=instant(10),
+    )
+    replaced_constraint = max_price_constraint("constraint-max-price", Decimal(900))
+    replaced = added.apply(
+        PatchSet(
+            base_requirement_version=RequirementVersion(2),
+            patches=(
+                RequirementPatch.replace(
+                    PatchTarget(ConstraintId("constraint-max-price")),
+                    replaced_constraint,
+                ),
+            ),
+        ),
+        recorded_at=instant(11),
+    )
+    removed = replaced.apply(
+        PatchSet(
+            base_requirement_version=RequirementVersion(3),
+            patches=(RequirementPatch.remove(PatchTarget(ConstraintId("constraint-max-price"))),),
+        ),
+        recorded_at=instant(12),
+    )
+
+    assert state.version == RequirementVersion(1)
+    assert state.constraints == (origin_constraint(),)
+    assert added.version == RequirementVersion(2)
+    assert added_constraint in added.constraints
+    assert replaced.version == RequirementVersion(3)
+    assert replaced_constraint in replaced.constraints
+    assert removed.version == RequirementVersion(4)
+    assert ConstraintId("constraint-max-price") not in {
+        constraint.constraint_id for constraint in removed.constraints
+    }
 
 
 def test_patchset_rejects_stale_base_version() -> None:
