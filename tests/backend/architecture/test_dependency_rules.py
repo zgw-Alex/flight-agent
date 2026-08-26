@@ -385,6 +385,21 @@ def test_m6_recommendation_selector_does_not_depend_on_publication_provider_or_e
     assert "Relaxation" not in source
 
 
+def test_m7_orchestrator_stays_thin_and_out_of_business_correctness() -> None:
+    orchestrator = SOURCE_ROOT / "application" / "impact_orchestrator.py"
+    imports = set(imported_modules(orchestrator))
+    source = orchestrator.read_text(encoding="utf-8")
+
+    assert "flight_agent.adapters" not in imports
+    assert "flight_agent.infrastructure" not in imports
+    assert "flight_agent.api" not in imports
+    assert "evaluate_snapshot" not in source
+    assert "select_best_overall" not in source
+    assert "ranked_candidates[0]" not in source
+    assert "PublicationGuard" not in source
+    assert "GUARDED_ATTEMPT" not in source
+
+
 def test_m6_feature_layer_does_not_depend_on_filtering_engine() -> None:
     feature_engine = SOURCE_ROOT / "domain" / "decision" / "features.py"
     imports = set(imported_modules(feature_engine))
