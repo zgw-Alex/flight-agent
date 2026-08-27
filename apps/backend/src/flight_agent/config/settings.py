@@ -29,6 +29,14 @@ class Settings(BaseSettings):
         alias="POSTGRES_PASSWORD",
         min_length=1,
     )
+    deepseek_base_url: str = Field(default="https://api.deepseek.com", alias="DEEPSEEK_BASE_URL")
+    deepseek_api_key: str | None = Field(default=None, alias="DEEPSEEK_API_KEY")
+    deepseek_default_model: str = Field(default="deepseek-v4-flash", alias="DEEPSEEK_DEFAULT_MODEL")
+    deepseek_timeout_seconds: float = Field(default=15.0, alias="DEEPSEEK_TIMEOUT_SECONDS", gt=0)
+    deepseek_total_deadline_seconds: float = Field(
+        default=30.0, alias="DEEPSEEK_TOTAL_DEADLINE_SECONDS", gt=0
+    )
+    deepseek_max_attempts: int = Field(default=2, alias="DEEPSEEK_MAX_ATTEMPTS", ge=1)
 
     @field_validator(
         "app_env",
@@ -37,6 +45,8 @@ class Settings(BaseSettings):
         "postgres_db",
         "postgres_user",
         "postgres_password",
+        "deepseek_base_url",
+        "deepseek_default_model",
     )
     @classmethod
     def reject_blank_strings(cls, value: str) -> str:
@@ -55,3 +65,7 @@ class Settings(BaseSettings):
             f"postgresql://{user}:{password}"
             f"@{self.postgres_host}:{self.postgres_port}/{database}"
         )
+
+    @property
+    def deepseek_configured(self) -> bool:
+        return self.deepseek_api_key is not None and self.deepseek_api_key.strip() != ""

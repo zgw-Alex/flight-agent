@@ -178,9 +178,28 @@ def test_application_does_not_depend_on_llm_adapter_or_provider_specific_sdk() -
 
     assert "flight_agent.adapters.llm_fake" not in application_imports
     assert "flight_agent.adapters.llm_deepseek" not in application_imports
+    assert "flight_agent.adapters.deepseek_llm" not in application_imports
     assert "deepseek" not in application_imports
     assert "openai" not in application_imports
     assert "DeepSeek" not in application_source
+
+
+def test_deepseek_adapter_does_not_own_prompt_context_or_business_authority() -> None:
+    violations = collect_deepseek_adapter_boundary_violations(SOURCE_ROOT)
+
+    assert violations == []
+
+
+def test_deepseek_adapter_boundary_negative_control_fails(tmp_path: Path) -> None:
+    package_root = make_package_fixture(tmp_path)
+    write_module(
+        package_root / "adapters" / "deepseek_llm.py",
+        "from flight_agent.application.llm_prompting import load_runtime_prompt_template\n",
+    )
+
+    violations = collect_deepseek_adapter_boundary_violations(package_root)
+
+    assert any("flight_agent.application.llm_prompting" in violation for violation in violations)
 
 
 def test_llm_capability_contract_does_not_own_m6_or_m7_authority() -> None:
@@ -590,6 +609,42 @@ def collect_provider_acl_downstream_violations(package_root: Path) -> list[str]:
                     f"{relative(module_path)} imports {imported_module}. "
                     "Mock provider must not depend on downstream candidate processing"
                 )
+    return violations
+
+
+def collect_deepseek_adapter_boundary_violations(package_root: Path) -> list[str]:
+    module_path = package_root / "adapters" / "deepseek_llm.py"
+    if not module_path.exists():
+        return []
+    forbidden_imports = {
+        "flight_agent.application.llm_prompting",
+        "flight_agent.domain.requirements",
+        "flight_agent.domain.decision",
+        "flight_agent.domain.impact",
+        "flight_agent.application.impact_orchestrator",
+    }
+    forbidden_names = {
+        "load_runtime_prompt_template",
+        "build_initial_requirement_prompt_context",
+        "PROMPT_ASSET_ROOT",
+        "read_text",
+    }
+    violations: list[str] = []
+    for imported_module in imported_modules(module_path):
+        if imported_module in forbidden_imports:
+            violations.append(
+                "deepseek-adapter-boundary: "
+                f"{relative(module_path)} imports {imported_module}. "
+                "DeepSeek adapter must not own prompt context or downstream business authority"
+            )
+    source = module_path.read_text(encoding="utf-8")
+    for forbidden_name in forbidden_names:
+        if forbidden_name in source:
+            violations.append(
+                "deepseek-adapter-boundary: "
+                f"{relative(module_path)} mentions {forbidden_name}. "
+                "DeepSeek adapter must consume rendered prompts without loading prompt assets"
+            )
     return violations
 
 

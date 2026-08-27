@@ -25,6 +25,12 @@ from flight_agent.application.impact_orchestrator import (
     StageExecutionResult,
     StageExecutionStatus,
 )
+from flight_agent.application.llm_invocation import (
+    LLMInvocationRuntime,
+    parse_json_output,
+    repair_json_representation,
+    validate_structured_output_schema,
+)
 from flight_agent.application.llm_prompting import (
     EXPLANATION_GENERATION_PROMPT_FAMILY,
     INITIAL_REQUIREMENT_PROMPT_FAMILY,
@@ -136,6 +142,7 @@ __all__ = [
     "ImpactExecutionOrchestrator",
     "InProcessExecutionAuthority",
     "InvocationEvidence",
+    "LLMInvocationRuntime",
     "M4SearchAcquisitionCapability",
     "MinimalDecisionResult",
     "MinimalDecisionStatus",
@@ -201,9 +208,12 @@ __all__ = [
     "normalize_patch_requirement",
     "outcome_from_decision",
     "output_schema_guidance",
+    "parse_json_output",
     "plan_search",
     "render_prompt",
+    "repair_json_representation",
     "runtime_prompt_family_by_capability",
     "structured_command_to_initial_proposal",
     "validate_requirement",
+    "validate_structured_output_schema",
 ]
