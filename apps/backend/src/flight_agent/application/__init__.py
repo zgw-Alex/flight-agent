@@ -29,6 +29,7 @@ from flight_agent.application.llm_invocation import (
     LLMInvocationRuntime,
     parse_json_output,
     repair_json_representation,
+    structured_output_payload,
     validate_structured_output_schema,
 )
 from flight_agent.application.llm_prompting import (
@@ -214,6 +215,7 @@ __all__ = [
     "repair_json_representation",
     "runtime_prompt_family_by_capability",
     "structured_command_to_initial_proposal",
+    "structured_output_payload",
     "validate_requirement",
     "validate_structured_output_schema",
 ]

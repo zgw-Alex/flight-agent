@@ -19,6 +19,7 @@ from flight_agent.application.llm_invocation import (
     LLMInvocationRuntime,
     parse_json_output,
     repair_json_representation,
+    structured_output_payload,
     validate_structured_output_schema,
 )
 from flight_agent.application.llm_prompting import (
@@ -124,6 +125,49 @@ def test_invocation_runtime_parses_json_and_validates_u1_schema_surface() -> Non
         LLMCapabilityName.INITIAL_REQUIREMENT_INTERPRETATION,
         result.parsed_json,
     )
+
+
+def test_invocation_runtime_accepts_capability_result_output_wrapper() -> None:
+    wrapped_output = json.dumps(
+        {
+            "status": "SUCCESS",
+            "metadata": {
+                "capability": "INITIAL_REQUIREMENT_INTERPRETATION",
+                "output_schema_version": "m8-u1",
+                "adapter_version": DEEPSEEK_ADAPTER_VERSION,
+            },
+            "output": schema_valid_payload(),
+            "semantic_validation": {"is_semantically_valid": True, "issues": []},
+        }
+    )
+    runtime = LLMInvocationRuntime(FakeTransport((invocation_success(wrapped_output),)))
+
+    result = runtime.invoke(invocation_request())
+
+    assert result.status is LLMInvocationStatus.SUCCESS
+    assert result.parsed_json == schema_valid_payload()
+    assert structured_output_payload(
+        LLMCapabilityName.INITIAL_REQUIREMENT_INTERPRETATION,
+        {"output": schema_valid_payload()},
+    ) == schema_valid_payload()
+
+
+def test_invocation_runtime_accepts_provider_result_proposal_wrapper() -> None:
+    wrapped_output = json.dumps(
+        {
+            "capability": "InitialRequirementProposal",
+            "result": {
+                "status": "SUCCESS",
+                "proposal": schema_valid_payload(),
+            },
+        }
+    )
+    runtime = LLMInvocationRuntime(FakeTransport((invocation_success(wrapped_output),)))
+
+    result = runtime.invoke(invocation_request())
+
+    assert result.status is LLMInvocationStatus.SUCCESS
+    assert result.parsed_json == schema_valid_payload()
 
 
 def test_malformed_empty_and_schema_invalid_outputs_are_failure_paths() -> None:

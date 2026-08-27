@@ -65,15 +65,19 @@ class LLMInvocationRuntime:
             if result.status is LLMInvocationStatus.SUCCESS:
                 parsed = parse_json_output(result.output_text or "")
                 if parsed.status is LLMInvocationStatus.SUCCESS:
-                    if not validate_structured_output_schema(
+                    structured_payload = structured_output_payload(
                         request.rendered_prompt.family.capability,
                         parsed.parsed_json or {},
+                    )
+                    if not validate_structured_output_schema(
+                        request.rendered_prompt.family.capability,
+                        structured_payload,
                     ):
                         return _schema_invalid(result)
                     return LLMInvocationResult(
                         status=LLMInvocationStatus.SUCCESS,
                         output_text=result.output_text,
-                        parsed_json=parsed.parsed_json,
+                        parsed_json=structured_payload,
                         telemetry=result.telemetry,
                     )
                 return parsed
@@ -121,6 +125,32 @@ def validate_structured_output_schema(
 ) -> bool:
     expected = _expected_output_fields(capability)
     return expected.issubset(parsed_json.keys())
+
+
+def structured_output_payload(
+    capability: LLMCapabilityName, parsed_json: dict[str, Any]
+) -> dict[str, Any]:
+    if validate_structured_output_schema(capability, parsed_json):
+        return parsed_json
+    for candidate in _structured_output_candidates(parsed_json):
+        if validate_structured_output_schema(capability, candidate):
+            return candidate
+    return parsed_json
+
+
+def _structured_output_candidates(parsed_json: dict[str, Any]) -> tuple[dict[str, Any], ...]:
+    candidates: list[dict[str, Any]] = []
+    for key in ("output", "proposal"):
+        value = parsed_json.get(key)
+        if isinstance(value, dict):
+            candidates.append(value)
+    result = parsed_json.get("result")
+    if isinstance(result, dict):
+        for key in ("output", "proposal"):
+            value = result.get(key)
+            if isinstance(value, dict):
+                candidates.append(value)
+    return tuple(candidates)
 
 
 def _expected_output_fields(capability: LLMCapabilityName) -> frozenset[str]:

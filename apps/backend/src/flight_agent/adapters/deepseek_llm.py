@@ -201,7 +201,12 @@ def deepseek_chat_completion_body(request: LLMInvocationRequest) -> dict[str, An
             },
             {
                 "role": "user",
-                "content": "Return JSON only for the provider-neutral capability result.",
+                "content": (
+                    "Return one JSON object only for the provider-neutral capability result. "
+                    "It must include every dataclass field named in the output schema guidance. "
+                    "Use empty arrays for unknown list fields and preserve the source user_message "
+                    "when a source field is required."
+                ),
             },
         ],
         "stream": False,
