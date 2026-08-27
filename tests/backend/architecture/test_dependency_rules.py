@@ -215,6 +215,23 @@ def test_deepseek_requirement_adapter_does_not_own_repository_or_m7_authority() 
     assert "ImpactExecutionOrchestrator" not in source
 
 
+def test_deepseek_explanation_adapter_does_not_own_repository_snapshot_or_m7_authority() -> None:
+    adapter = SOURCE_ROOT / "adapters" / "llm_deepseek_explanation.py"
+    imports = set(imported_modules(adapter))
+    source = adapter.read_text(encoding="utf-8")
+
+    assert "flight_agent.ports.requirement_repository" not in imports
+    assert "flight_agent.application.requirement_pipeline" not in imports
+    assert "flight_agent.domain.flights" not in imports
+    assert "flight_agent.domain.decision" not in imports
+    assert "flight_agent.application.impact_orchestrator" not in imports
+    assert "flight_agent.domain.impact" not in imports
+    assert "RequirementRepository" not in source
+    assert "CandidateSnapshot" not in source
+    assert "RankingResult" not in source
+    assert "ImpactExecutionOrchestrator" not in source
+
+
 def test_llm_capability_contract_does_not_own_m6_or_m7_authority() -> None:
     llm_contract = SOURCE_ROOT / "ports" / "llm_capabilities.py"
     imports = set(imported_modules(llm_contract))

@@ -181,6 +181,14 @@ def output_schema_guidance(capability: LLMCapabilityName) -> str:
         "ExplanationDraft",
         ExplanationDraft,
         ("SUCCESS", "AMBIGUOUS", "INSUFFICIENT_CONTEXT", "FAILURE"),
+    ) + (
+        "\nReturn JSON with keys draft_text, used_evidence, metadata. "
+        "draft_text must mention only approved evidence projection facts and preserve UNKNOWN. "
+        "draft_text must include the exact selected_offer_id token from approved evidence when one exists. "
+        "used_evidence must be a non-empty array of approved evidence refs using "
+        "{source, identity} objects, for example {\"source\": \"RECOMMENDATION\", "
+        "\"identity\": \"recommendation-1\"}. "
+        "metadata may be an object but runtime metadata is authoritative."
     )
 
 
