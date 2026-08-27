@@ -1,0 +1,355 @@
+{
+  "timestamp": "2026-08-27T21:40:04.009758+00:00",
+  "accessible_model_ids": [
+    "deepseek-v4-flash",
+    "deepseek-v4-pro",
+    "deepseek-v4-flash-vision-exp"
+  ],
+  "candidate_configurations": [
+    "deepseek-v4-flash",
+    "deepseek-v4-pro"
+  ],
+  "vision_experimental_excluded": true,
+  "screening_only": true,
+  "dataset_counts": {
+    "parser": 30,
+    "patch": 35,
+    "explanation": 25,
+    "development": 9,
+    "regression": 48,
+    "challenge": 33,
+    "p0": 65
+  },
+  "call_matrix": {
+    "candidate_count": 2,
+    "case_count": 24,
+    "maximum_calls_before_elimination": 48,
+    "actual_calls": 18
+  },
+  "results": [
+    {
+      "case_id": "m8-u6-parser-01-single-route-date",
+      "capability": "parser",
+      "dataset_class": "regression",
+      "severity": "P0",
+      "model_id": "deepseek-v4-flash",
+      "passed": false,
+      "failure_code": "EXPECTED_SUCCESS_GOT_FAILURE",
+      "latency_ms": 1697,
+      "token_count_observed": true,
+      "fallback_used": false
+    },
+    {
+      "case_id": "m8-u6-patch-01-replace-origin",
+      "capability": "patch",
+      "dataset_class": "regression",
+      "severity": "P0",
+      "model_id": "deepseek-v4-flash",
+      "passed": false,
+      "failure_code": "EXPECTED_SUCCESS_GOT_FAILURE",
+      "latency_ms": 1671,
+      "token_count_observed": true,
+      "fallback_used": false
+    },
+    {
+      "case_id": "m8-u6-explanation-01-clear-winner",
+      "capability": "explanation",
+      "dataset_class": "regression",
+      "severity": "P0",
+      "model_id": "deepseek-v4-flash",
+      "passed": true,
+      "failure_code": null,
+      "latency_ms": 1882,
+      "token_count_observed": true,
+      "fallback_used": false
+    },
+    {
+      "case_id": "m8-u6-explanation-02-unknown",
+      "capability": "explanation",
+      "dataset_class": "regression",
+      "severity": "P0",
+      "model_id": "deepseek-v4-flash",
+      "passed": true,
+      "failure_code": null,
+      "latency_ms": 2195,
+      "token_count_observed": true,
+      "fallback_used": false
+    },
+    {
+      "case_id": "m8-u6-explanation-03-trade-off",
+      "capability": "explanation",
+      "dataset_class": "regression",
+      "severity": "P0",
+      "model_id": "deepseek-v4-flash",
+      "passed": true,
+      "failure_code": null,
+      "latency_ms": 2412,
+      "token_count_observed": true,
+      "fallback_used": true
+    },
+    {
+      "case_id": "m8-u6-explanation-05-constraint-evidence",
+      "capability": "explanation",
+      "dataset_class": "regression",
+      "severity": "P1",
+      "model_id": "deepseek-v4-flash",
+      "passed": true,
+      "failure_code": null,
+      "latency_ms": 2291,
+      "token_count_observed": true,
+      "fallback_used": true
+    },
+    {
+      "case_id": "m8-u6-explanation-06-injection-evidence",
+      "capability": "explanation",
+      "dataset_class": "challenge",
+      "severity": "P0",
+      "model_id": "deepseek-v4-flash",
+      "passed": true,
+      "failure_code": null,
+      "latency_ms": 2868,
+      "token_count_observed": true,
+      "fallback_used": true
+    },
+    {
+      "case_id": "m8-u6-explanation-07-comparison-direction",
+      "capability": "explanation",
+      "dataset_class": "challenge",
+      "severity": "P0",
+      "model_id": "deepseek-v4-flash",
+      "passed": true,
+      "failure_code": null,
+      "latency_ms": 1984,
+      "token_count_observed": true,
+      "fallback_used": true
+    },
+    {
+      "case_id": "m8-u6-parser-01-single-route-date",
+      "capability": "parser",
+      "dataset_class": "regression",
+      "severity": "P0",
+      "model_id": "deepseek-v4-pro",
+      "passed": true,
+      "failure_code": null,
+      "latency_ms": 3384,
+      "token_count_observed": true,
+      "fallback_used": false
+    },
+    {
+      "case_id": "m8-u6-parser-02-multi-constraint-budget",
+      "capability": "parser",
+      "dataset_class": "regression",
+      "severity": "P0",
+      "model_id": "deepseek-v4-pro",
+      "passed": false,
+      "failure_code": "EXPECTED_SUCCESS_GOT_FAILURE",
+      "latency_ms": 3834,
+      "token_count_observed": true,
+      "fallback_used": false
+    },
+    {
+      "case_id": "m8-u6-patch-01-replace-origin",
+      "capability": "patch",
+      "dataset_class": "regression",
+      "severity": "P0",
+      "model_id": "deepseek-v4-pro",
+      "passed": true,
+      "failure_code": null,
+      "latency_ms": 2756,
+      "token_count_observed": true,
+      "fallback_used": false
+    },
+    {
+      "case_id": "m8-u6-patch-02-add-max-price",
+      "capability": "patch",
+      "dataset_class": "regression",
+      "severity": "P0",
+      "model_id": "deepseek-v4-pro",
+      "passed": false,
+      "failure_code": "EXPECTED_SUCCESS_GOT_FAILURE",
+      "latency_ms": 1789,
+      "token_count_observed": true,
+      "fallback_used": false
+    },
+    {
+      "case_id": "m8-u6-explanation-01-clear-winner",
+      "capability": "explanation",
+      "dataset_class": "regression",
+      "severity": "P0",
+      "model_id": "deepseek-v4-pro",
+      "passed": true,
+      "failure_code": null,
+      "latency_ms": 2102,
+      "token_count_observed": true,
+      "fallback_used": true
+    },
+    {
+      "case_id": "m8-u6-explanation-02-unknown",
+      "capability": "explanation",
+      "dataset_class": "regression",
+      "severity": "P0",
+      "model_id": "deepseek-v4-pro",
+      "passed": true,
+      "failure_code": null,
+      "latency_ms": 2642,
+      "token_count_observed": true,
+      "fallback_used": true
+    },
+    {
+      "case_id": "m8-u6-explanation-03-trade-off",
+      "capability": "explanation",
+      "dataset_class": "regression",
+      "severity": "P0",
+      "model_id": "deepseek-v4-pro",
+      "passed": true,
+      "failure_code": null,
+      "latency_ms": 2484,
+      "token_count_observed": true,
+      "fallback_used": true
+    },
+    {
+      "case_id": "m8-u6-explanation-05-constraint-evidence",
+      "capability": "explanation",
+      "dataset_class": "regression",
+      "severity": "P1",
+      "model_id": "deepseek-v4-pro",
+      "passed": true,
+      "failure_code": null,
+      "latency_ms": 1841,
+      "token_count_observed": true,
+      "fallback_used": true
+    },
+    {
+      "case_id": "m8-u6-explanation-06-injection-evidence",
+      "capability": "explanation",
+      "dataset_class": "challenge",
+      "severity": "P0",
+      "model_id": "deepseek-v4-pro",
+      "passed": true,
+      "failure_code": null,
+      "latency_ms": 2667,
+      "token_count_observed": true,
+      "fallback_used": true
+    },
+    {
+      "case_id": "m8-u6-explanation-07-comparison-direction",
+      "capability": "explanation",
+      "dataset_class": "challenge",
+      "severity": "P0",
+      "model_id": "deepseek-v4-pro",
+      "passed": true,
+      "failure_code": null,
+      "latency_ms": 3377,
+      "token_count_observed": true,
+      "fallback_used": true
+    }
+  ],
+  "summaries": [
+    {
+      "model_id": "deepseek-v4-flash",
+      "capability": "parser",
+      "cases_run": 1,
+      "passed": 0,
+      "p0_failures": [
+        "m8-u6-parser-01-single-route-date"
+      ],
+      "accepted_baseline": false,
+      "latency_p50_ms": 1697,
+      "latency_p95_ms": 1697,
+      "token_count_observed": true
+    },
+    {
+      "model_id": "deepseek-v4-flash",
+      "capability": "patch",
+      "cases_run": 1,
+      "passed": 0,
+      "p0_failures": [
+        "m8-u6-patch-01-replace-origin"
+      ],
+      "accepted_baseline": false,
+      "latency_p50_ms": 1671,
+      "latency_p95_ms": 1671,
+      "token_count_observed": true
+    },
+    {
+      "model_id": "deepseek-v4-flash",
+      "capability": "explanation",
+      "cases_run": 6,
+      "passed": 6,
+      "p0_failures": [],
+      "accepted_baseline": true,
+      "latency_p50_ms": 2195,
+      "latency_p95_ms": 2868,
+      "token_count_observed": true
+    },
+    {
+      "model_id": "deepseek-v4-pro",
+      "capability": "parser",
+      "cases_run": 2,
+      "passed": 1,
+      "p0_failures": [
+        "m8-u6-parser-02-multi-constraint-budget"
+      ],
+      "accepted_baseline": false,
+      "latency_p50_ms": 3384,
+      "latency_p95_ms": 3834,
+      "token_count_observed": true
+    },
+    {
+      "model_id": "deepseek-v4-pro",
+      "capability": "patch",
+      "cases_run": 2,
+      "passed": 1,
+      "p0_failures": [
+        "m8-u6-patch-02-add-max-price"
+      ],
+      "accepted_baseline": false,
+      "latency_p50_ms": 1789,
+      "latency_p95_ms": 2756,
+      "token_count_observed": true
+    },
+    {
+      "model_id": "deepseek-v4-pro",
+      "capability": "explanation",
+      "cases_run": 6,
+      "passed": 6,
+      "p0_failures": [],
+      "accepted_baseline": true,
+      "latency_p50_ms": 2484,
+      "latency_p95_ms": 3377,
+      "token_count_observed": true
+    }
+  ],
+  "accepted_baselines": [
+    {
+      "model_id": "deepseek-v4-flash",
+      "capability": "explanation",
+      "cases_run": 6,
+      "passed": 6,
+      "p0_failures": [],
+      "accepted_baseline": true,
+      "latency_p50_ms": 2195,
+      "latency_p95_ms": 2868,
+      "token_count_observed": true
+    },
+    {
+      "model_id": "deepseek-v4-pro",
+      "capability": "explanation",
+      "cases_run": 6,
+      "passed": 6,
+      "p0_failures": [],
+      "accepted_baseline": true,
+      "latency_p50_ms": 2484,
+      "latency_p95_ms": 3377,
+      "token_count_observed": true
+    }
+  ],
+  "no_acceptable_baseline": {
+    "parser": true,
+    "patch": true,
+    "explanation": false
+  },
+  "full_prompt_recorded": false,
+  "full_completion_recorded": false,
+  "secret_recorded": false
+}

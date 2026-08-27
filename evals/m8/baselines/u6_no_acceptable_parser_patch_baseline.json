@@ -1,0 +1,45 @@
+{
+  "lifecycle": "NO_ACCEPTABLE_BASELINE",
+  "provider": "deepseek",
+  "capabilities": {
+    "parser": {
+      "accepted_baseline": false,
+      "reason": "Both text candidates had P0 failures during U6 screening/full evaluation.",
+      "p0_failure_evidence": [
+        {
+          "model_id": "deepseek-v4-flash",
+          "case_id": "m8-u6-parser-01-single-route-date",
+          "failure_code": "EXPECTED_SUCCESS_GOT_AMBIGUOUS"
+        },
+        {
+          "model_id": "deepseek-v4-pro",
+          "case_id": "m8-u6-parser-01-single-route-date",
+          "failure_code": "EXPECTED_SUCCESS_GOT_FAILURE"
+        }
+      ]
+    },
+    "patch": {
+      "accepted_baseline": false,
+      "reason": "Both text candidates had P0 failures during U6 screening/full evaluation.",
+      "p0_failure_evidence": [
+        {
+          "model_id": "deepseek-v4-flash",
+          "case_id": "m8-u6-patch-02-add-max-price",
+          "failure_code": "EXPECTED_SUCCESS_GOT_FAILURE"
+        },
+        {
+          "model_id": "deepseek-v4-pro",
+          "case_id": "m8-u6-patch-02-add-max-price",
+          "failure_code": "EXPECTED_SUCCESS_GOT_FAILURE"
+        }
+      ]
+    }
+  },
+  "eval_evidence_reference": "evals/m8/reports/u6_deepseek_full_report.json",
+  "p0_authority": "machine-deterministic",
+  "llm_as_judge_used_for_p0": false,
+  "full_prompt_recorded": false,
+  "full_completion_recorded": false,
+  "secret_recorded": false,
+  "recorded_at": "2026-08-27T21:45:55.643264+00:00"
+}

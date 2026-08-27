@@ -7,6 +7,43 @@ $ErrorActionPreference = "Stop"
 $RepoRoot = Resolve-Path (Join-Path $PSScriptRoot "..\..")
 $Failure = $null
 
+function Test-LoopbackPortAvailable {
+    param(
+        [Parameter(Mandatory = $true)]
+        [int] $Port
+    )
+
+    $listener = $null
+    try {
+        $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Parse("127.0.0.1"), $Port)
+        $listener.Start()
+        return $true
+    }
+    catch {
+        return $false
+    }
+    finally {
+        if ($null -ne $listener) {
+            $listener.Stop()
+        }
+    }
+}
+
+function Select-PostgresHostPort {
+    if (-not [string]::IsNullOrWhiteSpace($env:POSTGRES_PORT)) {
+        return [int] $env:POSTGRES_PORT
+    }
+    if (Test-LoopbackPortAvailable -Port 55432) {
+        return 55432
+    }
+    foreach ($Port in 55433..55532) {
+        if (Test-LoopbackPortAvailable -Port $Port) {
+            return $Port
+        }
+    }
+    throw "No available loopback port found for postgres CI"
+}
+
 function Invoke-Step {
     param(
         [Parameter(Mandatory = $true)]
@@ -36,6 +73,8 @@ function Get-PostgresContainerId {
 Push-Location $RepoRoot
 try {
     try {
+        $env:POSTGRES_PORT = [string] (Select-PostgresHostPort)
+        Write-Host "==> postgres host port $env:POSTGRES_PORT"
         Invoke-Step "postgres compose config" { docker compose config }
         Invoke-Step "postgres startup" { docker compose up -d postgres }
 

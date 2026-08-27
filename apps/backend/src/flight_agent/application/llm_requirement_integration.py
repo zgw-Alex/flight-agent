@@ -454,7 +454,7 @@ def _last_metadata(
 
 def _hard_constraint(item: object, default_id: str) -> HardConstraint:
     data = _unwrap_named_item(_dict(item, "constraint"))
-    scope = ConstraintScope(_enum_token(_string(data, "scope", required=False) or _string(data, "type"), _SCOPE_ALIASES))
+    scope = ConstraintScope(_constraint_scope_token(data, default_id))
     operator = ConstraintOperator(
         _enum_token(_string(data, "operator", required=False) or _default_operator(scope), _OPERATOR_ALIASES)
     )
@@ -536,7 +536,11 @@ def _scalar_constraint_value(scope: ConstraintScope, value: object):
     if scope is ConstraintScope.PASSENGER_COUNT:
         return PassengerCount(int(_raw_value(value)))
     if scope is ConstraintScope.MAX_PRICE:
+        if isinstance(value, str | int) and not isinstance(value, bool):
+            return Money(Decimal(str(value)), "CNY")
         data = _dict(value, "money")
+        if isinstance(data.get("value"), dict):
+            data = _dict(data["value"], "money")
         try:
             amount = Decimal(str(data["amount"]))
         except (KeyError, InvalidOperation) as exc:
@@ -575,6 +579,8 @@ def _item_with_inferred_scope(
     ):
         return item
     inferred = _scope_from_target_id(action, target_id)
+    if inferred is None and _is_constraint_action(action):
+        inferred = _scope_from_constraint_payload(data, str(target_id.value) if target_id else "")
     return {**data, "scope": inferred} if inferred is not None else item
 
 
@@ -598,6 +604,58 @@ def _scope_from_target_id(
         return PreferenceScope.PRICE.value
     elif "time" in value:
         return PreferenceScope.DEPARTURE_TIME.value
+    return None
+
+
+def _constraint_scope_token(data: dict[str, Any], default_id: str) -> str:
+    for key in ("scope", "constraint_scope", "field"):
+        value = _optional_string(data, key)
+        if value is not None:
+            return _enum_token(value, _SCOPE_ALIASES)
+    raw_type = _optional_string(data, "type")
+    if raw_type is not None:
+        token = _enum_token(raw_type, _ITEM_KIND_ALIASES)
+        if token not in _GENERIC_ITEM_KINDS:
+            return _enum_token(raw_type, _SCOPE_ALIASES)
+    inferred = _scope_from_constraint_payload(data, default_id)
+    if inferred is not None:
+        return inferred
+    raise ValueError("HardConstraint requires a scope")
+
+
+def _scope_from_constraint_payload(data: dict[str, Any], identifier_hint: str) -> str | None:
+    hint = " ".join(
+        str(value)
+        for value in (
+            data.get("constraint_id"),
+            data.get("name"),
+            data.get("field"),
+            identifier_hint,
+        )
+        if value is not None
+    ).lower()
+    if "price" in hint or "budget" in hint:
+        return ConstraintScope.MAX_PRICE.value
+    if "origin" in hint:
+        return ConstraintScope.ORIGIN_AIRPORT.value
+    if "destination" in hint:
+        return ConstraintScope.DESTINATION_AIRPORT.value
+    if "date" in hint:
+        return ConstraintScope.DEPARTURE_DATE.value
+    if "time" in hint:
+        return ConstraintScope.DEPARTURE_TIME.value
+    value = data.get("value")
+    if isinstance(value, dict):
+        nested = value.get("value")
+        money = nested if isinstance(nested, dict) else value
+        if "amount" in money and "currency" in money:
+            return ConstraintScope.MAX_PRICE.value
+    if isinstance(value, str) and ("cny" in value.lower() or "元" in value):
+        return ConstraintScope.MAX_PRICE.value
+    if isinstance(value, int | float) and not isinstance(value, bool):
+        operator = _optional_string(data, "operator")
+        if operator is not None and _enum_token(operator, _OPERATOR_ALIASES) == "AT_OR_BEFORE":
+            return ConstraintScope.MAX_PRICE.value
     return None
 
 
@@ -652,8 +710,10 @@ _ACTION_ALIASES = {
     "REMOVE": "REMOVE_CONSTRAINT",
 }
 _ITEM_KIND_ALIASES = {
+    "CONSTRAINT": "HARD_CONSTRAINT",
     "HARD_CONSTRAINT": "HARD_CONSTRAINT",
     "HARDCONSTRAINT": "HARD_CONSTRAINT",
+    "PREFERENCE": "SOFT_PREFERENCE",
     "SOFT_PREFERENCE": "SOFT_PREFERENCE",
     "SOFTPREFERENCE": "SOFT_PREFERENCE",
 }
@@ -726,6 +786,8 @@ def _string(payload: dict[str, Any], key: str, required: bool = True) -> str:
     value = payload.get(key)
     if value is None and not required:
         return ""
+    if isinstance(value, str) and value.strip() == "" and not required:
+        return ""
     if not isinstance(value, str) or value.strip() == "":
         raise ValueError(f"{key} must be a non-empty string")
     return value
@@ -752,6 +814,11 @@ def _optional_int(payload: dict[str, Any], key: str) -> int | None:
 def _raw_value(value: object) -> str:
     if isinstance(value, dict) and "value" in value:
         value = value["value"]
+    if isinstance(value, dict):
+        for key in ("code", "airport", "airport_code", "iata"):
+            candidate = value.get(key)
+            if isinstance(candidate, str):
+                return candidate
     if isinstance(value, str):
         return value
     if isinstance(value, int) and not isinstance(value, bool):

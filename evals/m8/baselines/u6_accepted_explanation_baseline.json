@@ -1,0 +1,34 @@
+{
+  "lifecycle": "ACCEPTED_BASELINE",
+  "capability": "explanation",
+  "provider": "deepseek",
+  "actual_model_identity": "deepseek-v4-flash",
+  "candidate_status": "CANDIDATE_TO_ACCEPTED_BASELINE",
+  "thinking_mode": "disabled",
+  "invocation_config": {
+    "json_output": true,
+    "max_tokens": 2048,
+    "max_attempts": 2,
+    "timeout_seconds": 15.0,
+    "total_deadline_seconds": 30.0
+  },
+  "prompt_template_version": "explanation-generation-v1",
+  "output_schema_version": "m8-u1",
+  "adapter_version": "deepseek-http-u3 + deepseek-explanation-u5",
+  "eval_evidence_reference": "evals/m8/reports/u6_deepseek_full_report.json",
+  "full_eval": {
+    "cases_run_including_p0_repeats": 63,
+    "passed": 63,
+    "p0_failures": [],
+    "p0_stability_repeats": 3,
+    "latency_p50_ms": 1824,
+    "latency_p95_ms": 2238,
+    "token_count_observed": true
+  },
+  "p0_authority": "machine-deterministic",
+  "llm_as_judge_used_for_p0": false,
+  "full_prompt_recorded": false,
+  "full_completion_recorded": false,
+  "secret_recorded": false,
+  "accepted_at": "2026-08-27T21:45:55.643264+00:00"
+}

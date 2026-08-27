@@ -199,6 +199,91 @@ def test_json_mapping_covers_hard_soft_and_patch_lineage() -> None:
     assert patch.based_on_requirement_version == RequirementVersion(1)
 
 
+def test_json_mapping_accepts_real_provider_constraint_wrappers_without_contract_change() -> None:
+    initial = initial_requirement_proposal_from_json(
+        {
+            "constraints": [
+                {
+                    "constraint_id": "constraint-max-price",
+                    "type": "HARD_CONSTRAINT",
+                    "field": "price",
+                    "operator": "AT_OR_BEFORE",
+                    "value": {"value": {"amount": "1200", "currency": "CNY"}},
+                }
+            ],
+            "preferences": [],
+            "unresolved_semantics": [],
+            "source_input": "synthetic",
+            "evidence": [],
+            "ambiguity_reasons": [],
+            "insufficient_context": [],
+        }
+    )
+    patch_request = PatchUnderstandingRequest(
+        user_message="增加最高 900 元",
+        requirement_id=RequirementId("requirement-1"),
+        based_on_requirement_version=RequirementVersion(1),
+        current_requirement_projection="preference-price PRICE=HIGH",
+    )
+    patch = patch_requirement_proposal_from_json(
+        {
+            "operations": [
+                {
+                    "action": "ADD_CONSTRAINT",
+                    "item": {
+                        "constraint_id": "constraint-max-price",
+                        "type": "HARD_CONSTRAINT",
+                        "operator": "AT_OR_BEFORE",
+                        "value": {"amount": "900", "currency": "CNY"},
+                    },
+                }
+            ],
+            "unresolved_semantics": [],
+            "source_input": "synthetic patch",
+            "based_on_requirement_id": "requirement-1",
+            "based_on_requirement_version": 1,
+            "evidence": [],
+            "ambiguity_reasons": [],
+            "insufficient_context": [],
+        },
+        patch_request,
+    )
+    airport_patch = patch_requirement_proposal_from_json(
+        {
+            "operations": [
+                {
+                    "action": "REPLACE_CONSTRAINT",
+                    "target_id": "constraint-origin",
+                    "item": {
+                        "constraint_id": "",
+                        "type": "CONSTRAINT",
+                        "operator": "EQUALS",
+                        "value": {"airport_code": "CAN"},
+                    },
+                }
+            ],
+            "unresolved_semantics": [],
+            "source_input": "synthetic patch",
+            "based_on_requirement_id": "requirement-1",
+            "based_on_requirement_version": 1,
+            "evidence": [],
+            "ambiguity_reasons": [],
+            "insufficient_context": [],
+        },
+        patch_request,
+    )
+
+    assert initial.constraints[0].scope is ConstraintScope.MAX_PRICE
+    assert initial.constraints[0].value == Money(Decimal(1200), "CNY")
+    assert patch.operations[0].item is not None
+    assert patch.operations[0].item.scope is ConstraintScope.MAX_PRICE
+    assert patch.operations[0].item.value == Money(Decimal(900), "CNY")
+    assert airport_patch.operations[0].item is not None
+    assert airport_patch.operations[0].item.scope is ConstraintScope.ORIGIN_AIRPORT
+    assert isinstance(airport_patch.operations[0].item, HardConstraint)
+    assert airport_value(airport_patch.operations[0].item) == "CAN"
+
+
 def test_real_patch_bridge_preserves_untouched_fields_commits_then_triggers_m7_seam() -> None:
     repository, v1 = committed_ready_requirement()
     downstream_calls: list[RequirementState] = []
