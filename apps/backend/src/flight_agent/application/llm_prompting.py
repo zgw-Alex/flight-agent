@@ -159,10 +159,15 @@ def build_explanation_prompt_context(
 
 def output_schema_guidance(capability: LLMCapabilityName) -> str:
     if capability is LLMCapabilityName.INITIAL_REQUIREMENT_INTERPRETATION:
-        return _schema_guidance_for(
-            "InitialRequirementProposal",
-            InitialRequirementProposal,
-            ("SUCCESS", "AMBIGUOUS", "INSUFFICIENT_CONTEXT", "FAILURE"),
+        return "\n".join(
+            (
+                _schema_guidance_for(
+                    "InitialRequirementProposal",
+                    InitialRequirementProposal,
+                    ("SUCCESS", "AMBIGUOUS", "INSUFFICIENT_CONTEXT", "FAILURE"),
+                ),
+                _proposal_json_guidance(),
+            )
         )
     if capability is LLMCapabilityName.PATCH_UNDERSTANDING:
         actions = ", ".join(action.value for action in PatchProposalAction)
@@ -171,7 +176,7 @@ def output_schema_guidance(capability: LLMCapabilityName) -> str:
             PatchRequirementProposal,
             ("SUCCESS", "AMBIGUOUS", "INSUFFICIENT_CONTEXT", "FAILURE"),
         )
-        return f"{guidance}\nPatchProposalAction enum values: {actions}"
+        return f"{guidance}\nPatchProposalAction enum values: {actions}\n{_patch_json_guidance()}"
     return _schema_guidance_for(
         "ExplanationDraft",
         ExplanationDraft,
@@ -236,4 +241,27 @@ def _schema_guidance_for(
         f"Output contract: CapabilityResult[{output_type_name}]\n"
         f"CapabilityResult status values: {statuses}\n"
         f"{output_type_name} dataclass fields: {field_names}"
+    )
+
+
+def _proposal_json_guidance() -> str:
+    return (
+        "Return JSON with keys constraints, preferences, unresolved_semantics, source_input, "
+        "evidence, ambiguity_reasons, insufficient_context. "
+        "HardConstraint item shape: {constraint_id, scope, operator, value}. "
+        "Allowed constraint scopes: ORIGIN_AIRPORT, DESTINATION_AIRPORT, DEPARTURE_DATE, "
+        "DEPARTURE_TIME, CABIN_CLASS, PASSENGER_COUNT, MAX_PRICE. "
+        "Use AirportCode value strings like PEK/PVG/SHA, LocalDate YYYY-MM-DD, LocalTime HH:MM:SS, "
+        "Money {amount, currency}. SoftPreference item shape: {preference_id, scope, "
+        "importance, value}. Use empty arrays for unknown list fields."
+    )
+
+
+def _patch_json_guidance() -> str:
+    return (
+        "Return JSON with keys operations, unresolved_semantics, source_input, "
+        "based_on_requirement_id, based_on_requirement_version, evidence, ambiguity_reasons, "
+        "insufficient_context. Patch operation shape: {action, target_id, item}. "
+        "For REPLACE/REMOVE use a target_id from trusted context. For ADD omit target_id. "
+        "Item uses the same HardConstraint or SoftPreference JSON shape."
     )

@@ -37,6 +37,9 @@ class Settings(BaseSettings):
         default=30.0, alias="DEEPSEEK_TOTAL_DEADLINE_SECONDS", gt=0
     )
     deepseek_max_attempts: int = Field(default=2, alias="DEEPSEEK_MAX_ATTEMPTS", ge=1)
+    llm_requirement_interpreter_provider: str = Field(
+        default="fake", alias="LLM_REQUIREMENT_INTERPRETER_PROVIDER"
+    )
 
     @field_validator(
         "app_env",
@@ -47,6 +50,7 @@ class Settings(BaseSettings):
         "postgres_password",
         "deepseek_base_url",
         "deepseek_default_model",
+        "llm_requirement_interpreter_provider",
     )
     @classmethod
     def reject_blank_strings(cls, value: str) -> str:
@@ -69,3 +73,7 @@ class Settings(BaseSettings):
     @property
     def deepseek_configured(self) -> bool:
         return self.deepseek_api_key is not None and self.deepseek_api_key.strip() != ""
+
+    @property
+    def real_requirement_interpreter_enabled(self) -> bool:
+        return self.llm_requirement_interpreter_provider.strip().lower() == "deepseek"

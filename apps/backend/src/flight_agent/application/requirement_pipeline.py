@@ -275,6 +275,7 @@ def _interpretation_context(current: RequirementState) -> RequirementInterpretat
         current_version=current.version,
         constraint_ids=tuple(constraint.constraint_id for constraint in current.constraints),
         preference_ids=tuple(preference.preference_id for preference in current.preferences),
+        current_requirement_projection=_requirement_projection(current),
     )
 
 
@@ -294,3 +295,37 @@ def _normalized_patch_proposal(
         else:
             operations.append(operation)
     return replace(proposal, operations=tuple(operations))
+
+
+def _requirement_projection(current: RequirementState) -> str:
+    constraints = "; ".join(
+        f"{constraint.constraint_id.value}:{constraint.scope.value}:{constraint.operator.value}:"
+        f"{_projection_value(constraint.value)}"
+        for constraint in current.constraints
+    )
+    preferences = "; ".join(
+        f"{preference.preference_id.value}:{preference.scope.value}:"
+        f"{preference.importance.value}:{_projection_value(preference.value)}"
+        for preference in current.preferences
+    )
+    return (
+        f"requirement_id={current.requirement_id.value}; version={current.version.value}; "
+        f"constraints=[{constraints or 'NONE'}]; preferences=[{preferences or 'NONE'}]"
+    )
+
+
+def _projection_value(value: object) -> object:
+    if value is None:
+        return "NONE"
+    scalar = getattr(value, "value", None)
+    if scalar is not None:
+        return scalar
+    start = getattr(value, "start", None)
+    end = getattr(value, "end", None)
+    if start is not None and end is not None:
+        return f"{_projection_value(start)}..{_projection_value(end)}"
+    amount = getattr(value, "amount", None)
+    currency = getattr(value, "currency", None)
+    if amount is not None and currency is not None:
+        return f"{amount} {currency}"
+    return value

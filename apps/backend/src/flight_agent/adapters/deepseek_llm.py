@@ -204,6 +204,8 @@ def deepseek_chat_completion_body(request: LLMInvocationRequest) -> dict[str, An
                 "content": (
                     "Return one JSON object only for the provider-neutral capability result. "
                     "It must include every dataclass field named in the output schema guidance. "
+                    "The top-level JSON object must be the capability payload itself; do not wrap "
+                    "it inside status, data, result, output, proposal, or markdown fences. "
                     "Use empty arrays for unknown list fields and preserve the source user_message "
                     "when a source field is required."
                 ),
@@ -235,7 +237,7 @@ def invocation_config_from_settings(
         max_attempts=max_attempts,
         json_output=True,
         thinking_enabled=False,
-        max_tokens=512,
+        max_tokens=2048,
     )
 
 

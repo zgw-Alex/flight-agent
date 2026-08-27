@@ -170,6 +170,21 @@ def test_invocation_runtime_accepts_provider_result_proposal_wrapper() -> None:
     assert result.parsed_json == schema_valid_payload()
 
 
+def test_invocation_runtime_accepts_provider_data_wrapper() -> None:
+    wrapped_output = json.dumps(
+        {
+            "status": "SUCCESS",
+            "data": schema_valid_payload(),
+        }
+    )
+    runtime = LLMInvocationRuntime(FakeTransport((invocation_success(wrapped_output),)))
+
+    result = runtime.invoke(invocation_request())
+
+    assert result.status is LLMInvocationStatus.SUCCESS
+    assert result.parsed_json == schema_valid_payload()
+
+
 def test_malformed_empty_and_schema_invalid_outputs_are_failure_paths() -> None:
     empty_result = parse_json_output("")
     malformed_result = parse_json_output("{not-json")
@@ -482,5 +497,5 @@ def test_invocation_config_from_settings_preserves_typed_boundaries() -> None:
         max_attempts=2,
         json_output=True,
         thinking_enabled=False,
-        max_tokens=512,
+        max_tokens=2048,
     )

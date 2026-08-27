@@ -140,13 +140,13 @@ def structured_output_payload(
 
 def _structured_output_candidates(parsed_json: dict[str, Any]) -> tuple[dict[str, Any], ...]:
     candidates: list[dict[str, Any]] = []
-    for key in ("output", "proposal"):
+    for key in ("output", "proposal", "data", "requirement_proposal"):
         value = parsed_json.get(key)
         if isinstance(value, dict):
             candidates.append(value)
     result = parsed_json.get("result")
     if isinstance(result, dict):
-        for key in ("output", "proposal"):
+        for key in ("output", "proposal", "data", "requirement_proposal"):
             value = result.get(key)
             if isinstance(value, dict):
                 candidates.append(value)

@@ -60,6 +60,7 @@ class RequirementInterpretationContext:
     current_version: RequirementVersion
     constraint_ids: tuple[ConstraintId, ...] = ()
     preference_ids: tuple[PreferenceId, ...] = ()
+    current_requirement_projection: str = ""
 
 
 @dataclass(frozen=True)
