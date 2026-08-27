@@ -53,8 +53,13 @@ Scope。历史 Reference 仅用于追溯，不得覆盖正式收口结论。
     -   `03_implementation-roadmap/milestones/M7/机票筛选Agent_第三阶段_M7_Patch_Impact_Orchestrator_Specification_V1.0.docx`
         -   第三阶段 M7 Patch + Impact + Orchestrator 的正式 Contract Authority / Implementation & Acceptance Baseline。
         -   权威范围包括 Requirement Semantic Diff、ImpactDecision、DataAction、selective ExecutionPlan、execution concurrency、Version Guard 与 Publication Guard。
-        -   M7 Specification 已接纳；M7-U1 Requirement Semantic Diff Foundation 进入 READY / eligible to start；当前 Contract Amendment：NONE。
+        -   M7 Specification 保持为 Contract Authority；M7 formal closure 已记录 M7-U1～M7-U6、GS-01～GS-14、Aggregate Exit Gate G1～G12 全部 PASS；Contract Amendment：NONE。
         -   不重新定义 M1～M6 已稳定 Authority；不得为了 M7 实现静默改变 Requirement、Snapshot、Decision、Publication 或 Architecture Contract。
+    -   `03_implementation-roadmap/milestones/M7/机票筛选Agent_第三阶段_M7正式收口_V1.1.docx`
+        -   第三阶段 M7 Patch + Impact + Orchestrator 的正式 Milestone Closure Evidence。
+        -   记录 M7-U1～M7-U6、GS-01～GS-14、Aggregate Exit Gate G1～G12、current-main GitHub Actions CI run 33041817149 已 PASS。
+        -   Contract Amendment：NONE；M7 Milestone Status：CLOSED。
+        -   不替代 M7 Patch + Impact + Orchestrator Specification 的 Contract Authority，也不启动 M8 implementation。
     -   `03_implementation-roadmap/milestones/M6/机票筛选Agent_第三阶段_M6_Complete_Decision_Engine正式收口_V1.0.docx`
         -   第三阶段 M6 Complete Decision Engine 的正式 Milestone Closure Evidence。
         -   记录 M6-U1～M6-U6、M6-CA01-I1、GS-01～GS-08、P0-01～P0-14 与 Aggregate Exit Gate G1～G12 已 PASS。
@@ -274,7 +279,8 @@ Codex 在第三阶段默认遵守：
 -   M4 Mock Provider + Snapshot：CLOSED。
 -   M5 Walking Skeleton：CLOSED。
 -   M6 Complete Decision Engine：CLOSED；M6-U1～M6-U6、M6-CA01-I1、GS-01～GS-08、P0-01～P0-14 与 Aggregate Exit Gate G1～G12 全部 PASS；M6-CA01 已接纳并实现；Additional Contract Amendment NONE。
--   M7：Specification ACCEPTED；M7-U1 Requirement Semantic Diff Foundation READY / eligible to start。
+-   M7 Patch + Impact + Orchestrator：CLOSED；M7-U1～M7-U6、GS-01～GS-14 与 Aggregate Exit Gate G1～G12 全部 PASS；Contract Amendment NONE；current-main GitHub Actions CI run 33041817149 PASS。
+-   M8：READY / eligible。
 
 当前 effective Requirement Contract：
 
@@ -300,13 +306,15 @@ eligible for planning and specification。
 M7 Patch + Impact + Orchestrator 的正式 Contract Authority /
 Implementation & Acceptance Baseline 由
 `03_implementation-roadmap/milestones/M7/机票筛选Agent_第三阶段_M7_Patch_Impact_Orchestrator_Specification_V1.0.docx`
-定义。M7 Specification 已进入 Repository Authority；当前执行入口为
-M7-U1 Requirement Semantic Diff Foundation。
+定义。M7 formal Closure Evidence 由
+`03_implementation-roadmap/milestones/M7/机票筛选Agent_第三阶段_M7正式收口_V1.1.docx`
+记录。M7 已完成 Implementation Units、Golden Scenarios、Aggregate Exit
+Gate 与 current-main remote CI 验证，并已登记为 CLOSED；M8 进入 READY /
+eligible for planning and specification。
 
-M3、M4、M5 的正式 Contract 与 Closure Authority 保持既有权威；M6
-Specification 不替代 M1～M5 已稳定 Contract，不提前授权 M7 Semantic
-Diff、ImpactDecision、SEARCH / REFRESH / ENRICH / REUSE、execution
-lifecycle 或完整 Publication Guard。
+M3、M4、M5、M6 的正式 Contract 与 Closure Authority 保持既有权威；M7
+Specification 不替代 M1～M6 已稳定 Contract，也不提前授权 M8 capabilities
+或 M8 implementation。
 
 当前首先完成：
 
