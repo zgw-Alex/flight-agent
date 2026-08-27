@@ -197,6 +197,33 @@ def test_llm_capability_contract_does_not_own_m6_or_m7_authority() -> None:
     assert "PublicationGuard" not in source
 
 
+def test_llm_prompt_context_module_does_not_own_m6_or_m7_authority() -> None:
+    prompt_context = SOURCE_ROOT / "application" / "llm_prompting.py"
+    imports = set(imported_modules(prompt_context))
+    source = prompt_context.read_text(encoding="utf-8")
+
+    assert "flight_agent.domain.decision" not in imports
+    assert "flight_agent.domain.impact" not in imports
+    assert "flight_agent.application.impact_orchestrator" not in imports
+    assert "RecommendationSelector" not in source
+    assert "ImpactDecision" not in source
+    assert "ExecutionPlan" not in source
+    assert "PublicationGuard" not in source
+
+
+def test_llm_fake_adapter_does_not_load_prompt_assets_or_expand_context() -> None:
+    fake_adapter = SOURCE_ROOT / "adapters" / "llm_fake.py"
+    imports = set(imported_modules(fake_adapter))
+    source = fake_adapter.read_text(encoding="utf-8")
+
+    assert "pathlib" not in imports
+    assert "flight_agent.application.llm_prompting" not in imports
+    assert "read_text" not in source
+    assert "PROMPT_ASSET_ROOT" not in source
+    assert "CandidateSnapshot" not in source
+    assert "ProviderRawResponse" not in source
+
+
 def test_llm_provider_sdk_dependency_negative_control_fails(tmp_path: Path) -> None:
     package_root = make_package_fixture(tmp_path)
     write_module(

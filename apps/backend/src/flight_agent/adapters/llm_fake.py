@@ -16,6 +16,7 @@ from flight_agent.ports import (
     LLMCapabilityName,
     PatchRequirementProposal,
     PatchUnderstandingRequest,
+    RenderedPrompt,
 )
 
 
@@ -41,6 +42,12 @@ class FakeExplanationFixture:
 class FakeInitialRequirementLLM:
     def __init__(self, fixtures: tuple[FakeInitialRequirementFixture, ...]) -> None:
         self._fixtures = {fixture.user_message: fixture for fixture in fixtures}
+        self.last_rendered_prompt: RenderedPrompt | None = None
+
+    def consume_rendered_prompt(self, rendered_prompt: RenderedPrompt) -> None:
+        if rendered_prompt.family.capability is not LLMCapabilityName.INITIAL_REQUIREMENT_INTERPRETATION:
+            raise ValueError("Initial requirement fake received the wrong prompt capability")
+        self.last_rendered_prompt = rendered_prompt
 
     def interpret_initial_requirement(
         self, request: InitialRequirementInterpretationRequest
@@ -63,6 +70,12 @@ class FakePatchUnderstandingLLM:
         self._fixtures = {
             (fixture.user_message, fixture.requirement_projection): fixture for fixture in fixtures
         }
+        self.last_rendered_prompt: RenderedPrompt | None = None
+
+    def consume_rendered_prompt(self, rendered_prompt: RenderedPrompt) -> None:
+        if rendered_prompt.family.capability is not LLMCapabilityName.PATCH_UNDERSTANDING:
+            raise ValueError("Patch fake received the wrong prompt capability")
+        self.last_rendered_prompt = rendered_prompt
 
     def understand_patch(
         self, request: PatchUnderstandingRequest
@@ -83,6 +96,12 @@ class FakePatchUnderstandingLLM:
 class FakeExplanationLLM:
     def __init__(self, fixtures: tuple[FakeExplanationFixture, ...]) -> None:
         self._fixtures = {fixture.recommendation_result_id: fixture for fixture in fixtures}
+        self.last_rendered_prompt: RenderedPrompt | None = None
+
+    def consume_rendered_prompt(self, rendered_prompt: RenderedPrompt) -> None:
+        if rendered_prompt.family.capability is not LLMCapabilityName.EXPLANATION_GENERATION:
+            raise ValueError("Explanation fake received the wrong prompt capability")
+        self.last_rendered_prompt = rendered_prompt
 
     def generate_explanation(
         self, request: ExplanationGenerationRequest

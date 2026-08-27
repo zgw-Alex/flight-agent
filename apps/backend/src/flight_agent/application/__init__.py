@@ -25,6 +25,21 @@ from flight_agent.application.impact_orchestrator import (
     StageExecutionResult,
     StageExecutionStatus,
 )
+from flight_agent.application.llm_prompting import (
+    EXPLANATION_GENERATION_PROMPT_FAMILY,
+    INITIAL_REQUIREMENT_PROMPT_FAMILY,
+    M8_U2_OUTPUT_SCHEMA_VERSION,
+    PATCH_UNDERSTANDING_PROMPT_FAMILY,
+    PROMPT_ASSET_ROOT,
+    RUNTIME_PROMPT_FAMILIES,
+    build_explanation_prompt_context,
+    build_initial_requirement_prompt_context,
+    build_patch_prompt_context,
+    load_runtime_prompt_template,
+    output_schema_guidance,
+    render_prompt,
+    runtime_prompt_family_by_capability,
+)
 from flight_agent.application.minimal_decision import (
     ExecuteMinimalDecision,
     MinimalDecisionResult,
@@ -100,6 +115,12 @@ from flight_agent.application.structured_entry import (
 )
 
 __all__ = [
+    "EXPLANATION_GENERATION_PROMPT_FAMILY",
+    "INITIAL_REQUIREMENT_PROMPT_FAMILY",
+    "M8_U2_OUTPUT_SCHEMA_VERSION",
+    "PATCH_UNDERSTANDING_PROMPT_FAMILY",
+    "PROMPT_ASSET_ROOT",
+    "RUNTIME_PROMPT_FAMILIES",
     "AirportCanonicalization",
     "AssemblerVersion",
     "CandidateSnapshotAssembler",
@@ -165,6 +186,9 @@ __all__ = [
     "VersionGuardDecision",
     "VersionGuardPoint",
     "apply_patch_proposal",
+    "build_explanation_prompt_context",
+    "build_initial_requirement_prompt_context",
+    "build_patch_prompt_context",
     "build_processing_manifest",
     "commit_requirement_transition",
     "construct_patch_set",
@@ -172,10 +196,14 @@ __all__ = [
     "execute_patch_requirement",
     "execute_patch_requirement_from_current",
     "interpret_requirement",
+    "load_runtime_prompt_template",
     "normalize_initial_requirement",
     "normalize_patch_requirement",
     "outcome_from_decision",
+    "output_schema_guidance",
     "plan_search",
+    "render_prompt",
+    "runtime_prompt_family_by_capability",
     "structured_command_to_initial_proposal",
     "validate_requirement",
 ]
