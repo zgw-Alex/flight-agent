@@ -63,11 +63,42 @@ class RequirementInterpretationContext:
 
 
 @dataclass(frozen=True)
+class SourceSpanHint:
+    start: int
+    end: int
+    text: str
+
+    def __post_init__(self) -> None:
+        if self.start < 0 or self.end < self.start:
+            raise ValueError("SourceSpanHint requires a non-negative ordered range")
+        if self.text.strip() == "":
+            raise ValueError("SourceSpanHint text must be non-empty")
+
+
+@dataclass(frozen=True)
+class ProposalEvidence:
+    source_input: str
+    span: SourceSpanHint | None = None
+
+    def __post_init__(self) -> None:
+        if self.source_input.strip() == "":
+            raise ValueError("ProposalEvidence source_input must be non-empty")
+
+
+@dataclass(frozen=True)
 class InitialRequirementProposal:
     constraints: tuple[HardConstraint, ...] = ()
     preferences: tuple[SoftPreference, ...] = ()
     unresolved_semantics: tuple[str, ...] = ()
     source_input: str = ""
+    evidence: tuple[ProposalEvidence, ...] = ()
+    ambiguity_reasons: tuple[str, ...] = ()
+    insufficient_context: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        _reject_blank_entries(self.unresolved_semantics, "unresolved_semantics")
+        _reject_blank_entries(self.ambiguity_reasons, "ambiguity_reasons")
+        _reject_blank_entries(self.insufficient_context, "insufficient_context")
 
 
 class PatchProposalAction(str, Enum):
@@ -93,6 +124,18 @@ class PatchRequirementProposal:
     operations: tuple[PatchProposalOperation, ...] = ()
     unresolved_semantics: tuple[str, ...] = ()
     source_input: str = ""
+    based_on_requirement_id: RequirementId | None = None
+    based_on_requirement_version: RequirementVersion | None = None
+    evidence: tuple[ProposalEvidence, ...] = ()
+    ambiguity_reasons: tuple[str, ...] = ()
+    insufficient_context: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        if (self.based_on_requirement_id is None) != (self.based_on_requirement_version is None):
+            raise ValueError("Patch proposal lineage requires both requirement id and version")
+        _reject_blank_entries(self.unresolved_semantics, "unresolved_semantics")
+        _reject_blank_entries(self.ambiguity_reasons, "ambiguity_reasons")
+        _reject_blank_entries(self.insufficient_context, "insufficient_context")
 
 
 RequirementProposal = InitialRequirementProposal | PatchRequirementProposal
@@ -146,3 +189,8 @@ class RequirementInterpreter(Protocol):
     ) -> InterpreterResult:
         """Return a non-authoritative proposal for downstream deterministic handling."""
         ...
+
+
+def _reject_blank_entries(values: tuple[str, ...], field_name: str) -> None:
+    if any(value.strip() == "" for value in values):
+        raise ValueError(f"{field_name} entries must be non-empty")

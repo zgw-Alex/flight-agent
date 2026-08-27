@@ -28,6 +28,7 @@ RULES = (
         forbidden_external_roots=frozenset(
             {
                 "fastapi",
+                "deepseek",
                 "httpx",
                 "openai",
                 "pydantic",
@@ -47,6 +48,7 @@ RULES = (
         forbidden_external_roots=frozenset(
             {
                 "fastapi",
+                "deepseek",
                 "httpx",
                 "openai",
                 "pydantic",
@@ -64,6 +66,7 @@ RULES = (
         forbidden_external_roots=frozenset(
             {
                 "fastapi",
+                "deepseek",
                 "httpx",
                 "openai",
                 "pydantic",
@@ -160,6 +163,51 @@ def test_application_does_not_depend_on_mock_flight_provider() -> None:
     assert "flight_agent.adapters.flight_providers.mock" not in application_imports
     assert "flight_agent.adapters.flight_providers.mock.provider" not in application_imports
     assert "flight_agent.adapters.flight_providers.mock.mapper" not in application_imports
+
+
+def test_application_does_not_depend_on_llm_adapter_or_provider_specific_sdk() -> None:
+    application_imports = {
+        imported_module
+        for module_path in (SOURCE_ROOT / "application").rglob("*.py")
+        for imported_module in imported_modules(module_path)
+    }
+    application_source = "\n".join(
+        module_path.read_text(encoding="utf-8")
+        for module_path in (SOURCE_ROOT / "application").rglob("*.py")
+    )
+
+    assert "flight_agent.adapters.llm_fake" not in application_imports
+    assert "flight_agent.adapters.llm_deepseek" not in application_imports
+    assert "deepseek" not in application_imports
+    assert "openai" not in application_imports
+    assert "DeepSeek" not in application_source
+
+
+def test_llm_capability_contract_does_not_own_m6_or_m7_authority() -> None:
+    llm_contract = SOURCE_ROOT / "ports" / "llm_capabilities.py"
+    imports = set(imported_modules(llm_contract))
+    source = llm_contract.read_text(encoding="utf-8")
+
+    assert "flight_agent.domain.decision" not in imports
+    assert "flight_agent.domain.impact" not in imports
+    assert "flight_agent.application.impact_orchestrator" not in imports
+    assert "RecommendationSelector" not in source
+    assert "ImpactDecision" not in source
+    assert "ExecutionPlan" not in source
+    assert "PublicationGuard" not in source
+
+
+def test_llm_provider_sdk_dependency_negative_control_fails(tmp_path: Path) -> None:
+    package_root = make_package_fixture(tmp_path)
+    write_module(
+        package_root / "ports" / "llm_capabilities.py",
+        "import deepseek\n",
+    )
+
+    violations = collect_dependency_violations(package_root)
+
+    assert any("ports-boundary" in violation for violation in violations)
+    assert any("deepseek" in violation for violation in violations)
 
 
 def test_m5_structured_api_does_not_import_requirement_state() -> None:
