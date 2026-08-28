@@ -60,6 +60,15 @@ Scope。历史 Reference 仅用于追溯，不得覆盖正式收口结论。
         -   记录 M7-U1～M7-U6、GS-01～GS-14、Aggregate Exit Gate G1～G12、current-main GitHub Actions CI run 33041817149 已 PASS。
         -   Contract Amendment：NONE；M7 Milestone Status：CLOSED。
         -   不替代 M7 Patch + Impact + Orchestrator Specification 的 Contract Authority，也不启动 M8 implementation。
+    -   `03_implementation-roadmap/milestones/M8/机票筛选Agent_第三阶段_M8_Real_LLM_Specification_V1.0.docx`
+        -   第三阶段 M8 Real LLM 的正式 Contract Authority / Implementation & Acceptance Baseline。
+        -   权威范围包括 provider-neutral LLM capability contracts、structured outputs、prompt/context architecture、invocation runtime、DeepSeek candidate evaluation、baseline promotion、security/telemetry boundaries 与 Aggregate Exit Gate G1～G17。
+        -   M8 Specification 保持为 Contract Authority；M8 formal closure 已记录 M8-U1～M8-U7、Hybrid Recovery U6H-A/B/C/D、U6H-CA01、historical Parser/Patch Real LLM P0 failure recovery、U6H-D evidence bundle、Aggregate Exit Gate G1～G17 与 2026-08-29 unified CI 全部 PASS；Additional Contract Amendment：NONE。
+    -   `03_implementation-roadmap/milestones/M8/机票筛选Agent_第三阶段_M8_Real_LLM正式收口_V1.0.docx`
+        -   第三阶段 M8 Real LLM 的正式 Milestone Closure Evidence。
+        -   记录 M8-U1～M8-U7、U6H-A/B/C/D、CA01、原 Parser/Patch Real LLM baseline P0 blocker、Hybrid recovery、U6H-D evidence artifact、Aggregate Exit Gate G1～G17、Real-path P0 3-run、ordinary CI network independence 与 repository integrity 已 PASS。
+        -   Contract Amendment：CA01 ACCEPTED + IMPLEMENTED + PASS；Additional Contract Amendment：NONE；M8 Milestone Status：CLOSED / PASS。
+        -   不替代 M8 Real LLM Specification 的 Contract Authority，也不启动 M9 implementation；M9 仅进入 READY / eligible for planning and specification。
     -   `03_implementation-roadmap/milestones/M8/机票筛选Agent_M8-U6H-CA01_MAX_STOPS_Hard_Constraint_Contract_Amendment_Specification_V1.0.docx`
         -   第三阶段 M8-U6H Recovery 的正式 additive Contract Amendment Authority。
         -   对 M3 Requirement Contract 仅增量补充 `MAX_STOPS`：formal Hard Constraint、non-negative integer value、canonical `AT_OR_BEFORE` / `candidate.stop_count <= max_stops`，其中 `MAX_STOPS=0` 表示 Hard “必须直飞”。
@@ -303,7 +312,8 @@ Codex 在第三阶段默认遵守：
 -   M5 Walking Skeleton：CLOSED。
 -   M6 Complete Decision Engine：CLOSED；M6-U1～M6-U6、M6-CA01-I1、GS-01～GS-08、P0-01～P0-14 与 Aggregate Exit Gate G1～G12 全部 PASS；M6-CA01 已接纳并实现；Additional Contract Amendment NONE。
 -   M7 Patch + Impact + Orchestrator：CLOSED；M7-U1～M7-U6、GS-01～GS-14 与 Aggregate Exit Gate G1～G12 全部 PASS；Contract Amendment NONE；current-main GitHub Actions CI run 33041817149 PASS。
--   M8：READY / eligible；M8-U6H-CA01 ACCEPTED + IMPLEMENTED + PASS；M8-U6H-A CLOSED / PASS，current Specification Authority 为 V1.2；M8-U6H-B CLOSED / PASS，current Specification Authority 为 V1.1；M8-U6H-C CLOSED / PASS，current Specification Authority 为 V1.1；M8-U6H-D CLOSED / PASS，current Specification Authority 为 V1.1，V1.0 historical / superseded，Additional Contract Amendment NONE。
+-   M8 Real LLM：CLOSED / PASS；M8-U1～M8-U7、Aggregate Exit Gate G1～G17、Hybrid Recovery U6H-A/B/C/D、M8-U6H-CA01、historical Parser/Patch Real LLM P0 recovery、U6H-D evidence artifact、Real-path P0 3-run 与 2026-08-29 unified CI 全部 PASS；M8-U6H-CA01 ACCEPTED + IMPLEMENTED + PASS；M8-U6H-A CLOSED / PASS，current Specification Authority 为 V1.2；M8-U6H-B CLOSED / PASS，current Specification Authority 为 V1.1；M8-U6H-C CLOSED / PASS，current Specification Authority 为 V1.1；M8-U6H-D CLOSED / PASS，current Specification Authority 为 V1.1，V1.0 historical / superseded；Additional Contract Amendment NONE。
+-   M9：READY / eligible for planning and specification；M9 implementation NOT STARTED。
 
 当前 effective Requirement Contract：
 
@@ -342,6 +352,17 @@ Implementation & Acceptance Baseline 由
 记录。M7 已完成 Implementation Units、Golden Scenarios、Aggregate Exit
 Gate 与 current-main remote CI 验证，并已登记为 CLOSED；M8 进入 READY /
 eligible for planning and specification。
+
+M8 Real LLM 的正式 Contract Authority / Implementation & Acceptance Baseline
+由
+`03_implementation-roadmap/milestones/M8/机票筛选Agent_第三阶段_M8_Real_LLM_Specification_V1.0.docx`
+定义。M8 formal Closure Evidence 由
+`03_implementation-roadmap/milestones/M8/机票筛选Agent_第三阶段_M8_Real_LLM正式收口_V1.0.docx`
+记录。M8 已完成 M8-U1～M8-U7、Hybrid Recovery U6H-A/B/C/D、M8-U6H-CA01、
+historical Parser/Patch Real LLM P0 recovery、U6H-D evidence bundle、Aggregate
+Exit Gate G1～G17、Real-path P0 3-run 与 2026-08-29 unified CI 验证，并已登记为
+CLOSED / PASS；M9 进入 READY / eligible for planning and specification。M9
+implementation NOT STARTED。
 
 M3、M4、M5、M6 的正式 Contract 与 Closure Authority 保持既有权威；M7
 Specification 不替代 M1～M6 已稳定 Contract，也不提前授权 M8 capabilities
