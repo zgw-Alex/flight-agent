@@ -105,14 +105,52 @@ def test_u6h_b_material_condition_tail_requires_semantic_resolver_without_silent
     )
 
 
+def test_u6h_b_residual_direct_preference_paraphrase_requires_semantic_resolver() -> None:
+    ir, proposal = build_deterministic_initial_proposal("9月10日从北京去上海，不要求直飞，但我更喜欢直飞。")
+
+    assert ir.interpretation_status is ParserInterpretationStatus.SEMANTIC_RESOLVER_REQUIRED
+    assert proposal.constraints == ()
+    assert "SEMANTIC_RESOLVER_REQUIRED" in proposal.ambiguity_reasons
+    assert_unsupported_evidence(ir, "不要求直飞，但我更喜欢直飞")
+
+
+def test_u6h_b_prior_negation_case_remains_explicit() -> None:
+    ir, proposal = build_deterministic_initial_proposal("9月10日从北京去上海，不一定非要直飞。")
+
+    assert ir.interpretation_status is ParserInterpretationStatus.SEMANTIC_RESOLVER_REQUIRED
+    assert proposal.constraints == ()
+    assert "SEMANTIC_RESOLVER_REQUIRED" in proposal.ambiguity_reasons
+    assert_unsupported_evidence(ir, "不一定非要直飞")
+
+
 def test_u6h_b_benign_residue_does_not_over_escalate() -> None:
-    for message in ("9月10日从北京去上海，谢谢。", "麻烦帮我看看9月10日从北京去上海。"):
+    for message in (
+        "9月10日从北京去上海。",
+        "9月10日从北京去上海，谢谢。",
+        "麻烦帮我看看9月10日从北京去上海。",
+        "我想9月10日从北京去上海。",
+        "9月10日从北京去上海吧。",
+    ):
         ir, proposal = build_deterministic_initial_proposal(message)
 
         assert ir.interpretation_status is ParserInterpretationStatus.RESOLVED
         assert proposal.unresolved_semantics == ()
         assert "SEMANTIC_RESOLVER_REQUIRED" not in proposal.ambiguity_reasons
         assert all(item.kind is not ParserEvidenceKind.UNSUPPORTED_TEXT for item in ir.evidence)
+
+
+def test_u6h_b_whitespace_and_overlap_controls_do_not_create_false_residue() -> None:
+    spaced_ir, spaced = build_deterministic_initial_proposal("我想 9月10日 从 北京 去 上海 吧。")
+    assert spaced_ir.interpretation_status is ParserInterpretationStatus.RESOLVED
+    assert spaced.unresolved_semantics == ()
+    assert all(item.kind is not ParserEvidenceKind.UNSUPPORTED_TEXT for item in spaced_ir.evidence)
+
+    overlap_ir, overlap = build_deterministic_initial_proposal("9月10日从北京去上海，预算1200元以内，最多转一次。")
+    assert overlap_ir.interpretation_status is ParserInterpretationStatus.RESOLVED
+    assert overlap.unresolved_semantics == ()
+    assert all(item.kind is not ParserEvidenceKind.UNSUPPORTED_TEXT for item in overlap_ir.evidence)
+    assert_constraint(overlap.constraints, ConstraintScope.MAX_PRICE, Money(Decimal(1200), "CNY"), ConstraintOperator.AT_OR_BEFORE)
+    assert_constraint(overlap.constraints, ConstraintScope.MAX_STOPS, StopCount(1), ConstraintOperator.AT_OR_BEFORE)
 
 
 def test_u6h_b_existing_destination_binding_gap_stays_clarification_not_resolver() -> None:
@@ -123,6 +161,16 @@ def test_u6h_b_existing_destination_binding_gap_stays_clarification_not_resolver
     assert_slot(ir, ParserSemanticTarget.DESTINATION, ParserBindingState.MISSING)
     assert proposal.constraints == ()
     assert "DESTINATION is missing" in proposal.unresolved_semantics
+    assert "SEMANTIC_RESOLVER_REQUIRED" not in proposal.ambiguity_reasons
+
+
+def test_u6h_b_missing_required_slot_with_residual_text_stays_clarification() -> None:
+    ir, proposal = build_deterministic_initial_proposal("9月10日去上海，不要求直飞，但我更喜欢直飞。")
+
+    assert ir.interpretation_status is ParserInterpretationStatus.CLARIFICATION_REQUIRED
+    assert_slot(ir, ParserSemanticTarget.ORIGIN, ParserBindingState.MISSING)
+    assert proposal.constraints == ()
+    assert "ORIGIN is missing" in proposal.unresolved_semantics
     assert "SEMANTIC_RESOLVER_REQUIRED" not in proposal.ambiguity_reasons
 
 
@@ -230,6 +278,13 @@ def test_u6h_b_g_llm_0_parser_hybrid_has_no_llm_or_network_dependency() -> None:
 def assert_slot(ir, target: ParserSemanticTarget, state: ParserBindingState) -> None:
     slot = next(item for item in ir.required_slots if item.target is target)
     assert slot.state is state
+
+
+def assert_unsupported_evidence(ir, source_text: str) -> None:
+    assert any(
+        item.kind is ParserEvidenceKind.UNSUPPORTED_TEXT and item.source_text == source_text
+        for item in ir.evidence
+    )
 
 
 def assert_constraint(

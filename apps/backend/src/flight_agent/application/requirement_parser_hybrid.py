@@ -160,42 +160,32 @@ class ParserEvidenceExtractor:
             )
 
         for token, code in _LOCATION_ALIASES.items():
-            start = message.find(token)
-            if start >= 0:
+            for start in _token_starts(message, token):
                 add(ParserEvidenceKind.LOCATION_TEXT, token, start, code)
         for match in re.finditer(r"(?:下周[一二三四五六日天])|(?:\d{1,2}月\d{1,2}日)", message):
             add(ParserEvidenceKind.DATE_TEXT, match.group(0), match.start(), match.group(0))
         for match in re.finditer(r"\d+(?:\.\d+)?", message):
             add(ParserEvidenceKind.VALUE_TEXT, match.group(0), match.start(), match.group(0))
         for token in ("从", "去", "到", "出发", "再从"):
-            start = message.find(token)
-            if start >= 0:
+            for start in _token_starts(message, token):
                 add(ParserEvidenceKind.RELATION_TEXT, token, start, token)
         for token in ("预算", "以内", "必须直飞", "最多转一次"):
-            start = message.find(token)
-            if start >= 0:
+            for start in _token_starts(message, token):
                 add(ParserEvidenceKind.CONSTRAINT_TEXT, token, start, token)
         for token in ("最好直飞", "其他没要求"):
-            start = message.find(token)
-            if start >= 0:
+            for start in _token_starts(message, token):
                 add(ParserEvidenceKind.PREFERENCE_TEXT, token, start, token)
         for token in ("不对", "不，是", "不是"):
-            start = message.find(token)
-            if start >= 0:
+            for start in _token_starts(message, token):
                 add(ParserEvidenceKind.CORRECTION_TEXT, token, start, token)
         for token in ("或者", "或", "都可以"):
-            start = message.find(token)
-            if start >= 0:
+            for start in _token_starts(message, token):
                 add(ParserEvidenceKind.ALTERNATIVE_TEXT, token, start, token)
-        unsupported_spans: set[tuple[int, int]] = set()
         for token in ("越便宜越好但别太早", "再从"):
-            start = message.find(token)
-            if start >= 0:
+            for start in _token_starts(message, token):
                 add(ParserEvidenceKind.UNSUPPORTED_TEXT, token, start, token)
-                unsupported_spans.add((start, start + len(token)))
-        for start, source_text in _material_semantic_residue_spans(message):
-            if (start, start + len(source_text)) not in unsupported_spans:
-                add(ParserEvidenceKind.UNSUPPORTED_TEXT, source_text, start, source_text)
+        for start, source_text in _material_semantic_residue_spans(message, tuple(evidence)):
+            add(ParserEvidenceKind.UNSUPPORTED_TEXT, source_text, start, source_text)
         return tuple(evidence)
 
 
@@ -569,11 +559,18 @@ def _after_last_correction(message: str) -> str:
 
 
 def _clean_location(value: str) -> str:
-    return value.replace("出发", "").strip("，,。… ")
+    token = value.replace("出发", "").strip("，,。… ")
+    for particle in _BENIGN_LOCATION_SUFFIXES:
+        token = token.removesuffix(particle)
+    return token
 
 
 def _ids_for(evidence: tuple[ParserSemanticEvidence, ...], *kinds: ParserEvidenceKind) -> tuple[str, ...]:
     return tuple(item.evidence_id for item in evidence if item.kind in kinds)
+
+
+def _token_starts(message: str, token: str) -> tuple[int, ...]:
+    return tuple(match.start() for match in re.finditer(re.escape(token), message))
 
 
 def _semantic_resolver_required_evidence_ids(evidence: tuple[ParserSemanticEvidence, ...]) -> tuple[str, ...]:
@@ -585,22 +582,78 @@ def _semantic_resolver_required_evidence_ids(evidence: tuple[ParserSemanticEvide
 
 
 def _requires_semantic_resolver(source_text: str) -> bool:
-    compact = re.sub(r"\s+", "", source_text)
-    if compact == "越便宜越好但别太早":
-        return True
-    return any(re.fullmatch(pattern, compact) for pattern in _MATERIAL_SEMANTIC_RESIDUE_PATTERNS)
+    return not _is_benign_residue(source_text)
 
 
-def _material_semantic_residue_spans(message: str) -> tuple[tuple[int, str], ...]:
+def _material_semantic_residue_spans(
+    message: str,
+    evidence: tuple[ParserSemanticEvidence, ...],
+) -> tuple[tuple[int, str], ...]:
     if not message.strip():
         return ()
     spans: list[tuple[int, str]] = []
-    for pattern in _MATERIAL_SEMANTIC_RESIDUE_PATTERNS:
-        for match in re.finditer(pattern, message):
-            source_text = match.group(0).strip("，,。；;、 ")
-            if source_text:
-                spans.append((match.start(), source_text))
+    for start, end in _residual_spans(message, evidence):
+        trimmed = _trim_benign_edges(message[start:end], start)
+        if trimmed is None:
+            continue
+        trimmed_start, source_text = trimmed
+        if not _is_benign_residue(source_text):
+            spans.append((trimmed_start, source_text))
     return tuple(dict.fromkeys(spans))
+
+
+def _residual_spans(message: str, evidence: tuple[ParserSemanticEvidence, ...]) -> tuple[tuple[int, int], ...]:
+    covered = _merged_source_spans(evidence, len(message))
+    residual: list[tuple[int, int]] = []
+    cursor = 0
+    for start, end in covered:
+        if cursor < start:
+            residual.append((cursor, start))
+        cursor = max(cursor, end)
+    if cursor < len(message):
+        residual.append((cursor, len(message)))
+    return tuple(residual)
+
+
+def _merged_source_spans(
+    evidence: tuple[ParserSemanticEvidence, ...],
+    source_length: int,
+) -> tuple[tuple[int, int], ...]:
+    spans = sorted(
+        (max(0, item.source_location.start), min(source_length, item.source_location.end))
+        for item in evidence
+        if item.source_location is not None and item.source_location.start < item.source_location.end
+    )
+    merged: list[tuple[int, int]] = []
+    for start, end in spans:
+        if not merged or start > merged[-1][1]:
+            merged.append((start, end))
+            continue
+        previous_start, previous_end = merged[-1]
+        merged[-1] = (previous_start, max(previous_end, end))
+    return tuple(merged)
+
+
+def _trim_benign_edges(source_text: str, source_start: int) -> tuple[int, str] | None:
+    match = re.search(r"[^\s，,。；;、.!?！？…]+(?:[\s，,。；;、.!?！？…]+[^\s，,。；;、.!?！？…]+)*", source_text)
+    if match is None:
+        return None
+    trimmed = match.group(0).strip()
+    if not trimmed:
+        return None
+    return source_start + match.start(), trimmed
+
+
+def _is_benign_residue(source_text: str) -> bool:
+    compact = re.sub(r"[\s，,。；;、.!?！？]+", "", source_text)
+    if not compact:
+        return True
+    previous = None
+    while previous != compact:
+        previous = compact
+        for token in sorted(_BENIGN_RESIDUE_TOKENS, key=len, reverse=True):
+            compact = compact.replace(token, "")
+    return compact == ""
 
 
 def _proposal_evidence(evidence: tuple[ParserSemanticEvidence, ...]) -> tuple[ProposalEvidence, ...]:
@@ -624,8 +677,45 @@ _LOCATION_ALIASES = {
     "上海": "SHA",
     "广州": "CAN",
 }
-_MATERIAL_SEMANTIC_RESIDUE_PATTERNS = (
-    r"(?:但|不过)?如果[^，,。；;、]*(?:便宜很多|便宜不少|转一次|转机一次|贵一点|特别合适)[^，,。；;、]*(?:也行|也可以|可以)?",
-    r"(?:但|不过)?[^，,。；;、]*(?:便宜很多|便宜不少)[^，,。；;、]*(?:转一次|转机一次)[^，,。；;、]*(?:也行|也可以|可以)",
-    r"(?:但|不过)?不一定非要直飞",
+_BENIGN_LOCATION_SUFFIXES = ("吧",)
+_BENIGN_RESIDUE_TOKENS = (
+    "麻烦",
+    "帮我看看",
+    "帮我看",
+    "帮忙看看",
+    "帮忙看",
+    "帮我",
+    "帮忙",
+    "看一下",
+    "查一下",
+    "查询",
+    "看看",
+    "我想订",
+    "我想买",
+    "我想查",
+    "我想",
+    "我要订",
+    "我要买",
+    "我要查",
+    "我要",
+    "请",
+    "订",
+    "买",
+    "查",
+    "机票",
+    "航班",
+    "元",
+    "人民币",
+    "谢谢",
+    "多谢",
+    "您好",
+    "你好",
+    "一下",
+    "吧",
+    "的",
+    "了",
+    "呢",
+    "啊",
+    "呀",
+    "哈",
 )

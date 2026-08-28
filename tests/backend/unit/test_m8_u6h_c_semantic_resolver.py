@@ -342,6 +342,38 @@ def test_u6h_c_parser_resolver_invoked_for_material_initial_tail_without_inventi
     assert all(constraint.scope is not ConstraintScope.MAX_STOPS for constraint in result.proposal.constraints)
 
 
+def test_u6h_c_parser_resolver_invoked_for_residual_direct_preference_paraphrase() -> None:
+    resolver = FakeResolver(
+        schema_payload(
+            {
+                "relations": [
+                    {
+                        "relation_kind": "NO_AUTHORITATIVE_BINDING",
+                        "evidence_ids": ["ev-unsupported-1"],
+                        "target": None,
+                        "value": None,
+                        "confidence": 0.71,
+                    }
+                ]
+            }
+        )
+    )
+
+    interpreter = SemanticResolverParserHybridInterpreter(resolver)
+    result = interpreter.interpret(initial_input("9月10日从北京去上海，不要求直飞，但我更喜欢直飞。"))
+
+    assert resolver.calls == 1
+    assert resolver.last_request is not None
+    assert {item.source_text for item in resolver.last_request.evidence if item.kind == "UNSUPPORTED_TEXT"} == {"不要求直飞，但我更喜欢直飞"}
+    assert result.proposal is not None
+    assert isinstance(result.proposal, InitialRequirementProposal)
+    assert result.proposal.unresolved_semantics == ()
+    assert_constraint(result.proposal.constraints, ConstraintScope.ORIGIN_AIRPORT, AirportCode("PEK"))
+    assert_constraint(result.proposal.constraints, ConstraintScope.DESTINATION_AIRPORT, AirportCode("SHA"))
+    assert_constraint(result.proposal.constraints, ConstraintScope.DEPARTURE_DATE, LocalDate(date(2026, 9, 10)))
+    assert result.proposal.preferences == ()
+
+
 def test_u6h_c_c11_c12_t4_adapter_maps_malformed_retry_and_deadline() -> None:
     request = minimal_request()
     malformed = DeepSeekSemanticResolver(
