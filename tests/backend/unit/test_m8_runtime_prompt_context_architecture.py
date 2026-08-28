@@ -11,6 +11,7 @@ from flight_agent.application.llm_prompting import (
     PATCH_UNDERSTANDING_PROMPT_FAMILY,
     PROMPT_ASSET_ROOT,
     RUNTIME_PROMPT_FAMILIES,
+    SEMANTIC_RESOLVER_PROMPT_FAMILY,
     build_explanation_prompt_context,
     build_initial_requirement_prompt_context,
     build_patch_prompt_context,
@@ -47,16 +48,20 @@ FORBIDDEN_CONTEXT_TERMS = (
 )
 
 
-def test_three_runtime_prompt_families_are_independent_versioned_assets() -> None:
+def test_runtime_prompt_families_are_independent_versioned_assets() -> None:
     assert RUNTIME_PROMPT_FAMILIES == (
         INITIAL_REQUIREMENT_PROMPT_FAMILY,
         PATCH_UNDERSTANDING_PROMPT_FAMILY,
         EXPLANATION_GENERATION_PROMPT_FAMILY,
+        SEMANTIC_RESOLVER_PROMPT_FAMILY,
     )
     assert {family.capability for family in RUNTIME_PROMPT_FAMILIES} == set(LLMCapabilityName)
-    assert len({family.family_id for family in RUNTIME_PROMPT_FAMILIES}) == 3
-    assert len({family.prompt_template_version for family in RUNTIME_PROMPT_FAMILIES}) == 3
-    assert {family.output_schema_version.value for family in RUNTIME_PROMPT_FAMILIES} == {"m8-u1"}
+    assert len({family.family_id for family in RUNTIME_PROMPT_FAMILIES}) == 4
+    assert len({family.prompt_template_version for family in RUNTIME_PROMPT_FAMILIES}) == 4
+    assert {family.output_schema_version.value for family in RUNTIME_PROMPT_FAMILIES} == {
+        "m8-u1",
+        "m8-u6h-c-v1.1",
+    }
 
     for family in RUNTIME_PROMPT_FAMILIES:
         prompt_path = PROMPT_ASSET_ROOT / family.asset_path
@@ -202,7 +207,7 @@ def test_runtime_prompt_assets_do_not_mix_codex_prompts_or_runtime_secrets() -> 
     assert "api_key" not in prompt_sources
     assert "DeepSeek model" not in prompt_sources
     assert "真实用户" not in prompt_sources
-    assert len(tuple(PROMPT_ASSET_ROOT.rglob("*.md"))) == 5
+    assert len(tuple(PROMPT_ASSET_ROOT.rglob("*.md"))) == 6
 
 
 def test_runtime_prompt_assets_are_centralized_under_repository_prompt_root() -> None:

@@ -7,6 +7,8 @@ from pathlib import Path
 
 from flight_agent.domain.workflow import EvidenceRef
 from flight_agent.ports import (
+    SEMANTIC_RESOLVER_CONTRACT_VERSION,
+    SEMANTIC_RESOLVER_PROMPT_VERSION,
     ExplanationDraft,
     ExplanationGenerationRequest,
     InitialRequirementInterpretationRequest,
@@ -54,11 +56,19 @@ EXPLANATION_GENERATION_PROMPT_FAMILY = RuntimePromptFamily(
     output_schema_version=M8_U2_OUTPUT_SCHEMA_VERSION,
     asset_path="explanation_generation_v1.md",
 )
+SEMANTIC_RESOLVER_PROMPT_FAMILY = RuntimePromptFamily(
+    family_id=PromptFamilyId("m8.semantic_resolver"),
+    capability=LLMCapabilityName.SEMANTIC_RESOLVER,
+    prompt_template_version=PromptTemplateVersion(SEMANTIC_RESOLVER_PROMPT_VERSION),
+    output_schema_version=OutputSchemaVersion(SEMANTIC_RESOLVER_CONTRACT_VERSION),
+    asset_path="semantic_resolver_v1.md",
+)
 
 RUNTIME_PROMPT_FAMILIES = (
     INITIAL_REQUIREMENT_PROMPT_FAMILY,
     PATCH_UNDERSTANDING_PROMPT_FAMILY,
     EXPLANATION_GENERATION_PROMPT_FAMILY,
+    SEMANTIC_RESOLVER_PROMPT_FAMILY,
 )
 
 
@@ -177,6 +187,16 @@ def output_schema_guidance(capability: LLMCapabilityName) -> str:
             ("SUCCESS", "AMBIGUOUS", "INSUFFICIENT_CONTEXT", "FAILURE"),
         )
         return f"{guidance}\nPatchProposalAction enum values: {actions}\n{_patch_json_guidance()}"
+    if capability is LLMCapabilityName.SEMANTIC_RESOLVER:
+        return (
+            "Output contract: SemanticResolverResponse\n"
+            "SemanticResolverResponse status values: RESOLVED, AMBIGUOUS, "
+            "INSUFFICIENT_EVIDENCE, UNSUPPORTED, MODEL_FAILURE\n"
+            "SemanticResolverResponse JSON keys: request_id, status, relations, "
+            "unresolved_items, diagnostics, model_metadata\n"
+            "Relation keys: relation_kind, evidence_ids, target, value, confidence. "
+            "Use only allowed_output_vocabulary and deterministic evidence IDs."
+        )
     return _schema_guidance_for(
         "ExplanationDraft",
         ExplanationDraft,

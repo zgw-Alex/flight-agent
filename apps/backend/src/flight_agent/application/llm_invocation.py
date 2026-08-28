@@ -158,6 +158,17 @@ def _expected_output_fields(capability: LLMCapabilityName) -> frozenset[str]:
         return frozenset(field.name for field in fields(InitialRequirementProposal))
     if capability is LLMCapabilityName.PATCH_UNDERSTANDING:
         return frozenset(field.name for field in fields(PatchRequirementProposal))
+    if capability is LLMCapabilityName.SEMANTIC_RESOLVER:
+        return frozenset(
+            {
+                "request_id",
+                "status",
+                "relations",
+                "unresolved_items",
+                "diagnostics",
+                "model_metadata",
+            }
+        )
     return frozenset(field.name for field in fields(ExplanationDraft))
 
 

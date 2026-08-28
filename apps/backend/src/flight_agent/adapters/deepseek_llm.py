@@ -207,6 +207,19 @@ def deepseek_chat_completion_body(request: LLMInvocationRequest) -> dict[str, An
             "must preserve UNKNOWN literally, and must not mention any offer id that is not selected. "
             "used_evidence must be a non-empty array of approved refs as objects with source and identity."
         )
+    if request.rendered_prompt.family.capability is LLMCapabilityName.SEMANTIC_RESOLVER:
+        user_instruction = (
+            "Return exactly one JSON object with keys request_id, status, relations, "
+            "unresolved_items, diagnostics, model_metadata. status must be one of RESOLVED, "
+            "AMBIGUOUS, INSUFFICIENT_EVIDENCE, UNSUPPORTED, MODEL_FAILURE. Do not use SUCCESS "
+            "or FAILURE. Use only relation_kind values from allowed_output_vocabulary in the "
+            "trusted context, and only evidence IDs that appear in the trusted context. "
+            "relations must be an array of objects with exactly relation_kind, evidence_ids, "
+            "target, value, confidence. unresolved_items must be an array of objects with "
+            "exactly code, message, evidence_ids, or [] when there are none. diagnostics must "
+            "be an array of strings. model_metadata must be an array of objects with exactly "
+            "key and value string fields, or [] when there are none."
+        )
     body: dict[str, Any] = {
         "model": request.config.model_id,
         "messages": [
