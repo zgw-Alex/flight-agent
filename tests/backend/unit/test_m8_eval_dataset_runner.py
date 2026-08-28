@@ -43,6 +43,7 @@ def test_m8_u6_cases_carry_contract_fields_and_repeat_requirements() -> None:
     assert all(case.severity in {"P0", "P1", "P2"} for case in cases)
     assert all(case.input_text for case in cases)
     assert all(case.expected_status for case in cases)
+    assert any(case.expected_status == "NON_COMMIT_READY" for case in cases)
     assert all(case.tags for case in cases)
     assert all(case.repeat_requirement == 3 for case in cases if case.severity == "P0")
     assert all(case.repeat_requirement == 1 for case in cases if case.severity != "P0")

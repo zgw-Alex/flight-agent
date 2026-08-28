@@ -192,7 +192,6 @@ def test_json_mapping_covers_hard_soft_and_patch_lineage() -> None:
         },
         patch_request,
     )
-
     assert initial.constraints[1].value == Money(Decimal(1200), "CNY")
     assert initial.preferences[0].value == ValueRange(LocalTime(time(8)), LocalTime(time(11)))
     assert patch.based_on_requirement_id == RequirementId("requirement-1")
@@ -233,7 +232,7 @@ def test_json_mapping_accepts_real_provider_constraint_wrappers_without_contract
                     "item": {
                         "constraint_id": "constraint-max-price",
                         "type": "HARD_CONSTRAINT",
-                        "operator": "AT_OR_BEFORE",
+                        "operator": "LESS_THAN_OR_EQUAL_TO",
                         "value": {"amount": "900", "currency": "CNY"},
                     },
                 }
@@ -272,12 +271,40 @@ def test_json_mapping_accepts_real_provider_constraint_wrappers_without_contract
         },
         patch_request,
     )
+    preference_patch = patch_requirement_proposal_from_json(
+        {
+            "operations": [
+                {
+                    "action": "REPLACE_PREFERENCE",
+                    "target_id": "preference-price",
+                    "item": {
+                        "preference_id": "preference-price",
+                        "scope": "PRICE",
+                        "value": "HIGH",
+                    },
+                }
+            ],
+            "unresolved_semantics": [],
+            "source_input": "synthetic patch",
+            "based_on_requirement_id": "requirement-1",
+            "based_on_requirement_version": 1,
+            "evidence": [],
+            "ambiguity_reasons": [],
+            "insufficient_context": [],
+        },
+        patch_request,
+    )
 
     assert initial.constraints[0].scope is ConstraintScope.MAX_PRICE
     assert initial.constraints[0].value == Money(Decimal(1200), "CNY")
     assert patch.operations[0].item is not None
     assert patch.operations[0].item.scope is ConstraintScope.MAX_PRICE
     assert patch.operations[0].item.value == Money(Decimal(900), "CNY")
+    assert preference_patch.operations[0].item is not None
+    assert isinstance(preference_patch.operations[0].item, SoftPreference)
+    assert preference_patch.operations[0].item.scope is PreferenceScope.PRICE
+    assert preference_patch.operations[0].item.importance is PreferenceImportance.HIGH
+    assert preference_patch.operations[0].item.value is None
     assert airport_patch.operations[0].item is not None
     assert airport_patch.operations[0].item.scope is ConstraintScope.ORIGIN_AIRPORT
     assert isinstance(airport_patch.operations[0].item, HardConstraint)

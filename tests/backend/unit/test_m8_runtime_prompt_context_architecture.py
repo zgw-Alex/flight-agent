@@ -202,7 +202,7 @@ def test_runtime_prompt_assets_do_not_mix_codex_prompts_or_runtime_secrets() -> 
     assert "api_key" not in prompt_sources
     assert "DeepSeek model" not in prompt_sources
     assert "真实用户" not in prompt_sources
-    assert len(tuple(PROMPT_ASSET_ROOT.rglob("*.md"))) == 3
+    assert len(tuple(PROMPT_ASSET_ROOT.rglob("*.md"))) == 5
 
 
 def test_runtime_prompt_assets_are_centralized_under_repository_prompt_root() -> None:

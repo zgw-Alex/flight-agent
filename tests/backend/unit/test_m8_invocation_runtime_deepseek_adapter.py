@@ -461,7 +461,7 @@ def telemetry(
         capability=LLMCapabilityName.INITIAL_REQUIREMENT_INTERPRETATION.value,
         provider=LLMProviderName.DEEPSEEK,
         model_id="deepseek-v4-flash",
-        prompt_template_version="initial-requirement-v1",
+        prompt_template_version="initial-requirement-v2",
         output_schema_version="m8-u1",
         adapter_version=DEEPSEEK_ADAPTER_VERSION,
         attempt_count=attempt_count,

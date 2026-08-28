@@ -286,7 +286,10 @@ def patch_requirement_proposal_from_json(
     if proposed_version is not None and proposed_version != request.based_on_requirement_version.value:
         raise ValueError("Patch proposal version lineage conflicts with trusted context")
     return PatchRequirementProposal(
-        operations=tuple(_patch_operation(item) for item in _list(payload, "operations")),
+        operations=tuple(
+            _patch_operation(item, source_input=request.user_message)
+            for item in _list(payload, "operations")
+        ),
         unresolved_semantics=_strings(payload, "unresolved_semantics"),
         source_input=_string(payload, "source_input", required=False),
         based_on_requirement_id=request.requirement_id,
@@ -472,17 +475,21 @@ def _soft_preference(item: object, default_id: str) -> SoftPreference:
     scope = PreferenceScope(
         _enum_token(_string(data, "scope", required=False) or _string(data, "type"), _PREFERENCE_SCOPE_ALIASES)
     )
+    importance_value = _string(data, "importance", required=False) or "MEDIUM"
+    if scope is PreferenceScope.PRICE and isinstance(value, str):
+        normalized_value = _enum_token(value, _IMPORTANCE_ALIASES)
+        if normalized_value in {item.value for item in PreferenceImportance}:
+            importance_value = normalized_value
+            value = None
     return SoftPreference(
         preference_id=PreferenceId(_string(data, "preference_id", required=False) or default_id),
         scope=scope,
-        importance=PreferenceImportance(
-            _enum_token(_string(data, "importance", required=False) or "MEDIUM", _IMPORTANCE_ALIASES)
-        ),
+        importance=PreferenceImportance(_enum_token(importance_value, _IMPORTANCE_ALIASES)),
         value=None if value is None else _preference_value(scope, value),
     )
 
 
-def _patch_operation(item: object) -> PatchProposalOperation:
+def _patch_operation(item: object, source_input: str = "") -> PatchProposalOperation:
     data = _dict(item, "operation")
     action = PatchProposalAction(_enum_token(_string(data, "action"), _ACTION_ALIASES))
     target_id = _target_id(action, _optional_string(data, "target_id"))
@@ -490,6 +497,10 @@ def _patch_operation(item: object) -> PatchProposalOperation:
     proposal_item: HardConstraint | SoftPreference | None = None
     if raw_item is not None:
         raw_item = _item_with_inferred_scope(raw_item, action, target_id)
+        if isinstance(raw_item, dict) and "scope" not in _unwrap_named_item(raw_item):
+            inferred = _scope_from_constraint_payload(_unwrap_named_item(raw_item), source_input)
+            if inferred is not None:
+                raw_item = {**_unwrap_named_item(raw_item), "scope": inferred}
         proposal_item = (
             _hard_constraint(raw_item, "llm-patch-constraint")
             if _is_constraint_action(action)
@@ -537,7 +548,10 @@ def _scalar_constraint_value(scope: ConstraintScope, value: object):
         return PassengerCount(int(_raw_value(value)))
     if scope is ConstraintScope.MAX_PRICE:
         if isinstance(value, str | int) and not isinstance(value, bool):
-            return Money(Decimal(str(value)), "CNY")
+            try:
+                return Money(Decimal(str(value)), "CNY")
+            except InvalidOperation as exc:
+                raise ValueError("Money value requires decimal amount") from exc
         data = _dict(value, "money")
         if isinstance(data.get("value"), dict):
             data = _dict(data["value"], "money")
@@ -697,9 +711,15 @@ _OPERATOR_ALIASES = {
     "EQUAL": "EQUALS",
     "LTE": "AT_OR_BEFORE",
     "LE": "AT_OR_BEFORE",
+    "LESS_THAN_OR_EQUAL": "AT_OR_BEFORE",
+    "LESS_THAN_OR_EQUAL_TO": "AT_OR_BEFORE",
+    "LESS_OR_EQUAL": "AT_OR_BEFORE",
+    "NO_MORE_THAN": "AT_OR_BEFORE",
     "MAX": "AT_OR_BEFORE",
     "GTE": "AT_OR_AFTER",
     "GE": "AT_OR_AFTER",
+    "GREATER_THAN_OR_EQUAL": "AT_OR_AFTER",
+    "GREATER_THAN_OR_EQUAL_TO": "AT_OR_AFTER",
 }
 _IMPORTANCE_ALIASES = {
     "NORMAL": "MEDIUM",

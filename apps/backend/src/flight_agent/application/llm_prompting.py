@@ -36,16 +36,16 @@ M8_U2_OUTPUT_SCHEMA_VERSION = OutputSchemaVersion("m8-u1")
 INITIAL_REQUIREMENT_PROMPT_FAMILY = RuntimePromptFamily(
     family_id=PromptFamilyId("m8.initial_requirement_interpretation"),
     capability=LLMCapabilityName.INITIAL_REQUIREMENT_INTERPRETATION,
-    prompt_template_version=PromptTemplateVersion("initial-requirement-v1"),
+    prompt_template_version=PromptTemplateVersion("initial-requirement-v2"),
     output_schema_version=M8_U2_OUTPUT_SCHEMA_VERSION,
-    asset_path="initial_requirement_interpretation_v1.md",
+    asset_path="initial_requirement_interpretation_v2.md",
 )
 PATCH_UNDERSTANDING_PROMPT_FAMILY = RuntimePromptFamily(
     family_id=PromptFamilyId("m8.patch_understanding"),
     capability=LLMCapabilityName.PATCH_UNDERSTANDING,
-    prompt_template_version=PromptTemplateVersion("patch-understanding-v1"),
+    prompt_template_version=PromptTemplateVersion("patch-understanding-v2"),
     output_schema_version=M8_U2_OUTPUT_SCHEMA_VERSION,
-    asset_path="patch_understanding_v1.md",
+    asset_path="patch_understanding_v2.md",
 )
 EXPLANATION_GENERATION_PROMPT_FAMILY = RuntimePromptFamily(
     family_id=PromptFamilyId("m8.explanation_generation"),

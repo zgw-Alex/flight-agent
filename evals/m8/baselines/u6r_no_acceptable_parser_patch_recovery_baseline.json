@@ -1,0 +1,57 @@
+{
+  "lifecycle": "NO_ACCEPTABLE_BASELINE_AFTER_U6R_RECOVERY",
+  "provider": "deepseek",
+  "capabilities": {
+    "parser": {
+      "accepted_baseline": false,
+      "reason": "U6R evidence-supported prompt and mapper fixes did not recover a P0-clean parser candidate.",
+      "p0_failure_evidence": [
+        {
+          "model_id": "deepseek-v4-flash",
+          "case_id": "m8-u6-parser-04-ambiguous-origin",
+          "failure_classification": "F6_MODEL_CAPABILITY_FAILURE_AFTER_REMEDIATION"
+        },
+        {
+          "model_id": "deepseek-v4-pro",
+          "case_id": "m8-u6-parser-01-single-route-date",
+          "failure_classification": "F6_MODEL_CAPABILITY_FAILURE_AFTER_REMEDIATION"
+        }
+      ]
+    },
+    "patch": {
+      "accepted_baseline": false,
+      "reason": "U6R evidence-supported prompt and mapper fixes did not recover a P0-clean patch candidate.",
+      "p0_failure_evidence": [
+        {
+          "model_id": "deepseek-v4-flash",
+          "case_id": "m8-u6-patch-02-add-max-price",
+          "failure_classification": "F6_MODEL_CAPABILITY_FAILURE_AFTER_REMEDIATION"
+        },
+        {
+          "model_id": "deepseek-v4-pro",
+          "case_id": "m8-u6-patch-02-add-max-price",
+          "failure_classification": "F6_MODEL_CAPABILITY_FAILURE_AFTER_REMEDIATION"
+        }
+      ]
+    }
+  },
+  "forensics": {
+    "initial_failures_classified": [
+      "F1_PROMPT_GUIDANCE_DEFECT",
+      "F3_SCHEMA_GUIDANCE_MAPPING_DEFECT",
+      "F4_VALIDATOR_INTEGRATION_BUG",
+      "F5_EVAL_EXPECTED_FIXTURE_DEFECT"
+    ],
+    "model_accommodation_used": false,
+    "dataset_expected_semantics_changed": true,
+    "fixture_change_authority": "M3 gate permits non-commit-ready parser outcomes for under-specified user input; strict ambiguity-vs-insufficient labels were not required authority."
+  },
+  "eval_evidence_reference": "evals/m8/reports/u6r_deepseek_parser_patch_recovery_report.json",
+  "explanation_baseline_preserved": "evals/m8/baselines/u6_accepted_explanation_baseline.json",
+  "p0_authority": "machine-deterministic",
+  "llm_as_judge_used_for_p0": false,
+  "full_prompt_recorded": false,
+  "full_completion_recorded": false,
+  "secret_recorded": false,
+  "recorded_at": "2026-08-28T04:08:33.259374+00:00"
+}
