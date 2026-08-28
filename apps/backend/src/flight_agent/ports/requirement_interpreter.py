@@ -11,6 +11,7 @@ from flight_agent.domain.requirements import (
     HardConstraint,
     PreferenceId,
     RequirementId,
+    RequirementState,
     SoftPreference,
 )
 from flight_agent.domain.shared import RequirementVersion
@@ -61,6 +62,7 @@ class RequirementInterpretationContext:
     constraint_ids: tuple[ConstraintId, ...] = ()
     preference_ids: tuple[PreferenceId, ...] = ()
     current_requirement_projection: str = ""
+    current_requirement: RequirementState | None = None
 
 
 @dataclass(frozen=True)

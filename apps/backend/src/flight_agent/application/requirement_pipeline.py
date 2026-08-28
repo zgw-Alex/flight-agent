@@ -276,6 +276,7 @@ def _interpretation_context(current: RequirementState) -> RequirementInterpretat
         constraint_ids=tuple(constraint.constraint_id for constraint in current.constraints),
         preference_ids=tuple(preference.preference_id for preference in current.preferences),
         current_requirement_projection=_requirement_projection(current),
+        current_requirement=current,
     )
 
 
