@@ -32,6 +32,7 @@ from flight_agent.domain.requirements import (
     RequirementId,
     RequirementState,
     SoftPreference,
+    StopCount,
     ValueRange,
     ValueSet,
 )
@@ -546,6 +547,11 @@ def _scalar_constraint_value(scope: ConstraintScope, value: object):
         return CabinClass(_raw_value(value))
     if scope is ConstraintScope.PASSENGER_COUNT:
         return PassengerCount(int(_raw_value(value)))
+    if scope is ConstraintScope.MAX_STOPS:
+        raw = _raw_value(value)
+        if "." in raw:
+            raise ValueError("MAX_STOPS requires a non-negative integer")
+        return StopCount(int(raw))
     if scope is ConstraintScope.MAX_PRICE:
         if isinstance(value, str | int) and not isinstance(value, bool):
             try:
@@ -650,6 +656,8 @@ def _scope_from_constraint_payload(data: dict[str, Any], identifier_hint: str) -
     ).lower()
     if "price" in hint or "budget" in hint:
         return ConstraintScope.MAX_PRICE.value
+    if "stop" in hint or "stops" in hint or "direct" in hint:
+        return ConstraintScope.MAX_STOPS.value
     if "origin" in hint:
         return ConstraintScope.ORIGIN_AIRPORT.value
     if "destination" in hint:
@@ -699,6 +707,8 @@ _SCOPE_ALIASES = {
     "DATE": "DEPARTURE_DATE",
     "TIME": "DEPARTURE_TIME",
     "PRICE": "MAX_PRICE",
+    "STOPS": "MAX_STOPS",
+    "MAX_STOPS": "MAX_STOPS",
 }
 _PREFERENCE_SCOPE_ALIASES = {
     "PRICE_PREFERENCE": "PRICE",

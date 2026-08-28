@@ -14,6 +14,7 @@ from flight_agent.domain.requirements.values import (
     LocalTime,
     PassengerCount,
     RequirementValue,
+    StopCount,
     ValueRange,
     ValueSet,
 )
@@ -28,6 +29,7 @@ class ConstraintScope(str, Enum):
     CABIN_CLASS = "CABIN_CLASS"
     PASSENGER_COUNT = "PASSENGER_COUNT"
     MAX_PRICE = "MAX_PRICE"
+    MAX_STOPS = "MAX_STOPS"
 
 
 class ConstraintOperator(str, Enum):
@@ -118,6 +120,7 @@ _CONSTRAINT_ALLOWED_VALUE_TYPES = {
     ConstraintScope.CABIN_CLASS: (CabinClass,),
     ConstraintScope.PASSENGER_COUNT: (PassengerCount,),
     ConstraintScope.MAX_PRICE: (Money,),
+    ConstraintScope.MAX_STOPS: (StopCount,),
 }
 
 _PREFERENCE_ALLOWED_VALUE_TYPES = {

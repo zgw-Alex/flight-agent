@@ -24,6 +24,7 @@ from flight_agent.domain.requirements.values import (
     LocalTime,
     PassengerCount,
     RequirementValue,
+    StopCount,
     ValueRange,
     ValueSet,
 )
@@ -50,6 +51,7 @@ __all__ = [
     "RequirementState",
     "RequirementValue",
     "SoftPreference",
+    "StopCount",
     "ValueRange",
     "ValueSet",
 ]

@@ -53,7 +53,16 @@ class PassengerCount:
             raise DomainInvariantViolation("PassengerCount requires a positive integer")
 
 
-RequirementValue = AirportCode | CabinClass | LocalDate | LocalTime | Money | PassengerCount
+@dataclass(frozen=True)
+class StopCount:
+    value: int
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.value, int) or isinstance(self.value, bool) or self.value < 0:
+            raise DomainInvariantViolation("StopCount requires a non-negative integer")
+
+
+RequirementValue = AirportCode | CabinClass | LocalDate | LocalTime | Money | PassengerCount | StopCount
 
 
 @dataclass(frozen=True, init=False)

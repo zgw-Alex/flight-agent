@@ -626,6 +626,8 @@ def _m6_requirement_dependency_key(source: str, key: str) -> RequirementDependen
         return RequirementDependencyKey("requirement.trip.departure_date")
     if source == "constraint" and key == "MAX_PRICE":
         return RequirementDependencyKey("constraint.max_price")
+    if source == "constraint" and key == "MAX_STOPS":
+        return RequirementDependencyKey("constraint.max_stops")
     return RequirementDependencyKey(f"{source}.{key.lower()}")
 
 

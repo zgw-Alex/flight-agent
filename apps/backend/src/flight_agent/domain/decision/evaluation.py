@@ -53,6 +53,9 @@ class ConstraintReasonCode(str, Enum):
     MAX_PRICE_SATISFIED = "MAX_PRICE_SATISFIED"
     MAX_PRICE_EXCEEDED = "MAX_PRICE_EXCEEDED"
     MAX_PRICE_INSUFFICIENT_EVIDENCE = "MAX_PRICE_INSUFFICIENT_EVIDENCE"
+    MAX_STOPS_SATISFIED = "MAX_STOPS_SATISFIED"
+    MAX_STOPS_EXCEEDED = "MAX_STOPS_EXCEEDED"
+    MAX_STOPS_INSUFFICIENT_EVIDENCE = "MAX_STOPS_INSUFFICIENT_EVIDENCE"
 
 
 class CandidateEligibilityStatus(str, Enum):
@@ -261,14 +264,17 @@ def _validate_reason_matches_status(
         ConstraintEvaluationStatus.PASS: {
             ConstraintReasonCode.CONSTRAINT_SATISFIED,
             ConstraintReasonCode.MAX_PRICE_SATISFIED,
+            ConstraintReasonCode.MAX_STOPS_SATISFIED,
         },
         ConstraintEvaluationStatus.FAIL: {
             ConstraintReasonCode.CONSTRAINT_VIOLATED,
             ConstraintReasonCode.MAX_PRICE_EXCEEDED,
+            ConstraintReasonCode.MAX_STOPS_EXCEEDED,
         },
         ConstraintEvaluationStatus.UNKNOWN: {
             ConstraintReasonCode.INSUFFICIENT_EVIDENCE,
             ConstraintReasonCode.MAX_PRICE_INSUFFICIENT_EVIDENCE,
+            ConstraintReasonCode.MAX_STOPS_INSUFFICIENT_EVIDENCE,
         },
     }[status]
     if reason_code not in allowed:

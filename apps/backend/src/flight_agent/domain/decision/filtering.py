@@ -27,6 +27,7 @@ from flight_agent.domain.decision.evaluation import (
 )
 from flight_agent.domain.decision.features import (
     DEPARTURE_DATE_MATCHES_REQUIREMENT,
+    STOP_COUNT,
     TOTAL_PRICE,
     DerivedFeatureSet,
     FeatureValue,
@@ -54,6 +55,7 @@ from flight_agent.domain.requirements import (
     LocalDate,
     RequirementId,
     RequirementState,
+    StopCount,
 )
 from flight_agent.domain.shared import (
     DomainInvariantViolation,
@@ -363,6 +365,51 @@ class MaxPriceConstraintEvaluator:
 
 
 @dataclass(frozen=True)
+class MaxStopsConstraintEvaluator:
+    constraint_scope: ConstraintScope = ConstraintScope.MAX_STOPS
+    required_feature_keys: tuple = (STOP_COUNT,)
+
+    def evaluate(
+        self,
+        *,
+        constraint: HardConstraint,
+        candidate: OfferBackedItineraryCandidate,
+        feature_set: DerivedFeatureSet,
+        lineage: ConstraintEvaluationLineage,
+        evaluation_id: ConstraintEvaluationId,
+    ) -> ConstraintEvaluation:
+        if constraint.operator is not ConstraintOperator.AT_OR_BEFORE or not isinstance(
+            constraint.value,
+            StopCount,
+        ):
+            raise DomainInvariantViolation("Max stops evaluator requires AT_OR_BEFORE StopCount")
+        feature_value = feature_set.value_for(candidate, STOP_COUNT)
+        _validate_feature_value(feature_value, FeatureValueType.INTEGER)
+        status = _status_from_integer_threshold(feature_value, constraint.value.value)
+        return _constraint_evaluation(
+            evaluation_id=evaluation_id,
+            constraint_id=constraint.constraint_id,
+            candidate=candidate,
+            scope=ConstraintEvaluationScope(DecisionConstraintScope.ITINERARY),
+            status=status,
+            expected=DomainValue.known(constraint.value.value),
+            actual=_actual_integer_feature(feature_value),
+            expected_label="max_stops",
+            actual_label="stop_count",
+            evidence=(
+                *feature_value.evidence,
+                EvidenceRef(EvidenceSource.CONSTRAINT, constraint.constraint_id),
+            ),
+            lineage=lineage,
+            reason_code={
+                ConstraintEvaluationStatus.PASS: ConstraintReasonCode.MAX_STOPS_SATISFIED,
+                ConstraintEvaluationStatus.FAIL: ConstraintReasonCode.MAX_STOPS_EXCEEDED,
+                ConstraintEvaluationStatus.UNKNOWN: ConstraintReasonCode.MAX_STOPS_INSUFFICIENT_EVIDENCE,
+            }[status],
+        )
+
+
+@dataclass(frozen=True)
 class CompleteFilteringEngine:
     evaluator_registry: FilterEvaluatorRegistry
 
@@ -450,7 +497,11 @@ class CompleteFilteringEngine:
 
 def m6_default_filter_evaluator_registry() -> FilterEvaluatorRegistry:
     return FilterEvaluatorRegistry(
-        evaluators=(DepartureDateConstraintEvaluator(), MaxPriceConstraintEvaluator()),
+        evaluators=(
+            DepartureDateConstraintEvaluator(),
+            MaxPriceConstraintEvaluator(),
+            MaxStopsConstraintEvaluator(),
+        ),
         registry_version=DecisionPolicyVersion("filter-evaluator-registry-v1"),
     )
 
@@ -549,6 +600,26 @@ def _status_from_money_threshold(
 
 
 def _actual_total_price(feature_value: FeatureValue) -> DomainValue[object]:
+    if feature_value.value_status is not ValueState.KNOWN:
+        return DomainValue.not_provided()
+    return DomainValue.known(feature_value.value.value)
+
+
+def _status_from_integer_threshold(
+    feature_value: FeatureValue,
+    maximum: int,
+) -> ConstraintEvaluationStatus:
+    if feature_value.value_status is not ValueState.KNOWN:
+        return ConstraintEvaluationStatus.UNKNOWN
+    actual = feature_value.value.value
+    if not isinstance(actual, int) or isinstance(actual, bool):
+        raise DomainInvariantViolation("Integer feature produced a non-integer value")
+    if actual <= maximum:
+        return ConstraintEvaluationStatus.PASS
+    return ConstraintEvaluationStatus.FAIL
+
+
+def _actual_integer_feature(feature_value: FeatureValue) -> DomainValue[object]:
     if feature_value.value_status is not ValueState.KNOWN:
         return DomainValue.not_provided()
     return DomainValue.known(feature_value.value.value)

@@ -36,7 +36,7 @@ function Select-PostgresHostPort {
     if (Test-LoopbackPortAvailable -Port 55432) {
         return 55432
     }
-    foreach ($Port in 55433..55532) {
+    foreach ($Port in 55433..55641) {
         if (Test-LoopbackPortAvailable -Port $Port) {
             return $Port
         }

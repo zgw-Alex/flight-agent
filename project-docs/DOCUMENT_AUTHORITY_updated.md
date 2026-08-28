@@ -60,6 +60,11 @@ Scope。历史 Reference 仅用于追溯，不得覆盖正式收口结论。
         -   记录 M7-U1～M7-U6、GS-01～GS-14、Aggregate Exit Gate G1～G12、current-main GitHub Actions CI run 33041817149 已 PASS。
         -   Contract Amendment：NONE；M7 Milestone Status：CLOSED。
         -   不替代 M7 Patch + Impact + Orchestrator Specification 的 Contract Authority，也不启动 M8 implementation。
+    -   `03_implementation-roadmap/milestones/M8/机票筛选Agent_M8-U6H-CA01_MAX_STOPS_Hard_Constraint_Contract_Amendment_Specification_V1.0.docx`
+        -   第三阶段 M8-U6H Recovery 的正式 additive Contract Amendment Authority。
+        -   对 M3 Requirement Contract 仅增量补充 `MAX_STOPS`：formal Hard Constraint、non-negative integer value、canonical `AT_OR_BEFORE` / `candidate.stop_count <= max_stops`，其中 `MAX_STOPS=0` 表示 Hard “必须直飞”。
+        -   不新增 `DIRECT_FLIGHT` Hard family，不批准 MIN_STOPS / EXACT_STOPS / stop-airport / layover-duration 等额外 Stops family。
+        -   CA01 Decision Status：ACCEPTED；Implementation Status：COMPLETE。
     -   `03_implementation-roadmap/milestones/M6/机票筛选Agent_第三阶段_M6_Complete_Decision_Engine正式收口_V1.0.docx`
         -   第三阶段 M6 Complete Decision Engine 的正式 Milestone Closure Evidence。
         -   记录 M6-U1～M6-U6、M6-CA01-I1、GS-01～GS-08、P0-01～P0-14 与 Aggregate Exit Gate G1～G12 已 PASS。
@@ -284,14 +289,22 @@ Codex 在第三阶段默认遵守：
 
 当前 effective Requirement Contract：
 
-`M3 Requirement Pipeline Specification + M3 Closure + M6-CA01 additive amendment`
+`M3 Requirement Pipeline Specification + M3 Closure + M6-CA01 additive amendment + M8-U6H-CA01 additive amendment`
 
-其中 CA01 仅补充：
+其中 M6-CA01 仅补充：
 
 -   `MAX_PRICE` 是 formal Hard Constraint。
 -   value type 为 Money。
 -   decision scope 为 OFFER。
 -   `MAX_PRICE` 与 `PRICE` Soft Preference 保持分离。
+
+其中 M8-U6H-CA01 仅补充：
+
+-   `MAX_STOPS` 是 formal Hard Constraint。
+-   value type 为 non-negative integer。
+-   canonical operator 为 `AT_OR_BEFORE`，语义为 `candidate.stop_count <= max_stops`。
+-   `MAX_STOPS=0` 是 Hard “必须直飞”的 canonical 表达。
+-   不新增 `DIRECT_FLIGHT` Hard family；Soft direct-flight / fewer-stops preference 仍保持 Soft Ranking semantics。
 -   其他 M3 semantics 保持 unchanged。
 
 CA01 已完成治理接纳与 source implementation。M6-U6 Deterministic Relaxation + Aggregate Golden Gates 已 PASS。

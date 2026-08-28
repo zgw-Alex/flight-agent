@@ -16,6 +16,7 @@ from flight_agent.domain.requirements import (
     PreferenceScope,
     RequirementState,
     SoftPreference,
+    StopCount,
     ValueRange,
     ValueSet,
 )
@@ -424,6 +425,8 @@ def _hard_effect(
         return HardConstraintSemanticEffect.INCOMPARABLE
     if after.scope is ConstraintScope.MAX_PRICE:
         return _max_price_effect(before, after)
+    if after.scope is ConstraintScope.MAX_STOPS:
+        return _max_stops_effect(before, after)
     if after.scope is ConstraintScope.DEPARTURE_TIME:
         return _range_effect(before, after)
     if after.scope in {
@@ -446,6 +449,19 @@ def _max_price_effect(
     if after.value.amount > before.value.amount:
         return HardConstraintSemanticEffect.RELAXED
     if after.value.amount < before.value.amount:
+        return HardConstraintSemanticEffect.TIGHTENED
+    return HardConstraintSemanticEffect.INCOMPARABLE
+
+
+def _max_stops_effect(
+    before: HardConstraint,
+    after: HardConstraint,
+) -> HardConstraintSemanticEffect:
+    if not isinstance(before.value, StopCount) or not isinstance(after.value, StopCount):
+        return HardConstraintSemanticEffect.INCOMPARABLE
+    if after.value.value > before.value.value:
+        return HardConstraintSemanticEffect.RELAXED
+    if after.value.value < before.value.value:
         return HardConstraintSemanticEffect.TIGHTENED
     return HardConstraintSemanticEffect.INCOMPARABLE
 
@@ -490,6 +506,7 @@ def _constraint_dependency_key(constraint: HardConstraint) -> RequirementDepende
         ConstraintScope.CABIN_CLASS: "requirement.trip.cabin_class",
         ConstraintScope.PASSENGER_COUNT: "requirement.trip.passenger_count",
         ConstraintScope.MAX_PRICE: "constraint.max_price",
+        ConstraintScope.MAX_STOPS: "constraint.max_stops",
     }
     return RequirementDependencyKey(keys[constraint.scope])
 
