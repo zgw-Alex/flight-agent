@@ -68,7 +68,7 @@ Scope。历史 Reference 仅用于追溯，不得覆盖正式收口结论。
     -   `03_implementation-roadmap/milestones/M8/机票筛选Agent_M8-U6H-D_Hybrid_Eval_and_Baseline_Recovery_Specification_V1.1.docx`
         -   第三阶段 M8-U6H-D Hybrid Eval and Baseline Recovery 的当前 Implementation Unit Authority。
         -   V1.1 定义 Hybrid evaluation recovery 与 baseline-promotion evidence；评价 deterministic ownership、clarification zero-call safety、real resolver evidence path、fixed P0 stability、baseline identity 与 auditable metrics。
-        -   V1.1 取代 V1.0 作为当前 U6H-D 执行依据；V1.0 保留为历史治理证据并标记 SUPERSEDED BY V1.1。U6H-D 不新增 Parser/Patch/Resolver product capability，不自创 P1/P2 baseline acceptance threshold；Additional Contract Amendment：NONE。
+        -   V1.1 取代 V1.0 作为当前 U6H-D 执行依据；V1.0 保留为历史治理证据并标记 SUPERSEDED BY V1.1。U6H-D 不新增 Parser/Patch/Resolver product capability，不自创 P1/P2 baseline acceptance threshold。U6H-D implementation/eval commit：`34c7d9273fa641ffab0b616454513f67e4088844`；U6H-D status：CLOSED / PASS；focused tests、backend CI、unified CI、T4 real smoke 与 T3 real P0 3-run eval 已于 2026-08-28 PASS；Additional Contract Amendment：NONE。
     -   `03_implementation-roadmap/milestones/M8/机票筛选Agent_M8-U6H-C_DeepSeek_Semantic_Resolver_Specification_V1.1.docx`
         -   第三阶段 M8-U6H-C DeepSeek Semantic Resolver 的当前 Implementation Unit Authority。
         -   V1.1 定义 evidence-closed、schema-constrained DeepSeek semantic resolver；DeepSeek 只可在 U6H-A / U6H-B deterministic front-half 已分类为 `SEMANTIC_RESOLVER_REQUIRED` 后解析既有 evidence 之间的关系。
@@ -303,7 +303,7 @@ Codex 在第三阶段默认遵守：
 -   M5 Walking Skeleton：CLOSED。
 -   M6 Complete Decision Engine：CLOSED；M6-U1～M6-U6、M6-CA01-I1、GS-01～GS-08、P0-01～P0-14 与 Aggregate Exit Gate G1～G12 全部 PASS；M6-CA01 已接纳并实现；Additional Contract Amendment NONE。
 -   M7 Patch + Impact + Orchestrator：CLOSED；M7-U1～M7-U6、GS-01～GS-14 与 Aggregate Exit Gate G1～G12 全部 PASS；Contract Amendment NONE；current-main GitHub Actions CI run 33041817149 PASS。
--   M8：READY / eligible；M8-U6H-CA01 ACCEPTED + IMPLEMENTED + PASS；M8-U6H-A CLOSED / PASS，current Specification Authority 为 V1.2；M8-U6H-B CLOSED / PASS，current Specification Authority 为 V1.1；M8-U6H-C CLOSED / PASS，current Specification Authority 为 V1.1；M8-U6H-D current Specification Authority 为 V1.1，V1.0 historical / superseded，Additional Contract Amendment NONE。
+-   M8：READY / eligible；M8-U6H-CA01 ACCEPTED + IMPLEMENTED + PASS；M8-U6H-A CLOSED / PASS，current Specification Authority 为 V1.2；M8-U6H-B CLOSED / PASS，current Specification Authority 为 V1.1；M8-U6H-C CLOSED / PASS，current Specification Authority 为 V1.1；M8-U6H-D CLOSED / PASS，current Specification Authority 为 V1.1，V1.0 historical / superseded，Additional Contract Amendment NONE。
 
 当前 effective Requirement Contract：
 
