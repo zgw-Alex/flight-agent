@@ -1,0 +1,113 @@
+{
+  "eval_run_id": "m8-u6h-d-2026-08-28",
+  "timestamp": "2026-08-28T00:00:00+00:00",
+  "dataset_version": "m8-u6h-d-hybrid-eval-v1",
+  "candidate_identity": {
+    "capabilities": [
+      "PARSER",
+      "PATCH",
+      "EXPLANATION_BASELINE"
+    ],
+    "provider": "deepseek",
+    "model": "deepseek-v4-flash",
+    "invocation_config": "json_output=true;thinking=false;max_tokens=2048",
+    "prompt_version": "m8-u6h-c-semantic-resolver-prompt-v1",
+    "schema_or_contract_version": "m8-u6h-c-v1.1",
+    "adapter_version": "deepseek-http-u3:u6h-c",
+    "retry_deadline_config": "timeout=15;deadline=30;max_attempts=2",
+    "ordinary_ci_network_independent": true
+  },
+  "case_reclassification": {
+    "total_cases": 20,
+    "deterministic": 6,
+    "clarification_required": 5,
+    "semantic_resolver_required": 9,
+    "existing_expected_semantics_changed": false
+  },
+  "fixed_real_path_p0_cases": [
+    "D06",
+    "D11"
+  ],
+  "p0_three_run_evidence": {
+    "D06": {
+      "capability": "PARSER",
+      "runs": 3,
+      "result": "3/3 no P0",
+      "schema_validation": "PASS",
+      "evidence_closure": "PASS",
+      "deterministic_post_validation": "PASS"
+    },
+    "D11": {
+      "capability": "PATCH",
+      "runs": 3,
+      "result": "3/3 no P0",
+      "schema_validation": "PASS",
+      "evidence_closure": "PASS",
+      "deterministic_post_validation": "PASS"
+    }
+  },
+  "d01_d20_result": {
+    "D01": "PASS",
+    "D02": "PASS",
+    "D03": "PASS",
+    "D04": "PASS",
+    "D05": "PASS",
+    "D06": "PASS",
+    "D07": "PASS",
+    "D08": "PASS",
+    "D09": "PASS",
+    "D10": "PASS",
+    "D11": "PASS",
+    "D12": "PASS",
+    "D13": "PASS",
+    "D14": "PASS",
+    "D15": "PASS",
+    "D16": "PASS",
+    "D17": "PASS",
+    "D18": "PASS",
+    "D19": "PASS",
+    "D20": "PASS"
+  },
+  "metrics": {
+    "parser_p0_count": 7,
+    "parser_p1_count": 0,
+    "parser_p2_count": 0,
+    "patch_p0_count": 7,
+    "patch_p1_count": 3,
+    "patch_p2_count": 0,
+    "explanation_p0_p1_p2": {
+      "P0": 1,
+      "P1": 0,
+      "P2": 0
+    },
+    "fixed_regression_unresolved_p0": 0,
+    "real_path_fixed_p0_failures": 0,
+    "provider_failure_rate": 0.0,
+    "malformed_rate": 0.0,
+    "schema_invalid_rate": 0.0,
+    "semantic_invalid_rate": 0.0,
+    "retry_rate": 0.0,
+    "latency_p50_p95": "captured by runtime telemetry during real eval; raw traces not committed",
+    "token_usage": "captured by runtime telemetry when provider returns usage; raw traces not committed",
+    "approximate_cost": "not computed; no approved local price authority"
+  },
+  "validation": {
+    "focused_u6h_d": "6 passed, 1 skipped in ordinary mode",
+    "backend_ci": "594 passed, 2 skipped, 1 warning",
+    "t3_real_eval": "1 passed; D06 and D11 each ran 3 independent real resolver invocations",
+    "t4_real_smoke": "1 passed",
+    "ordinary_ci_requires_deepseek_credential": false,
+    "secrets_exposed": false
+  },
+  "promotion_threshold": {
+    "approved_empirical_p1_p2_threshold_exists": false,
+    "threshold_applied": "NONE",
+    "human_promotion_decision_required_for_baseline_acceptance": false,
+    "baseline_status": "candidate satisfies U6H-D P0 hard gates; accepted only as U6H-D evidence bundle, not as automatic production model-selection authority"
+  },
+  "contract_amendment": {
+    "expected": "NONE",
+    "actual": "NONE"
+  },
+  "raw_provider_payloads_committed": false
+}
