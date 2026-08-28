@@ -68,7 +68,7 @@ Scope。历史 Reference 仅用于追溯，不得覆盖正式收口结论。
     -   `03_implementation-roadmap/milestones/M8/机票筛选Agent_M8-U6H-B_Parser_Hybrid_Semantic_Pipeline_Specification_V1.1.docx`
         -   第三阶段 M8-U6H-B Parser Hybrid Semantic Pipeline 的当前 Implementation Unit Authority。
         -   V1.1 定义 deterministic-first Initial Requirement Parser Hybrid 前半段，输出既有 InitialRequirementProposal 并复用 M3 Normalization / Validation / Policy / Commit Authority。
-        -   V1.1 取代 V1.0 作为当前 U6H-B 执行依据；V1.0 保留为历史治理证据并标记 SUPERSEDED BY V1.1；Additional Contract Amendment：NONE。
+        -   V1.1 取代 V1.0 作为当前 U6H-B 执行依据；V1.0 保留为历史治理证据并标记 SUPERSEDED BY V1.1。U6H-B implementation commit：`5f16b9ad96438821030cbb02cb7370c90c4b5848`；U6H-B status：CLOSED / PASS；Additional Contract Amendment：NONE。
     -   `03_implementation-roadmap/milestones/M8/机票筛选Agent_M8-U6H-A_Patch_Hybrid_Semantic_Pipeline_Specification_V1.2.docx`
         -   第三阶段 M8-U6H-A Patch Hybrid Semantic Pipeline 的当前 Implementation Unit Authority。
         -   V1.2 是 U6H-A 实现 PASS 后的 terminology / implementation alignment authority；V1.2 继承 V1.1 的 deterministic Patch Hybrid 行为边界、Golden Scenarios、Exit Gates 与 M3 Patch authority。
@@ -295,7 +295,7 @@ Codex 在第三阶段默认遵守：
 -   M5 Walking Skeleton：CLOSED。
 -   M6 Complete Decision Engine：CLOSED；M6-U1～M6-U6、M6-CA01-I1、GS-01～GS-08、P0-01～P0-14 与 Aggregate Exit Gate G1～G12 全部 PASS；M6-CA01 已接纳并实现；Additional Contract Amendment NONE。
 -   M7 Patch + Impact + Orchestrator：CLOSED；M7-U1～M7-U6、GS-01～GS-14 与 Aggregate Exit Gate G1～G12 全部 PASS；Contract Amendment NONE；current-main GitHub Actions CI run 33041817149 PASS。
--   M8：READY / eligible；M8-U6H-CA01 ACCEPTED + IMPLEMENTED + PASS；M8-U6H-A CLOSED / PASS，current Specification Authority 为 V1.2；M8-U6H-B current Specification Authority 为 V1.1，Additional Contract Amendment NONE。
+-   M8：READY / eligible；M8-U6H-CA01 ACCEPTED + IMPLEMENTED + PASS；M8-U6H-A CLOSED / PASS，current Specification Authority 为 V1.2；M8-U6H-B CLOSED / PASS，current Specification Authority 为 V1.1，Additional Contract Amendment NONE。
 
 当前 effective Requirement Contract：
 
