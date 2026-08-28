@@ -4,13 +4,16 @@ from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
 
-from flight_agent.adapters.requirement_repository_memory import InMemoryRequirementRepository
+from flight_agent.adapters.requirement_repository_memory import (
+    InMemoryRequirementRepository,
+)
 from flight_agent.application import (
     AirportCanonicalization,
     BindingConsolidator,
     DeterministicParserHybridInterpreter,
     NormalizationContext,
     ParserBindingState,
+    ParserEvidenceKind,
     ParserInterpretationStatus,
     ParserSemanticBinding,
     ParserSemanticTarget,
@@ -85,6 +88,42 @@ def test_u6h_b_b05_to_b07_initial_constraints_preferences_use_existing_authority
         ),
     )
     assert not hasattr(ConstraintScope, "DIRECT_FLIGHT")
+
+
+def test_u6h_b_material_condition_tail_requires_semantic_resolver_without_silent_drop() -> None:
+    ir, proposal = build_deterministic_initial_proposal("9月10日从北京去上海，最好直飞，但如果便宜很多转一次也行。")
+
+    assert ir.interpretation_status is ParserInterpretationStatus.SEMANTIC_RESOLVER_REQUIRED
+    assert_slot(ir, ParserSemanticTarget.ORIGIN, ParserBindingState.RESOLVED)
+    assert_slot(ir, ParserSemanticTarget.DESTINATION, ParserBindingState.RESOLVED)
+    assert_slot(ir, ParserSemanticTarget.DEPARTURE_DATE, ParserBindingState.RESOLVED)
+    assert proposal.constraints == ()
+    assert "SEMANTIC_RESOLVER_REQUIRED" in proposal.ambiguity_reasons
+    assert any(
+        item.kind is ParserEvidenceKind.UNSUPPORTED_TEXT and item.source_text == "但如果便宜很多转一次也行"
+        for item in ir.evidence
+    )
+
+
+def test_u6h_b_benign_residue_does_not_over_escalate() -> None:
+    for message in ("9月10日从北京去上海，谢谢。", "麻烦帮我看看9月10日从北京去上海。"):
+        ir, proposal = build_deterministic_initial_proposal(message)
+
+        assert ir.interpretation_status is ParserInterpretationStatus.RESOLVED
+        assert proposal.unresolved_semantics == ()
+        assert "SEMANTIC_RESOLVER_REQUIRED" not in proposal.ambiguity_reasons
+        assert all(item.kind is not ParserEvidenceKind.UNSUPPORTED_TEXT for item in ir.evidence)
+
+
+def test_u6h_b_existing_destination_binding_gap_stays_clarification_not_resolver() -> None:
+    ir, proposal = build_deterministic_initial_proposal("9月10日从北京飞上海，最好直飞，但如果便宜很多转一次也行。")
+
+    assert ir.interpretation_status is ParserInterpretationStatus.CLARIFICATION_REQUIRED
+    assert_slot(ir, ParserSemanticTarget.ORIGIN, ParserBindingState.RESOLVED)
+    assert_slot(ir, ParserSemanticTarget.DESTINATION, ParserBindingState.MISSING)
+    assert proposal.constraints == ()
+    assert "DESTINATION is missing" in proposal.unresolved_semantics
+    assert "SEMANTIC_RESOLVER_REQUIRED" not in proposal.ambiguity_reasons
 
 
 def test_u6h_b_b08_and_b15_explicit_corrections_supersede_earlier_bindings() -> None:

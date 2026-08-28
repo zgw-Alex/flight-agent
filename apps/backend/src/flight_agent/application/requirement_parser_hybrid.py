@@ -187,10 +187,15 @@ class ParserEvidenceExtractor:
             start = message.find(token)
             if start >= 0:
                 add(ParserEvidenceKind.ALTERNATIVE_TEXT, token, start, token)
+        unsupported_spans: set[tuple[int, int]] = set()
         for token in ("越便宜越好但别太早", "再从"):
             start = message.find(token)
             if start >= 0:
                 add(ParserEvidenceKind.UNSUPPORTED_TEXT, token, start, token)
+                unsupported_spans.add((start, start + len(token)))
+        for start, source_text in _material_semantic_residue_spans(message):
+            if (start, start + len(source_text)) not in unsupported_spans:
+                add(ParserEvidenceKind.UNSUPPORTED_TEXT, source_text, start, source_text)
         return tuple(evidence)
 
 
@@ -293,22 +298,24 @@ class ParserInterpretationRouter:
         evidence: tuple[ParserSemanticEvidence, ...],
     ) -> ParserSemanticIR:
         issues: list[ParserSemanticIssue] = []
-        if any("越便宜越好但别太早" == item.source_text for item in evidence):
-            return ParserSemanticIR(
-                ParserInterpretationStatus.SEMANTIC_RESOLVER_REQUIRED,
-                required_slots,
-                bindings,
-                (ParserSemanticIssue("SEMANTIC_RESOLVER_REQUIRED", "Complex preference relation requires semantic resolver", _ids_for(evidence, ParserEvidenceKind.UNSUPPORTED_TEXT)),),
-                evidence,
-            )
         for slot in required_slots:
             if slot.state is not ParserBindingState.RESOLVED:
                 issues.append(ParserSemanticIssue(slot.state.value, slot.message, slot.evidence_ids))
         for binding in bindings:
             if binding.state in {ParserBindingState.AMBIGUOUS, ParserBindingState.CONFLICTING, ParserBindingState.UNSUPPORTED}:
                 issues.append(ParserSemanticIssue(binding.state.value, f"{binding.target.value} is {binding.state.value}", binding.evidence_ids))
-        status = ParserInterpretationStatus.CLARIFICATION_REQUIRED if issues else ParserInterpretationStatus.RESOLVED
-        return ParserSemanticIR(status, required_slots, bindings, tuple(issues), evidence)
+        if issues:
+            return ParserSemanticIR(ParserInterpretationStatus.CLARIFICATION_REQUIRED, required_slots, bindings, tuple(issues), evidence)
+        semantic_resolver_evidence_ids = _semantic_resolver_required_evidence_ids(evidence)
+        if semantic_resolver_evidence_ids:
+            return ParserSemanticIR(
+                ParserInterpretationStatus.SEMANTIC_RESOLVER_REQUIRED,
+                required_slots,
+                bindings,
+                (ParserSemanticIssue("SEMANTIC_RESOLVER_REQUIRED", "Complex preference relation requires semantic resolver", semantic_resolver_evidence_ids),),
+                evidence,
+            )
+        return ParserSemanticIR(ParserInterpretationStatus.RESOLVED, required_slots, bindings, (), evidence)
 
 
 class DeterministicInitialProposalBuilder:
@@ -569,6 +576,33 @@ def _ids_for(evidence: tuple[ParserSemanticEvidence, ...], *kinds: ParserEvidenc
     return tuple(item.evidence_id for item in evidence if item.kind in kinds)
 
 
+def _semantic_resolver_required_evidence_ids(evidence: tuple[ParserSemanticEvidence, ...]) -> tuple[str, ...]:
+    return tuple(
+        item.evidence_id
+        for item in evidence
+        if item.kind is ParserEvidenceKind.UNSUPPORTED_TEXT and _requires_semantic_resolver(item.source_text)
+    )
+
+
+def _requires_semantic_resolver(source_text: str) -> bool:
+    compact = re.sub(r"\s+", "", source_text)
+    if compact == "越便宜越好但别太早":
+        return True
+    return any(re.fullmatch(pattern, compact) for pattern in _MATERIAL_SEMANTIC_RESIDUE_PATTERNS)
+
+
+def _material_semantic_residue_spans(message: str) -> tuple[tuple[int, str], ...]:
+    if not message.strip():
+        return ()
+    spans: list[tuple[int, str]] = []
+    for pattern in _MATERIAL_SEMANTIC_RESIDUE_PATTERNS:
+        for match in re.finditer(pattern, message):
+            source_text = match.group(0).strip("，,。；;、 ")
+            if source_text:
+                spans.append((match.start(), source_text))
+    return tuple(dict.fromkeys(spans))
+
+
 def _proposal_evidence(evidence: tuple[ParserSemanticEvidence, ...]) -> tuple[ProposalEvidence, ...]:
     return tuple(
         ProposalEvidence(
@@ -590,3 +624,8 @@ _LOCATION_ALIASES = {
     "上海": "SHA",
     "广州": "CAN",
 }
+_MATERIAL_SEMANTIC_RESIDUE_PATTERNS = (
+    r"(?:但|不过)?如果[^，,。；;、]*(?:便宜很多|便宜不少|转一次|转机一次|贵一点|特别合适)[^，,。；;、]*(?:也行|也可以|可以)?",
+    r"(?:但|不过)?[^，,。；;、]*(?:便宜很多|便宜不少)[^，,。；;、]*(?:转一次|转机一次)[^，,。；;、]*(?:也行|也可以|可以)",
+    r"(?:但|不过)?不一定非要直飞",
+)

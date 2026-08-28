@@ -6,12 +6,13 @@ from decimal import Decimal
 from typing import Any
 
 import pytest
-
 from flight_agent.adapters.deepseek_semantic_resolver import (
     DeepSeekSemanticResolver,
     deepseek_semantic_resolver_from_config,
 )
-from flight_agent.adapters.requirement_repository_memory import InMemoryRequirementRepository
+from flight_agent.adapters.requirement_repository_memory import (
+    InMemoryRequirementRepository,
+)
 from flight_agent.application import (
     AirportCanonicalization,
     NormalizationContext,
@@ -49,6 +50,7 @@ from flight_agent.ports import (
     CapabilityFailureKind,
     CommitStatus,
     InitialInterpreterPayload,
+    InitialRequirementProposal,
     InterpreterInput,
     InterpreterMode,
     LLMInvocationConfig,
@@ -307,6 +309,39 @@ def test_u6h_c_t3_parser_resolver_returns_through_builder_and_m3_without_inventi
     assert all(constraint.scope is not ConstraintScope.MAX_PRICE for constraint in outcome.requirement.constraints)
 
 
+def test_u6h_c_parser_resolver_invoked_for_material_initial_tail_without_inventing_bindings() -> None:
+    resolver = FakeResolver(
+        schema_payload(
+            {
+                "relations": [
+                    {
+                        "relation_kind": "ACKNOWLEDGE_COMPLEX_PRICE_TIME_RELATION",
+                        "evidence_ids": ["ev-unsupported-1"],
+                        "target": None,
+                        "value": None,
+                        "confidence": 0.74,
+                    }
+                ]
+            }
+        )
+    )
+
+    interpreter = SemanticResolverParserHybridInterpreter(resolver)
+    result = interpreter.interpret(initial_input("9月10日从北京去上海，最好直飞，但如果便宜很多转一次也行。"))
+
+    assert resolver.calls == 1
+    assert resolver.last_request is not None
+    assert any(item.source_text == "但如果便宜很多转一次也行" for item in resolver.last_request.evidence)
+    assert result.proposal is not None
+    assert isinstance(result.proposal, InitialRequirementProposal)
+    assert result.proposal.unresolved_semantics == ()
+    assert_constraint(result.proposal.constraints, ConstraintScope.ORIGIN_AIRPORT, AirportCode("PEK"))
+    assert_constraint(result.proposal.constraints, ConstraintScope.DESTINATION_AIRPORT, AirportCode("SHA"))
+    assert_constraint(result.proposal.constraints, ConstraintScope.DEPARTURE_DATE, LocalDate(date(2026, 9, 10)))
+    assert all(constraint.scope is not ConstraintScope.MAX_PRICE for constraint in result.proposal.constraints)
+    assert all(constraint.scope is not ConstraintScope.MAX_STOPS for constraint in result.proposal.constraints)
+
+
 def test_u6h_c_c11_c12_t4_adapter_maps_malformed_retry_and_deadline() -> None:
     request = minimal_request()
     malformed = DeepSeekSemanticResolver(
@@ -399,9 +434,11 @@ class FakeResolver:
     def __init__(self, payload: dict[str, Any]) -> None:
         self._payload = payload
         self.calls = 0
+        self.last_request: SemanticResolverRequest | None = None
 
     def resolve(self, request: SemanticResolverRequest) -> SemanticResolverResult:
         self.calls += 1
+        self.last_request = request
         return parse_semantic_resolver_response(
             {**self._payload, "request_id": request.request_id},
             request,
