@@ -1,17 +1,27 @@
 from __future__ import annotations
 
 import importlib.util
+import sys
 from pathlib import Path
 from typing import Any
+
+from flight_agent.ports.semantic_resolver import (
+    SemanticResolverRelation,
+    SemanticResolverResponse,
+    SemanticResolverResult,
+    SemanticResolverStatus,
+)
 
 HARNESS_PATH = Path(__file__).parents[3] / "scripts" / "dev" / "m8_nl_manual_harness.py"
 
 
 def load_harness():
-    spec = importlib.util.spec_from_file_location("m8_nl_manual_harness", HARNESS_PATH)
+    module_name = "m8_nl_manual_harness"
+    spec = importlib.util.spec_from_file_location(module_name, HARNESS_PATH)
     assert spec is not None
     module = importlib.util.module_from_spec(spec)
     assert spec.loader is not None
+    sys.modules[module_name] = module
     spec.loader.exec_module(module)
     return module
 
@@ -29,6 +39,8 @@ def test_parser_mode_invokes_existing_parser_boundary_and_renders_resolved_outpu
     assert report["interpretation_status"] == "RESOLVED"
     assert report["routing"] == "deterministic"
     assert report["deepseek_called"] == "NO"
+    assert report["requested_resolver"] == "deterministic"
+    assert report["actual_provider"] == "DETERMINISTIC_ONLY"
     assert report["authoritative_commit_performed"] == "NO"
     assert _contains(report["proposal_preview"], "MAX_PRICE")
     assert _contains(report["proposal_preview"], "MAX_STOPS")
@@ -55,7 +67,9 @@ def test_deepseek_metadata_is_only_displayed_from_existing_safe_metadata() -> No
     )
 
     assert report["deepseek_called"] == "NO"
-    assert report["model_identity"] == "deepseek-v4-flash"
+    assert report["configured_model"] == "deepseek-v4-flash"
+    assert report["actual_invoked_model"] == "NOT AVAILABLE"
+    assert report["model_identity"] == "NOT AVAILABLE"
     assert report["prompt_identity"] == "NOT AVAILABLE"
     assert report["schema_adapter_config_identity"]["adapter_version"] == "NOT AVAILABLE"
 
@@ -69,6 +83,57 @@ def test_secret_values_are_never_rendered(monkeypatch) -> None:
 
     assert not _contains(report, "super-secret-test-key")
     assert report["runtime_mode"] == "deterministic"
+
+
+def test_deepseek_mode_uses_real_resolver_composition_path_when_configured(monkeypatch) -> None:
+    harness = load_harness()
+    calls: list[dict[str, Any]] = []
+
+    def resolver_from_config(**kwargs):
+        calls.append(kwargs)
+        return FakeResolver()
+
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "super-secret-test-key")
+    monkeypatch.setenv("LLM_REQUIREMENT_INTERPRETER_PROVIDER", "fake")
+    monkeypatch.setattr(harness, "deepseek_semantic_resolver_from_config", resolver_from_config)
+
+    report = harness.run_capability(
+        "parser",
+        "9月10日从北京去上海，越便宜越好但别太早",
+        "deepseek",
+    )
+
+    assert len(calls) == 1
+    assert calls[0]["api_key"] == "super-secret-test-key"
+    assert report["requested_resolver"] == "deepseek"
+    assert report["selected_resolver"] == "deepseek"
+    assert report["configured_provider"] == "deepseek"
+    assert report["settings_requirement_interpreter_provider"] == "fake"
+    assert report["actual_provider"] == "DEEPSEEK"
+    assert report["deepseek_called"] == "YES"
+    assert report["routing"] == "deepseek_resolver_invoked"
+    assert report["actual_invoked_model"] == "deepseek-test-model"
+    assert not _contains(report, "super-secret-test-key")
+
+
+def test_deepseek_mode_unavailable_is_explicit_and_truthful(monkeypatch) -> None:
+    harness = load_harness()
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "")
+    monkeypatch.setenv("LLM_REQUIREMENT_INTERPRETER_PROVIDER", "fake")
+
+    report = harness.run_capability(
+        "parser",
+        "9月10日从北京去上海，越便宜越好但别太早",
+        "deepseek",
+    )
+
+    assert report["requested_resolver"] == "deepseek"
+    assert report["selected_resolver"] == "deterministic"
+    assert report["configured_provider"] == "deepseek"
+    assert report["deepseek_runtime_available"] == "NO"
+    assert report["fallback_used"] == "YES"
+    assert report["deepseek_called"] == "NO"
+    assert report["routing"] == "semantic_resolver_required_but_deepseek_unavailable"
 
 
 def test_harness_does_not_trigger_search_or_publication() -> None:
@@ -97,6 +162,7 @@ def test_patch_mode_uses_approved_current_requirement_context_without_commit() -
     assert report["capability"] == "Patch Understanding"
     assert report["base_requirement"]["version"] == {"value": 1}
     assert report["result_status"] == "SUCCESS"
+    assert report["actual_provider"] == "DETERMINISTIC_ONLY"
     assert _contains(report["proposal_preview"], "REMOVE_CONSTRAINT")
     assert _contains(report["proposal_preview"], "ADD_PREFERENCE")
     assert report["authoritative_commit_performed"] == "NO"
@@ -121,6 +187,41 @@ def test_no_frontend_dependency_is_introduced() -> None:
     assert "react" not in source
 
 
+def test_auto_mode_preserves_current_hybrid_routing(monkeypatch) -> None:
+    harness = load_harness()
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "super-secret-test-key")
+    monkeypatch.setenv("LLM_REQUIREMENT_INTERPRETER_PROVIDER", "fake")
+
+    report = harness.run_capability(
+        "parser",
+        "9月10日从北京去上海，越便宜越好但别太早",
+        "auto",
+    )
+
+    assert report["requested_resolver"] == "auto"
+    assert report["selected_resolver"] == "deterministic"
+    assert report["deepseek_called"] == "NO"
+    assert report["routing"] == "semantic_resolver_required_not_called"
+
+
+def test_existing_fly_destination_semantics_are_unchanged(monkeypatch) -> None:
+    harness = load_harness()
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "super-secret-test-key")
+
+    report = harness.run_capability(
+        "parser",
+        "我想9月10日从北京飞上海，预算1000元以内，必须直飞。",
+        "deepseek",
+    )
+
+    assert report["requested_resolver"] == "deepseek"
+    assert report["selected_resolver"] == "deepseek"
+    assert report["actual_provider"] == "NOT_INVOKED"
+    assert report["deepseek_called"] == "NO"
+    assert report["routing"] == "deterministic_front_half_no_resolver_call"
+    assert _contains(report["ambiguity_unresolved"], "DESTINATION is missing")
+
+
 def _contains(value: Any, needle: str) -> bool:
     if isinstance(value, str):
         return needle in value
@@ -129,3 +230,27 @@ def _contains(value: Any, needle: str) -> bool:
     if isinstance(value, list | tuple):
         return any(_contains(item, needle) for item in value)
     return needle in str(value)
+
+
+class FakeResolver:
+    def resolve(self, request) -> SemanticResolverResult:
+        return SemanticResolverResult.success(
+            SemanticResolverResponse(
+                request_id=request.request_id,
+                status=SemanticResolverStatus.RESOLVED,
+                relations=(
+                    SemanticResolverRelation(
+                        "ACKNOWLEDGE_COMPLEX_PRICE_TIME_RELATION",
+                        (request.evidence[-1].evidence_id,),
+                        confidence=0.75,
+                    ),
+                ),
+                model_metadata=(
+                    ("provider", "DEEPSEEK"),
+                    ("model_id", "deepseek-test-model"),
+                    ("adapter_version", "fake-safe-test-adapter"),
+                    ("prompt_version", "m8-u6h-c-semantic-resolver-prompt-v1"),
+                    ("contract_version", "m8-u6h-c-v1.1"),
+                ),
+            )
+        )

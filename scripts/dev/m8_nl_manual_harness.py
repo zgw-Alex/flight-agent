@@ -6,7 +6,7 @@ import argparse
 import json
 import sys
 import time
-from dataclasses import fields, is_dataclass
+from dataclasses import dataclass, fields, is_dataclass
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from enum import Enum
@@ -58,6 +58,17 @@ if hasattr(sys.stderr, "reconfigure"):
 
 CAPABILITY_PARSER = "parser"
 CAPABILITY_PATCH = "patch"
+
+
+@dataclass(frozen=True)
+class RuntimeSelection:
+    requested_resolver: str
+    selected_resolver: str
+    configured_provider: str
+    settings_requirement_interpreter_provider: str
+    deepseek_runtime_available: bool
+    fallback_used: bool
+    runtime_note: str
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -124,8 +135,8 @@ def _run_once(capability: str, text: str, resolver_mode: str) -> int:
 def run_capability(capability: str, text: str, resolver_mode: str = "auto") -> dict[str, Any]:
     started = time.perf_counter()
     settings = Settings()
-    resolved_mode, resolver_note = _resolve_runtime_mode(settings, resolver_mode)
-    interpreter = _interpreter_for(capability, resolved_mode, settings)
+    runtime = _resolve_runtime(settings, resolver_mode)
+    interpreter = _interpreter_for(capability, runtime.selected_resolver, settings)
     context = _patch_context() if capability == CAPABILITY_PATCH else None
     interpreter_input = _interpreter_input(capability, text)
     result = interpreter.interpret(interpreter_input, context)
@@ -133,44 +144,97 @@ def run_capability(capability: str, text: str, resolver_mode: str = "auto") -> d
     ir = getattr(interpreter, "last_ir", None)
     resolver_result = getattr(interpreter, "last_resolver_result", None)
     proposal = result.proposal
+    actual_provider = _actual_provider(runtime, resolver_result)
     return {
         "capability": "Initial Parser" if capability == CAPABILITY_PARSER else "Patch Understanding",
         "input_text": text,
         "interpretation_status": _status_from(ir, result),
-        "routing": _routing_from(ir, resolver_result),
+        "routing": _routing_from(ir, resolver_result, runtime),
         "deepseek_called": "YES" if resolver_result is not None else "NO",
-        "runtime_mode": resolved_mode,
-        "runtime_note": resolver_note,
+        "requested_resolver": runtime.requested_resolver,
+        "runtime_mode": runtime.selected_resolver,
+        "selected_resolver": runtime.selected_resolver,
+        "configured_provider": runtime.configured_provider,
+        "settings_requirement_interpreter_provider": runtime.settings_requirement_interpreter_provider,
+        "actual_provider": actual_provider,
+        "deepseek_runtime_available": "YES" if runtime.deepseek_runtime_available else "NO",
+        "fallback_used": "YES" if runtime.fallback_used else "NO",
+        "runtime_note": runtime.runtime_note,
         "result_status": _safe_value(result.status),
         "base_requirement": _base_identity(context),
         "structured_interpretation": _safe_value(ir) if ir is not None else "NOT AVAILABLE",
         "proposal_preview": _safe_value(proposal) if proposal is not None else "NOT AVAILABLE",
         "evidence": _safe_value(getattr(ir, "evidence", ())) if ir is not None else "NOT AVAILABLE",
         "ambiguity_unresolved": _ambiguity_unresolved(ir, proposal),
-        "model_identity": _metadata_value(resolver_result, "model_id", settings.deepseek_default_model),
+        "configured_model": settings.deepseek_default_model,
+        "actual_invoked_model": _metadata_value(resolver_result, "model_id"),
+        "model_identity": _metadata_value(resolver_result, "model_id"),
         "prompt_identity": _metadata_value(resolver_result, "prompt_version"),
         "schema_adapter_config_identity": {
             "contract_version": _metadata_value(resolver_result, "contract_version"),
             "adapter_version": _metadata_value(resolver_result, "adapter_version"),
-            "provider": _metadata_value(resolver_result, "provider"),
-            "configured_provider": settings.llm_requirement_interpreter_provider,
+            "actual_provider": actual_provider,
+            "configured_provider": runtime.configured_provider,
+            "settings_requirement_interpreter_provider": runtime.settings_requirement_interpreter_provider,
         },
-        "invocation_identity": "NOT AVAILABLE",
+        "invocation_identity": _invocation_identity(resolver_result),
+        "safe_runtime_failure": _safe_runtime_failure(resolver_result),
         "latency_ms": elapsed_ms,
         "authoritative_commit_performed": "NO",
     }
 
 
-def _resolve_runtime_mode(settings: Settings, resolver_mode: str) -> tuple[str, str]:
+def _resolve_runtime(settings: Settings, resolver_mode: str) -> RuntimeSelection:
+    settings_provider = settings.llm_requirement_interpreter_provider
     if resolver_mode == "deterministic":
-        return "deterministic", "DeepSeek disabled by --resolver deterministic"
+        return RuntimeSelection(
+            requested_resolver=resolver_mode,
+            selected_resolver="deterministic",
+            configured_provider="deterministic",
+            settings_requirement_interpreter_provider=settings_provider,
+            deepseek_runtime_available=settings.deepseek_configured,
+            fallback_used=False,
+            runtime_note="DeepSeek disabled by --resolver deterministic",
+        )
     if resolver_mode == "deepseek":
         if settings.deepseek_configured:
-            return "deepseek", "DeepSeek enabled by --resolver deepseek"
-        return "deterministic", "DeepSeek requested but DEEPSEEK_API_KEY is not configured"
+            return RuntimeSelection(
+                requested_resolver=resolver_mode,
+                selected_resolver="deepseek",
+                configured_provider="deepseek",
+                settings_requirement_interpreter_provider=settings_provider,
+                deepseek_runtime_available=True,
+                fallback_used=False,
+                runtime_note="DeepSeek runtime selected by --resolver deepseek",
+            )
+        return RuntimeSelection(
+            requested_resolver=resolver_mode,
+            selected_resolver="deterministic",
+            configured_provider="deepseek",
+            settings_requirement_interpreter_provider=settings_provider,
+            deepseek_runtime_available=False,
+            fallback_used=True,
+            runtime_note="DeepSeek requested but DEEPSEEK_API_KEY is not configured; deterministic fallback used",
+        )
     if settings.real_requirement_interpreter_enabled and settings.deepseek_configured:
-        return "deepseek", "DeepSeek enabled by typed settings"
-    return "deterministic", "DeepSeek not enabled/configured; deterministic hybrid only"
+        return RuntimeSelection(
+            requested_resolver=resolver_mode,
+            selected_resolver="deepseek",
+            configured_provider=settings_provider,
+            settings_requirement_interpreter_provider=settings_provider,
+            deepseek_runtime_available=True,
+            fallback_used=False,
+            runtime_note="DeepSeek enabled by typed settings",
+        )
+    return RuntimeSelection(
+        requested_resolver=resolver_mode,
+        selected_resolver="deterministic",
+        configured_provider=settings_provider,
+        settings_requirement_interpreter_provider=settings_provider,
+        deepseek_runtime_available=settings.deepseek_configured,
+        fallback_used=False,
+        runtime_note="DeepSeek not enabled/configured; deterministic hybrid only",
+    )
 
 
 def _interpreter_for(capability: str, runtime_mode: str, settings: Settings):
@@ -256,17 +320,28 @@ def _print_report(report: dict[str, Any]) -> None:
     print(f"Disposition: {report['interpretation_status']}")
     print(f"Routing: {report['routing']}")
     print(f"DeepSeek called: {report['deepseek_called']}")
+    print(f"Requested resolver: {report['requested_resolver']}")
     print(f"Runtime mode: {report['runtime_mode']}")
+    print(f"Configured provider: {report['configured_provider']}")
+    print(
+        "Settings requirement interpreter provider: "
+        f"{report['settings_requirement_interpreter_provider']}"
+    )
+    print(f"Actual provider: {report['actual_provider']}")
+    print(f"DeepSeek runtime available: {report['deepseek_runtime_available']}")
+    print(f"Fallback used: {report['fallback_used']}")
     print(f"Runtime note: {report['runtime_note']}")
     if report["base_requirement"] != "NOT AVAILABLE":
         print(f"Base Requirement: {json.dumps(report['base_requirement'], ensure_ascii=False)}")
-    print(f"Model identity: {report['model_identity']}")
+    print(f"Configured model: {report['configured_model']}")
+    print(f"Actual invoked model: {report['actual_invoked_model']}")
     print(f"Prompt identity: {report['prompt_identity']}")
     print(
         "Schema/adapter/config identity: "
         f"{json.dumps(report['schema_adapter_config_identity'], ensure_ascii=False)}"
     )
     print(f"Invocation/request identity: {report['invocation_identity']}")
+    print(f"Safe runtime failure: {report['safe_runtime_failure']}")
     print(f"Latency: {report['latency_ms']} ms")
     print(f"Authoritative commit performed: {report['authoritative_commit_performed']}")
     print()
@@ -282,13 +357,28 @@ def _status_from(ir: object | None, result: object) -> str:
     return str(_safe_value(getattr(result, "status", "NOT AVAILABLE")))
 
 
-def _routing_from(ir: object | None, resolver_result: object | None) -> str:
+def _routing_from(ir: object | None, resolver_result: object | None, runtime: RuntimeSelection) -> str:
     if resolver_result is not None:
-        return "deepseek_fallback"
+        return "deepseek_resolver_invoked"
     status = _status_from(ir, object())
     if status == "SEMANTIC_RESOLVER_REQUIRED":
+        if runtime.requested_resolver == "deepseek" and not runtime.deepseek_runtime_available:
+            return "semantic_resolver_required_but_deepseek_unavailable"
         return "semantic_resolver_required_not_called"
+    if runtime.selected_resolver == "deepseek":
+        return "deterministic_front_half_no_resolver_call"
     return "deterministic"
+
+
+def _actual_provider(runtime: RuntimeSelection, resolver_result: object | None) -> str:
+    provider = _metadata_value(resolver_result, "provider")
+    if provider != "NOT AVAILABLE":
+        return provider
+    if resolver_result is not None and runtime.selected_resolver == "deepseek":
+        return "DEEPSEEK"
+    if runtime.selected_resolver == "deepseek":
+        return "NOT_INVOKED"
+    return "DETERMINISTIC_ONLY"
 
 
 def _base_identity(context: RequirementInterpretationContext | None) -> dict[str, Any] | str:
@@ -317,6 +407,26 @@ def _metadata_value(resolver_result: object | None, key: str, fallback: str = "N
         if meta_key == key:
             return value
     return fallback
+
+
+def _invocation_identity(resolver_result: object | None) -> str:
+    response = getattr(resolver_result, "response", None)
+    request_id = getattr(response, "request_id", None)
+    if isinstance(request_id, str) and request_id.strip():
+        return request_id
+    return "NOT AVAILABLE"
+
+
+def _safe_runtime_failure(resolver_result: object | None) -> dict[str, Any] | str:
+    failure = getattr(resolver_result, "failure", None)
+    if failure is None:
+        return "NONE"
+    return {
+        "kind": _safe_value(getattr(failure, "kind", "NOT AVAILABLE")),
+        "code": _safe_value(getattr(failure, "code", "NOT AVAILABLE")),
+        "message": _safe_value(getattr(failure, "message", "NOT AVAILABLE")),
+        "retryable": _safe_value(getattr(failure, "retryable", "NOT AVAILABLE")),
+    }
 
 
 def _safe_value(value: Any) -> Any:
