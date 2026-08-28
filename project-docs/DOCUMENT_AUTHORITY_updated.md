@@ -65,6 +65,10 @@ Scope。历史 Reference 仅用于追溯，不得覆盖正式收口结论。
         -   对 M3 Requirement Contract 仅增量补充 `MAX_STOPS`：formal Hard Constraint、non-negative integer value、canonical `AT_OR_BEFORE` / `candidate.stop_count <= max_stops`，其中 `MAX_STOPS=0` 表示 Hard “必须直飞”。
         -   不新增 `DIRECT_FLIGHT` Hard family，不批准 MIN_STOPS / EXACT_STOPS / stop-airport / layover-duration 等额外 Stops family。
         -   CA01 Decision Status：ACCEPTED；Implementation Status：COMPLETE。
+    -   `03_implementation-roadmap/milestones/M8/机票筛选Agent_M8-U6H-A_Patch_Hybrid_Semantic_Pipeline_Specification_V1.1.docx`
+        -   第三阶段 M8-U6H-A Patch Hybrid Semantic Pipeline 的当前 Implementation Unit Authority。
+        -   V1.1 继承 V1.0 的 deterministic Patch Hybrid 边界，并以 M8-U6H-CA01 accepted + implemented 为恢复基线。
+        -   V1.1 取代 V1.0 作为当前执行依据；V1.0 保留为历史治理证据并标记 SUPERSEDED BY V1.1。
     -   `03_implementation-roadmap/milestones/M6/机票筛选Agent_第三阶段_M6_Complete_Decision_Engine正式收口_V1.0.docx`
         -   第三阶段 M6 Complete Decision Engine 的正式 Milestone Closure Evidence。
         -   记录 M6-U1～M6-U6、M6-CA01-I1、GS-01～GS-08、P0-01～P0-14 与 Aggregate Exit Gate G1～G12 已 PASS。

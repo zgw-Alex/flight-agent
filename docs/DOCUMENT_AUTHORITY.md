@@ -17,6 +17,7 @@ From highest to lowest authority:
 4. Current approved Milestone or Implementation Unit contract:
    - `project-docs/03_implementation-roadmap/milestones/M8/机票筛选Agent_第三阶段_M8_Real_LLM_Specification_V1.0.docx`
    - `project-docs/03_implementation-roadmap/milestones/M8/机票筛选Agent_M8-U6H-CA01_MAX_STOPS_Hard_Constraint_Contract_Amendment_Specification_V1.0.docx`
+   - `project-docs/03_implementation-roadmap/milestones/M8/机票筛选Agent_M8-U6H-A_Patch_Hybrid_Semantic_Pipeline_Specification_V1.1.docx`
    - `project-docs/03_implementation-roadmap/milestones/M7/机票筛选Agent_第三阶段_M7_Patch_Impact_Orchestrator_Specification_V1.0.docx`
    - `project-docs/03_implementation-roadmap/milestones/M7/机票筛选Agent_第三阶段_M7正式收口_V1.1.docx`
    - `project-docs/03_implementation-roadmap/milestones/M6/机票筛选Agent_第三阶段_M6_Complete_Decision_Engine正式收口_V1.0.docx`
@@ -48,6 +49,7 @@ From highest to lowest authority:
 - The M7 Patch + Impact + Orchestrator Specification remains the Contract Authority / Implementation & Acceptance Baseline for M7. It covers Requirement Semantic Diff, ImpactDecision, DataAction, selective ExecutionPlan, execution concurrency, Version Guard, and Publication Guard, while preserving M1-M6 stable semantics. The M7 formal closure records M7-U1 through M7-U6, Golden Scenarios GS-01 through GS-14, and Aggregate Exit Gate G1 through G12 as PASS, with Contract Amendment NONE and current-main GitHub Actions CI PASS on run 33041817149. M7 status: CLOSED.
 - The M8 Real LLM Specification is the Contract Authority / Implementation & Acceptance Baseline for M8. It covers provider-neutral LLM capability contracts, structured outputs, prompt/context architecture, invocation runtime, DeepSeek candidate evaluation, baseline promotion, security/telemetry boundaries, and aggregate Real Cloud exit gates, while preserving M1-M7 stable semantics. M8 status: READY / eligible for M8-U1 implementation.
 - M8-U6H-CA01 is the accepted and implemented additive Contract Amendment Authority for MAX_STOPS as a formal non-negative-integer hard constraint. It preserves M3 Patch/Requirement authority, M6 decision authority, M7 SemanticDiff/Impact authority, and does not add a DIRECT_FLIGHT hard family or any broader stops family.
+- M8-U6H-A Patch Hybrid Semantic Pipeline Specification V1.1 is the current Implementation Unit Authority for deterministic-first Patch Hybrid execution. It supersedes the V1.0 U6H-A specification for active implementation while retaining V1.0 as historical governance evidence of the pre-CA01 blocker.
 - The M2 Core Domain Contract Specification remains the Contract Authority for M2 Domain semantics; the M2 formal closure records that M2-U1 through M2-U5 and the M2 Aggregate Exit Gate are complete with Contract Amendment NONE.
 - The M1 Architecture Skeleton closure controls the current architecture dependency guard and composition-root boundary, provided it does not conflict with higher authority.
 
@@ -64,7 +66,7 @@ Phase 1-19 summaries are useful for traceability, but they are not default prima
 
 ## Superseded Documents
 
-No documents are marked superseded in M1.
+- `project-docs/03_implementation-roadmap/milestones/M8/机票筛选Agent_第三阶段_M8-U6H-A_Patch_Hybrid_Semantic_Pipeline_Specification_V1.0.docx` is superseded for active U6H-A implementation by `project-docs/03_implementation-roadmap/milestones/M8/机票筛选Agent_M8-U6H-A_Patch_Hybrid_Semantic_Pipeline_Specification_V1.1.docx`; V1.0 remains historical governance evidence and must not be deleted.
 
 To mark a document as superseded, record:
 
