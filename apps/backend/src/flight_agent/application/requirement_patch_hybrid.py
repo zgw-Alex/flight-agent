@@ -400,8 +400,7 @@ def _clarification_reason(message: str) -> str | None:
 def _raw_mutations(message: str, evidence: tuple[SemanticEvidence, ...]) -> tuple[SemanticMutation, ...]:
     mutations: list[SemanticMutation] = []
     numbers = tuple(item for item in evidence if item.kind is SemanticEvidenceKind.VALUE_TEXT)
-    money_numbers = tuple(item for item in numbers if "." not in item.source_text)
-    last_number = money_numbers[-1] if money_numbers else None
+    last_number = numbers[-1] if numbers else None
     if _mentions_price(message) and last_number is not None:
         mutations.append(
             SemanticMutation(
@@ -432,7 +431,7 @@ def _raw_mutations(message: str, evidence: tuple[SemanticEvidence, ...]) -> tupl
                 importance_signal=SemanticImportanceSignal.HARD,
             )
         )
-    if "必须直飞" in message or "还是必须直飞" in message:
+    if "必须直飞" in message or "继续要求直飞" in message:
         mutations.append(
             SemanticMutation(
                 target=SemanticTarget.MAX_STOPS,
@@ -456,6 +455,14 @@ def _raw_mutations(message: str, evidence: tuple[SemanticEvidence, ...]) -> tupl
                 target=SemanticTarget.FEWER_STOPS,
                 operation=SemanticOperation.SET,
                 importance_signal=SemanticImportanceSignal.SOFT,
+            )
+        )
+    if "不用必须" in message and not ("最好" in message or "就行" in message):
+        mutations.append(
+            SemanticMutation(
+                target=SemanticTarget.MAX_STOPS,
+                operation=SemanticOperation.REMOVE,
+                importance_signal=SemanticImportanceSignal.HARD,
             )
         )
     if "不用必须" in message and ("最好" in message or "就行" in message):
@@ -515,6 +522,8 @@ def _max_price_operation(
     if len(matches) == 0:
         return (PatchProposalOperation(PatchProposalAction.ADD_CONSTRAINT, item=item),)
     if len(matches) == 1:
+        if _hard_constraint_equivalent(matches[0], item):
+            return ()
         return (
             PatchProposalOperation(
                 PatchProposalAction.REPLACE_CONSTRAINT,
@@ -545,6 +554,8 @@ def _max_stops_operation(
     if len(matches) == 0:
         return (PatchProposalOperation(PatchProposalAction.ADD_CONSTRAINT, item=item),)
     if len(matches) == 1:
+        if _hard_constraint_equivalent(matches[0], item):
+            return ()
         return (
             PatchProposalOperation(
                 PatchProposalAction.REPLACE_CONSTRAINT,
@@ -569,16 +580,33 @@ def _soft_direct_operation(
     if len(matches) == 0:
         operations.append(PatchProposalOperation(PatchProposalAction.ADD_PREFERENCE, item=item))
     elif len(matches) == 1:
-        operations.append(
-            PatchProposalOperation(
-                PatchProposalAction.REPLACE_PREFERENCE,
-                item=item,
-                target_id=matches[0].preference_id,
+        if not _soft_preference_equivalent(matches[0], item):
+            operations.append(
+                PatchProposalOperation(
+                    PatchProposalAction.REPLACE_PREFERENCE,
+                    item=item,
+                    target_id=matches[0].preference_id,
+                )
             )
-        )
     else:
         return "FEWER_STOPS preference target is ambiguous"
     return tuple(operations)
+
+
+def _hard_constraint_equivalent(current: HardConstraint, desired: HardConstraint) -> bool:
+    return (
+        current.scope is desired.scope
+        and current.operator is desired.operator
+        and current.value == desired.value
+    )
+
+
+def _soft_preference_equivalent(current: SoftPreference, desired: SoftPreference) -> bool:
+    return (
+        current.scope is desired.scope
+        and current.importance is desired.importance
+        and current.value == desired.value
+    )
 
 
 def _proposal_evidence(evidence: tuple[SemanticEvidence, ...]) -> tuple[ProposalEvidence, ...]:

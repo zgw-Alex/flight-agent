@@ -6,9 +6,12 @@ from decimal import Decimal
 from typing import Any
 
 import pytest
-
-from flight_agent.adapters.deepseek_semantic_resolver import deepseek_semantic_resolver_from_config
-from flight_agent.adapters.requirement_repository_memory import InMemoryRequirementRepository
+from flight_agent.adapters.deepseek_semantic_resolver import (
+    deepseek_semantic_resolver_from_config,
+)
+from flight_agent.adapters.requirement_repository_memory import (
+    InMemoryRequirementRepository,
+)
 from flight_agent.application import (
     HYBRID_EVAL_DATASET_VERSION,
     AirportCanonicalization,
@@ -101,7 +104,7 @@ def test_u6h_d_d01_to_d05_and_d08_to_d14_deterministic_routing_zero_call_and_bou
     _, direct_patch = build_deterministic_patch_proposal("直飞不用必须，最好就行", current)
     assert len(direct_patch.operations) == 2
     _, no_op = build_deterministic_patch_proposal("预算还是1500", current)
-    assert no_op.operations[0].item is not None
+    assert no_op.operations == ()
     ambiguous_ir, ambiguous_patch = build_deterministic_patch_proposal("把那个限制删掉", current)
     assert ambiguous_ir.disposition is ResolutionDisposition.CLARIFICATION_REQUIRED
     assert ambiguous_patch.operations == ()

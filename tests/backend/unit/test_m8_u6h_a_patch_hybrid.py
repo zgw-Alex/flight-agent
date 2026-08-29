@@ -4,7 +4,9 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 
-from flight_agent.adapters.requirement_repository_memory import InMemoryRequirementRepository
+from flight_agent.adapters.requirement_repository_memory import (
+    InMemoryRequirementRepository,
+)
 from flight_agent.application import (
     DeterministicPatchHybridInterpreter,
     MutationConsolidator,
@@ -71,15 +73,44 @@ def test_u6h_a_a03_a04_same_value_no_change_and_remove_use_existing_patch_author
     current = requirement_with(max_price_constraint(1500))
 
     _, same_value = build_deterministic_patch_proposal("预算还是1500", current)
-    no_change = apply_patch_proposal(current, same_value, recorded_at=instant(2))
-    assert no_change.status is PatchTransitionStatus.NO_CHANGE
-    assert no_change.requirement is current
+    assert same_value.operations == ()
 
     _, remove_budget = build_deterministic_patch_proposal("取消预算限制", current)
     removed = apply_patch_proposal(current, remove_budget, recorded_at=instant(3))
     assert removed.status is PatchTransitionStatus.APPLIED
     assert removed.requirement is not None
     assert removed.requirement.constraints == ()
+
+
+def test_u6h_a_price_equivalence_is_base_state_based_not_word_based() -> None:
+    current = requirement_with(max_price_constraint(1500))
+
+    for message in ("预算1500", "预算还是1500", "预算保持1500", "价格1500.0"):
+        ir, proposal = build_deterministic_patch_proposal(message, current)
+
+        assert ir.disposition is ResolutionDisposition.RESOLVED
+        assert proposal.operations == ()
+
+    _, changed = build_deterministic_patch_proposal("预算改成1800", current)
+    assert tuple(operation.action for operation in changed.operations) == (
+        PatchProposalAction.REPLACE_CONSTRAINT,
+    )
+    assert changed.operations[0].target_id == ConstraintId("max-price")
+    assert_price_constraint(changed.operations[0].item, Decimal(1800))
+
+
+def test_u6h_a_ambiguous_or_unknown_value_does_not_become_no_op() -> None:
+    current = requirement_with(max_price_constraint(1500), max_stops_constraint(0))
+
+    ambiguous_ir, ambiguous = build_deterministic_patch_proposal("刚才那个还是1500", current)
+    assert ambiguous_ir.disposition is ResolutionDisposition.CLARIFICATION_REQUIRED
+    assert ambiguous.operations == ()
+    assert ambiguous.unresolved_semantics == ("No deterministic patch semantics found",)
+
+    unknown_ir, unknown = build_deterministic_patch_proposal("预算还是一千五", current)
+    assert unknown_ir.disposition is ResolutionDisposition.CLARIFICATION_REQUIRED
+    assert unknown.operations == ()
+    assert unknown.unresolved_semantics == ("No deterministic patch semantics found",)
 
 
 def test_u6h_a_a05_a06_direct_flight_hard_maps_to_max_stops_and_soft_stays_preference() -> None:
@@ -101,6 +132,16 @@ def test_u6h_a_a05_a06_direct_flight_hard_maps_to_max_stops_and_soft_stays_prefe
     assert not hasattr(ConstraintScope, "DIRECT_FLIGHT")
 
 
+def test_u6h_a_direct_flight_hard_equivalence_is_no_op_against_base() -> None:
+    current = requirement_with(max_stops_constraint(0))
+
+    for message in ("必须直飞", "还是必须直飞", "继续要求直飞"):
+        ir, proposal = build_deterministic_patch_proposal(message, current)
+
+        assert ir.disposition is ResolutionDisposition.RESOLVED
+        assert proposal.operations == ()
+
+
 def test_u6h_a_a07_hard_to_soft_direct_conversion_is_atomic_in_one_patch_set() -> None:
     current = requirement_with(max_stops_constraint(0))
     _, proposal = build_deterministic_patch_proposal("直飞不用必须，最好就行", current)
@@ -117,6 +158,17 @@ def test_u6h_a_a07_hard_to_soft_direct_conversion_is_atomic_in_one_patch_set() -
     assert applied.requirement.version == RequirementVersion(2)
     assert applied.requirement.constraints == ()
     assert applied.requirement.preferences[0].scope is PreferenceScope.FEWER_STOPS
+
+
+def test_u6h_a_remove_hard_direct_without_soft_preference_remains_remove() -> None:
+    current = requirement_with(max_stops_constraint(0))
+    ir, proposal = build_deterministic_patch_proposal("直飞不用必须", current)
+
+    assert ir.disposition is ResolutionDisposition.RESOLVED
+    assert tuple(operation.action for operation in proposal.operations) == (
+        PatchProposalAction.REMOVE_CONSTRAINT,
+    )
+    assert proposal.operations[0].target_id == ConstraintId("max-stops")
 
 
 def test_u6h_a_a08_to_a10_correction_multi_target_and_missing_exact_value() -> None:
