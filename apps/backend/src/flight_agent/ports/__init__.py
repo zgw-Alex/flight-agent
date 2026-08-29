@@ -117,6 +117,8 @@ from flight_agent.ports.requirement_repository import (
 from flight_agent.ports.semantic_resolver import (
     SEMANTIC_RESOLVER_CONTRACT_VERSION,
     SEMANTIC_RESOLVER_PROMPT_VERSION,
+    SEMANTIC_RESOLVER_PROMPT_VERSION_V1,
+    SEMANTIC_RESOLVER_PROMPT_VERSION_V2,
     SemanticResolver,
     SemanticResolverEvidence,
     SemanticResolverFailure,
@@ -133,6 +135,8 @@ from flight_agent.ports.semantic_resolver import (
 __all__ = [
     "SEMANTIC_RESOLVER_CONTRACT_VERSION",
     "SEMANTIC_RESOLVER_PROMPT_VERSION",
+    "SEMANTIC_RESOLVER_PROMPT_VERSION_V1",
+    "SEMANTIC_RESOLVER_PROMPT_VERSION_V2",
     "CandidateMerger",
     "CapabilityFailure",
     "CapabilityFailureKind",

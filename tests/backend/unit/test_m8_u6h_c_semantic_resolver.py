@@ -67,6 +67,9 @@ from flight_agent.ports import (
 from flight_agent.ports.llm_invocation import LLMInvocationId
 from flight_agent.ports.semantic_resolver import (
     SEMANTIC_RESOLVER_CONTRACT_VERSION,
+    SEMANTIC_RESOLVER_PROMPT_VERSION,
+    SEMANTIC_RESOLVER_PROMPT_VERSION_V1,
+    SEMANTIC_RESOLVER_PROMPT_VERSION_V2,
     SemanticResolverEvidence,
     SemanticResolverFailureKind,
     SemanticResolverRequest,
@@ -506,12 +509,9 @@ def test_u6h_c_parser_resolver_invoked_for_material_initial_tail_without_inventi
     assert any(item.source_text == "但如果便宜很多转一次也行" for item in resolver.last_request.evidence)
     assert result.proposal is not None
     assert isinstance(result.proposal, InitialRequirementProposal)
-    assert result.proposal.unresolved_semantics == ()
-    assert_constraint(result.proposal.constraints, ConstraintScope.ORIGIN_AIRPORT, AirportCode("PEK"))
-    assert_constraint(result.proposal.constraints, ConstraintScope.DESTINATION_AIRPORT, AirportCode("SHA"))
-    assert_constraint(result.proposal.constraints, ConstraintScope.DEPARTURE_DATE, LocalDate(date(2026, 9, 10)))
-    assert all(constraint.scope is not ConstraintScope.MAX_PRICE for constraint in result.proposal.constraints)
-    assert all(constraint.scope is not ConstraintScope.MAX_STOPS for constraint in result.proposal.constraints)
+    assert "Conditional tradeoff remains outside parser resolver authority" in result.proposal.unresolved_semantics
+    assert result.proposal.constraints == ()
+    assert result.proposal.preferences == ()
 
 
 def test_u6h_c_parser_resolver_maps_residual_direct_preference_paraphrases() -> None:
@@ -643,6 +643,223 @@ def test_u6h_c_c13_insufficient_evidence_with_confidence_never_overrides_status(
     assert result.response.status is SemanticResolverStatus.INSUFFICIENT_EVIDENCE
 
 
+def test_u6h_e_ca03_parser_request_exposes_limited_amendment_vocabulary() -> None:
+    ir, _ = build_deterministic_initial_proposal("9月10日从北京去上海，便宜的优先")
+    request = build_parser_resolver_request(ir, "9月10日从北京去上海，便宜的优先")
+
+    assert request.contract_version == SEMANTIC_RESOLVER_CONTRACT_VERSION
+    assert request.prompt_version == SEMANTIC_RESOLVER_PROMPT_VERSION
+    assert request.prompt_version == SEMANTIC_RESOLVER_PROMPT_VERSION_V2
+    assert {
+        "ADD_SOFT_FEWER_STOPS_PREFERENCE",
+        "ADD_SOFT_PRICE_PREFERENCE",
+        "ADD_HARD_MAX_PRICE_CONSTRAINT",
+        "ADD_HARD_MAX_STOPS_CONSTRAINT",
+        "ACKNOWLEDGE_COMPLEX_PRICE_TIME_RELATION",
+        "NO_AUTHORITATIVE_BINDING",
+    }.issubset(request.allowed_output_vocabulary)
+
+
+def test_u6h_e_ca03_evidence_closure_accepts_only_authorized_parser_relations() -> None:
+    soft_price_ir, _ = build_deterministic_initial_proposal("9月10日从北京去上海，便宜的优先")
+    soft_price_request = build_parser_resolver_request(soft_price_ir, "9月10日从北京去上海，便宜的优先")
+    soft_price = parse_semantic_resolver_response(
+        schema_payload(
+            {
+                "request_id": soft_price_request.request_id,
+                "relations": [
+                    {
+                        "relation_kind": "ADD_SOFT_PRICE_PREFERENCE",
+                        "evidence_ids": [soft_price_ir.evidence[-1].evidence_id],
+                        "target": None,
+                        "value": None,
+                        "confidence": 0.82,
+                    }
+                ],
+            }
+        ),
+        soft_price_request,
+    )
+    assert soft_price.response is not None
+
+    hard_price_ir, _ = build_deterministic_initial_proposal("9月10日从北京去上海，1500块封顶")
+    hard_price_request = build_parser_resolver_request(hard_price_ir, "9月10日从北京去上海，1500块封顶")
+    hard_price = parse_semantic_resolver_response(
+        schema_payload(
+            {
+                "request_id": hard_price_request.request_id,
+                "relations": [
+                    {
+                        "relation_kind": "ADD_HARD_MAX_PRICE_CONSTRAINT",
+                        "evidence_ids": ["ev-value-1", "ev-unsupported-1"],
+                        "target": "MAX_PRICE",
+                        "value": "1500",
+                        "confidence": 0.86,
+                    }
+                ],
+            }
+        ),
+        hard_price_request,
+    )
+    assert hard_price.response is not None
+
+    invented_price = parse_semantic_resolver_response(
+        schema_payload(
+            {
+                "request_id": hard_price_request.request_id,
+                "relations": [
+                    {
+                        "relation_kind": "ADD_HARD_MAX_PRICE_CONSTRAINT",
+                        "evidence_ids": ["ev-value-1", "ev-unsupported-1"],
+                        "target": "MAX_PRICE",
+                        "value": "1600",
+                        "confidence": 0.86,
+                    }
+                ],
+            }
+        ),
+        hard_price_request,
+    )
+    assert invented_price.failure is not None
+    assert invented_price.failure.code == "INVENTED_MAX_PRICE_VALUE"
+
+    ambiguous_stops_ir, _ = build_deterministic_initial_proposal("9月10日从北京去上海，尽量别转机")
+    ambiguous_stops_request = build_parser_resolver_request(ambiguous_stops_ir, "9月10日从北京去上海，尽量别转机")
+    hardened_ambiguous_stops = parse_semantic_resolver_response(
+        schema_payload(
+            {
+                "request_id": ambiguous_stops_request.request_id,
+                "relations": [
+                    {
+                        "relation_kind": "ADD_HARD_MAX_STOPS_CONSTRAINT",
+                        "evidence_ids": [ambiguous_stops_ir.evidence[-1].evidence_id],
+                        "target": "MAX_STOPS",
+                        "value": "0",
+                        "confidence": 0.86,
+                    }
+                ],
+            }
+        ),
+        ambiguous_stops_request,
+    )
+    assert hardened_ambiguous_stops.failure is not None
+    assert hardened_ambiguous_stops.failure.code == "INSUFFICIENT_MAX_STOPS_EVIDENCE"
+
+    soft_no_transfer_ir, _ = build_deterministic_initial_proposal("9月10日从北京去上海，最好不要转机")
+    soft_no_transfer_request = build_parser_resolver_request(soft_no_transfer_ir, "9月10日从北京去上海，最好不要转机")
+    hardened_soft_no_transfer = parse_semantic_resolver_response(
+        schema_payload(
+            {
+                "request_id": soft_no_transfer_request.request_id,
+                "relations": [
+                    {
+                        "relation_kind": "ADD_HARD_MAX_STOPS_CONSTRAINT",
+                        "evidence_ids": ["ev-constraint-1"],
+                        "target": "MAX_STOPS",
+                        "value": "0",
+                        "confidence": 0.86,
+                    }
+                ],
+            }
+        ),
+        soft_no_transfer_request,
+    )
+    assert hardened_soft_no_transfer.failure is not None
+    assert hardened_soft_no_transfer.failure.code == "INSUFFICIENT_MAX_STOPS_EVIDENCE"
+
+
+def test_u6h_e_ca03_parser_relations_compose_with_existing_deterministic_bindings() -> None:
+    direct_and_price_resolver = FakeResolver(
+        schema_payload(
+            {
+                "relations": [
+                    {
+                        "relation_kind": "ADD_SOFT_FEWER_STOPS_PREFERENCE",
+                        "evidence_ids": ["ev-unsupported-1"],
+                        "target": None,
+                        "value": None,
+                        "confidence": 0.8,
+                    },
+                    {
+                        "relation_kind": "ADD_SOFT_PRICE_PREFERENCE",
+                        "evidence_ids": ["ev-unsupported-1"],
+                        "target": None,
+                        "value": None,
+                        "confidence": 0.8,
+                    },
+                ]
+            }
+        )
+    )
+    direct_and_price = SemanticResolverParserHybridInterpreter(direct_and_price_resolver).interpret(
+        initial_input("9月10日从北京去上海，直飞优先，价格也重要")
+    )
+
+    assert direct_and_price.proposal is not None
+    assert isinstance(direct_and_price.proposal, InitialRequirementProposal)
+    assert direct_and_price.proposal.unresolved_semantics == ()
+    assert {preference.scope for preference in direct_and_price.proposal.preferences} == {
+        PreferenceScope.FEWER_STOPS,
+        PreferenceScope.PRICE,
+    }
+    assert all(constraint.scope is not ConstraintScope.MAX_STOPS for constraint in direct_and_price.proposal.constraints)
+
+    max_price_and_stops_resolver = FakeResolver(
+        schema_payload(
+            {
+                "relations": [
+                    {
+                        "relation_kind": "ADD_SOFT_FEWER_STOPS_PREFERENCE",
+                        "evidence_ids": ["ev-unsupported-1"],
+                        "target": None,
+                        "value": None,
+                        "confidence": 0.8,
+                    }
+                ]
+            }
+        )
+    )
+    max_price_and_stops = SemanticResolverParserHybridInterpreter(max_price_and_stops_resolver).interpret(
+        initial_input("9月10日从北京去上海，预算1500以内，转机越少越好")
+    )
+
+    assert max_price_and_stops.proposal is not None
+    assert isinstance(max_price_and_stops.proposal, InitialRequirementProposal)
+    assert max_price_and_stops.proposal.unresolved_semantics == ()
+    assert_constraint(max_price_and_stops.proposal.constraints, ConstraintScope.MAX_PRICE, Money(Decimal(1500), "CNY"))
+    assert max_price_and_stops.proposal.preferences[0].scope is PreferenceScope.FEWER_STOPS
+
+
+def test_u6h_e_ca03_prompt_v2_is_default_while_v1_remains_identifiable() -> None:
+    request = minimal_request()
+    v2_transport = FakeTransport((invocation_success(schema_payload_json({"request_id": request.request_id})),))
+    v2 = DeepSeekSemanticResolver(
+        runtime=LLMInvocationRuntime(v2_transport),
+        provider=LLMProviderName.DEEPSEEK,
+        config=LLMInvocationConfig("deepseek-test", max_attempts=1),
+        invocation_id_factory=lambda: "u6h-e-prompt-v2",
+    ).resolve(request)
+
+    assert v2.response is not None
+    assert ("prompt_version", SEMANTIC_RESOLVER_PROMPT_VERSION_V2) in v2.response.model_metadata
+    assert v2_transport.last_request is not None
+    assert v2_transport.last_request.rendered_prompt.family.prompt_template_version.value == SEMANTIC_RESOLVER_PROMPT_VERSION_V2
+
+    v1_transport = FakeTransport((invocation_success(schema_payload_json({"request_id": request.request_id})),))
+    v1 = DeepSeekSemanticResolver(
+        runtime=LLMInvocationRuntime(v1_transport),
+        provider=LLMProviderName.DEEPSEEK,
+        config=LLMInvocationConfig("deepseek-test", max_attempts=1),
+        invocation_id_factory=lambda: "u6h-e-prompt-v1",
+        prompt_version=SEMANTIC_RESOLVER_PROMPT_VERSION_V1,
+    ).resolve(request)
+
+    assert v1.response is not None
+    assert ("prompt_version", SEMANTIC_RESOLVER_PROMPT_VERSION_V1) in v1.response.model_metadata
+    assert v1_transport.last_request is not None
+    assert v1_transport.last_request.rendered_prompt.family.prompt_template_version.value == SEMANTIC_RESOLVER_PROMPT_VERSION_V1
+
+
 def test_u6h_c_c16_t_real_1_real_deepseek_smoke_is_explicit_opt_in() -> None:
     if os.getenv("RUN_DEEPSEEK_SMOKE") != "1":
         pytest.skip("T-REAL-1 not run: explicit opt-in RUN_DEEPSEEK_SMOKE=1 is absent")
@@ -690,10 +907,12 @@ class FakeTransport:
     def __init__(self, results: tuple[LLMInvocationResult, ...]) -> None:
         self._results = list(results)
         self.calls = 0
+        self.last_request = None
 
     def invoke(self, request, timeout_seconds: float) -> LLMInvocationResult:
-        _ = request, timeout_seconds
+        _ = timeout_seconds
         self.calls += 1
+        self.last_request = request
         return self._results.pop(0)
 
 

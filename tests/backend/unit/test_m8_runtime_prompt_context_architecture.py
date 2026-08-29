@@ -60,7 +60,7 @@ def test_runtime_prompt_families_are_independent_versioned_assets() -> None:
     assert len({family.prompt_template_version for family in RUNTIME_PROMPT_FAMILIES}) == 4
     assert {family.output_schema_version.value for family in RUNTIME_PROMPT_FAMILIES} == {
         "m8-u1",
-        "m8-u6h-c-v1.1",
+        "m8-u6h-e-v1.0",
     }
 
     for family in RUNTIME_PROMPT_FAMILIES:
@@ -207,7 +207,7 @@ def test_runtime_prompt_assets_do_not_mix_codex_prompts_or_runtime_secrets() -> 
     assert "api_key" not in prompt_sources
     assert "DeepSeek model" not in prompt_sources
     assert "真实用户" not in prompt_sources
-    assert len(tuple(PROMPT_ASSET_ROOT.rglob("*.md"))) == 6
+    assert len(tuple(PROMPT_ASSET_ROOT.rglob("*.md"))) == 7
 
 
 def test_runtime_prompt_assets_are_centralized_under_repository_prompt_root() -> None:

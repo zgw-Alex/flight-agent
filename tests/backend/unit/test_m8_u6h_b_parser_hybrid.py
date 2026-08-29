@@ -171,7 +171,7 @@ def test_u6h_d_negative_controls_preserve_ambiguity_and_anti_invention() -> None
     assert missing_destination.constraints == ()
 
     direct_not_required_ir, direct_not_required = build_deterministic_initial_proposal("9月10日从北京去上海，不一定要直飞。")
-    assert direct_not_required_ir.interpretation_status is ParserInterpretationStatus.SEMANTIC_RESOLVER_REQUIRED
+    assert direct_not_required_ir.interpretation_status is ParserInterpretationStatus.RESOLVED
     assert_no_constraint(direct_not_required.constraints, ConstraintScope.MAX_STOPS)
     assert direct_not_required.preferences == ()
 

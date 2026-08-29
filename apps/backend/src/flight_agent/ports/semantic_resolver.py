@@ -1,4 +1,4 @@
-"""Evidence-closed semantic resolver contracts for M8-U6H-C."""
+"""Evidence-closed semantic resolver contracts for M8-U6H."""
 
 from __future__ import annotations
 
@@ -6,8 +6,10 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Protocol
 
-SEMANTIC_RESOLVER_CONTRACT_VERSION = "m8-u6h-c-v1.1"
-SEMANTIC_RESOLVER_PROMPT_VERSION = "m8-u6h-c-semantic-resolver-prompt-v1"
+SEMANTIC_RESOLVER_CONTRACT_VERSION = "m8-u6h-e-v1.0"
+SEMANTIC_RESOLVER_PROMPT_VERSION_V1 = "m8-u6h-c-semantic-resolver-prompt-v1"
+SEMANTIC_RESOLVER_PROMPT_VERSION_V2 = "m8-u6h-e-semantic-resolver-prompt-v2"
+SEMANTIC_RESOLVER_PROMPT_VERSION = SEMANTIC_RESOLVER_PROMPT_VERSION_V2
 
 
 class SemanticResolverTaskKind(str, Enum):

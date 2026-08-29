@@ -207,7 +207,7 @@ class DeterministicInitialBinder:
         price = _price_binding(message, evidence)
         if price is not None:
             bindings.append(price)
-        if "必须直飞" in compact or "不要转机" in compact:
+        if "必须直飞" in compact or ("不要转机" in compact and "最好不要转机" not in compact):
             bindings.append(_simple_binding(ParserSemanticTarget.MAX_STOPS, StopCount(0), ParserCandidateType.STOP_COUNT, evidence))
         if "最多转一次" in compact:
             bindings.append(_simple_binding(ParserSemanticTarget.MAX_STOPS, StopCount(1), ParserCandidateType.STOP_COUNT, evidence))
@@ -737,6 +737,7 @@ _BENIGN_RESIDUE_TOKENS = (
     "查",
     "机票",
     "航班",
+    "不一定要直飞",
     "元",
     "人民币",
     "谢谢",

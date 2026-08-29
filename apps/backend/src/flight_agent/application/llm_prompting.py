@@ -61,7 +61,7 @@ SEMANTIC_RESOLVER_PROMPT_FAMILY = RuntimePromptFamily(
     capability=LLMCapabilityName.SEMANTIC_RESOLVER,
     prompt_template_version=PromptTemplateVersion(SEMANTIC_RESOLVER_PROMPT_VERSION),
     output_schema_version=OutputSchemaVersion(SEMANTIC_RESOLVER_CONTRACT_VERSION),
-    asset_path="semantic_resolver_v1.md",
+    asset_path="semantic_resolver_v2.md",
 )
 
 RUNTIME_PROMPT_FAMILIES = (
