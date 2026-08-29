@@ -69,6 +69,11 @@ Scope。历史 Reference 仅用于追溯，不得覆盖正式收口结论。
         -   记录 M8-U1～M8-U7、U6H-A/B/C/D、CA01、原 Parser/Patch Real LLM baseline P0 blocker、Hybrid recovery、U6H-D evidence artifact、Aggregate Exit Gate G1～G17、Real-path P0 3-run、ordinary CI network independence 与 repository integrity 已 PASS。
         -   Contract Amendment：CA01 ACCEPTED + IMPLEMENTED + PASS；Additional Contract Amendment：NONE；M8 Milestone Status：CLOSED / PASS。
         -   不替代 M8 Real LLM Specification 的 Contract Authority，也不启动 M9 implementation；M9 仅进入 READY / eligible for planning and specification。
+    -   `03_implementation-roadmap/milestones/M8/机票筛选Agent_M8_U6H-C_Parser_Resolver_Soft_Preference_Contract_Amendment_CA02_V0.1.docx`
+        -   第三阶段 M8 U6H-C Parser Resolver Soft Preference 的正式 additive Contract Amendment Authority。
+        -   CA02 Decision Status：ACCEPTED；Implementation Authority：ENABLED。
+        -   仅授权 `ADD_SOFT_FEWER_STOPS_PREFERENCE` 关系映射到既有 canonical `SoftPreference(scope=FEWER_STOPS, importance=HIGH, value=None)`。
+        -   U6H-C base authority 保持有效；Resolver 保持 evidence-closed / non-authoritative semantic proposal only；M3 Requirement authority 与 M7 semantic diff / impact / execution authority 保持不变。
     -   `03_implementation-roadmap/milestones/M8/机票筛选Agent_M8-U6H-CA01_MAX_STOPS_Hard_Constraint_Contract_Amendment_Specification_V1.0.docx`
         -   第三阶段 M8-U6H Recovery 的正式 additive Contract Amendment Authority。
         -   对 M3 Requirement Contract 仅增量补充 `MAX_STOPS`：formal Hard Constraint、non-negative integer value、canonical `AT_OR_BEFORE` / `candidate.stop_count <= max_stops`，其中 `MAX_STOPS=0` 表示 Hard “必须直飞”。
