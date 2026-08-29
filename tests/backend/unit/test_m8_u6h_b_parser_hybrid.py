@@ -90,6 +90,97 @@ def test_u6h_b_b05_to_b07_initial_constraints_preferences_use_existing_authority
     assert not hasattr(ConstraintScope, "DIRECT_FLIGHT")
 
 
+def test_u6h_d_regression_case_07_fewer_stops_preference_without_hard_stop_limit() -> None:
+    ir, proposal = build_deterministic_initial_proposal("9月10日从北京去上海，转机少一点比较好。")
+
+    assert ir.interpretation_status is ParserInterpretationStatus.RESOLVED
+    assert_preference(proposal.preferences, PreferenceScope.FEWER_STOPS)
+    assert_no_constraint(proposal.constraints, ConstraintScope.MAX_STOPS)
+
+
+def test_u6h_d_regression_case_12_preserves_max_price_and_soft_direct_preference() -> None:
+    ir, proposal = build_deterministic_initial_proposal("9月10日从北京去上海，1500以内，最好直飞。")
+
+    assert ir.interpretation_status is ParserInterpretationStatus.RESOLVED
+    assert_constraint(
+        proposal.constraints,
+        ConstraintScope.MAX_PRICE,
+        Money(Decimal(1500), "CNY"),
+        ConstraintOperator.AT_OR_BEFORE,
+    )
+    assert_preference(proposal.preferences, PreferenceScope.FEWER_STOPS)
+
+
+def test_u6h_d_regression_case_13_price_preference_without_max_price() -> None:
+    ir, proposal = build_deterministic_initial_proposal("9月10日从北京去上海，价格越便宜越好。")
+
+    assert ir.interpretation_status is ParserInterpretationStatus.RESOLVED
+    assert_preference(proposal.preferences, PreferenceScope.PRICE)
+    assert_no_constraint(proposal.constraints, ConstraintScope.MAX_PRICE)
+
+
+def test_u6h_d_regression_case_16_preserves_hard_direct_and_price_preference() -> None:
+    ir, proposal = build_deterministic_initial_proposal("9月10日从北京去上海，必须直飞，而且越便宜越好。")
+
+    assert ir.interpretation_status is ParserInterpretationStatus.RESOLVED
+    assert_constraint(
+        proposal.constraints,
+        ConstraintScope.MAX_STOPS,
+        StopCount(0),
+        ConstraintOperator.AT_OR_BEFORE,
+    )
+    assert_preference(proposal.preferences, PreferenceScope.PRICE)
+
+
+def test_u6h_d_regression_case_17_no_connections_is_hard_zero_stop() -> None:
+    ir, proposal = build_deterministic_initial_proposal("9月10日从北京去上海，不要转机。")
+
+    assert ir.interpretation_status is ParserInterpretationStatus.RESOLVED
+    assert_constraint(
+        proposal.constraints,
+        ConstraintScope.MAX_STOPS,
+        StopCount(0),
+        ConstraintOperator.AT_OR_BEFORE,
+    )
+    assert proposal.preferences == ()
+
+
+def test_u6h_d_regression_case_19_preserves_multiple_soft_preferences() -> None:
+    ir, proposal = build_deterministic_initial_proposal("9月10日从北京去上海，直飞最好，便宜也很重要。")
+
+    assert ir.interpretation_status is ParserInterpretationStatus.RESOLVED
+    assert_preference(proposal.preferences, PreferenceScope.FEWER_STOPS)
+    assert_preference(proposal.preferences, PreferenceScope.PRICE)
+    assert_no_constraint(proposal.constraints, ConstraintScope.MAX_STOPS)
+    assert_no_constraint(proposal.constraints, ConstraintScope.MAX_PRICE)
+
+
+def test_u6h_d_negative_controls_preserve_ambiguity_and_anti_invention() -> None:
+    inexact_ir, inexact = build_deterministic_initial_proposal("9月10日从北京去上海，预算一千多。")
+    assert inexact_ir.interpretation_status is ParserInterpretationStatus.CLARIFICATION_REQUIRED
+    assert inexact.constraints == ()
+
+    missing_origin_ir, missing_origin = build_deterministic_initial_proposal("9月10日去上海。")
+    assert missing_origin_ir.interpretation_status is ParserInterpretationStatus.CLARIFICATION_REQUIRED
+    assert_slot(missing_origin_ir, ParserSemanticTarget.ORIGIN, ParserBindingState.MISSING)
+    assert missing_origin.constraints == ()
+
+    missing_destination_ir, missing_destination = build_deterministic_initial_proposal("9月10日从北京出发。")
+    assert missing_destination_ir.interpretation_status is ParserInterpretationStatus.CLARIFICATION_REQUIRED
+    assert_slot(missing_destination_ir, ParserSemanticTarget.DESTINATION, ParserBindingState.MISSING)
+    assert missing_destination.constraints == ()
+
+    direct_not_required_ir, direct_not_required = build_deterministic_initial_proposal("9月10日从北京去上海，不一定要直飞。")
+    assert direct_not_required_ir.interpretation_status is ParserInterpretationStatus.SEMANTIC_RESOLVER_REQUIRED
+    assert_no_constraint(direct_not_required.constraints, ConstraintScope.MAX_STOPS)
+    assert direct_not_required.preferences == ()
+
+    insufficient_ir, insufficient = build_deterministic_initial_proposal("帮我找一个合适的航班。")
+    assert insufficient_ir.interpretation_status is ParserInterpretationStatus.CLARIFICATION_REQUIRED
+    assert insufficient.constraints == ()
+    assert insufficient.preferences == ()
+
+
 def test_u6h_b_material_condition_tail_requires_semantic_resolver_without_silent_drop() -> None:
     ir, proposal = build_deterministic_initial_proposal("9月10日从北京去上海，最好直飞，但如果便宜很多转一次也行。")
 
@@ -297,6 +388,22 @@ def assert_constraint(
     assert len(matches) == 1
     assert matches[0].operator is operator
     assert matches[0].value == value
+
+
+def assert_no_constraint(
+    constraints: tuple[HardConstraint, ...],
+    scope: ConstraintScope,
+) -> None:
+    assert all(constraint.scope is not scope for constraint in constraints)
+
+
+def assert_preference(
+    preferences: tuple[SoftPreference, ...],
+    scope: PreferenceScope,
+) -> None:
+    matches = tuple(preference for preference in preferences if preference.scope is scope)
+    assert len(matches) == 1
+    assert matches[0].importance is PreferenceImportance.HIGH
 
 
 def initial_input(source_input: str) -> InterpreterInput:

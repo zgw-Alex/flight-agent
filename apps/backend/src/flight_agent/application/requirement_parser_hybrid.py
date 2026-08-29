@@ -57,6 +57,7 @@ class ParserSemanticTarget(str, Enum):
     DEPARTURE_DATE = "DEPARTURE_DATE"
     MAX_PRICE = "MAX_PRICE"
     MAX_STOPS = "MAX_STOPS"
+    PRICE = "PRICE"
     FEWER_STOPS = "FEWER_STOPS"
     TRIP_STRUCTURE = "TRIP_STRUCTURE"
 
@@ -169,10 +170,18 @@ class ParserEvidenceExtractor:
         for token in ("从", "去", "到", "出发", "再从"):
             for start in _token_starts(message, token):
                 add(ParserEvidenceKind.RELATION_TEXT, token, start, token)
-        for token in ("预算", "以内", "必须直飞", "最多转一次"):
+        for token in ("预算", "以内", "必须直飞", "最多转一次", "不要转机"):
             for start in _token_starts(message, token):
                 add(ParserEvidenceKind.CONSTRAINT_TEXT, token, start, token)
-        for token in ("最好直飞", "其他没要求"):
+        for token in (
+            "最好直飞",
+            "直飞最好",
+            "转机少一点比较好",
+            "价格越便宜越好",
+            "越便宜越好",
+            "便宜也很重要",
+            "其他没要求",
+        ):
             for start in _token_starts(message, token):
                 add(ParserEvidenceKind.PREFERENCE_TEXT, token, start, token)
         for token in ("不对", "不，是", "不是"):
@@ -195,15 +204,17 @@ class DeterministicInitialBinder:
         bindings: list[ParserSemanticBinding] = []
         bindings.extend(_route_bindings(compact, evidence))
         bindings.extend(_date_bindings(compact, evidence))
-        price = _price_binding(compact, evidence)
+        price = _price_binding(message, evidence)
         if price is not None:
             bindings.append(price)
-        if "必须直飞" in compact:
+        if "必须直飞" in compact or "不要转机" in compact:
             bindings.append(_simple_binding(ParserSemanticTarget.MAX_STOPS, StopCount(0), ParserCandidateType.STOP_COUNT, evidence))
         if "最多转一次" in compact:
             bindings.append(_simple_binding(ParserSemanticTarget.MAX_STOPS, StopCount(1), ParserCandidateType.STOP_COUNT, evidence))
-        if "最好直飞" in compact:
+        if any(token in compact for token in ("最好直飞", "直飞最好", "转机少一点比较好")):
             bindings.append(_simple_binding(ParserSemanticTarget.FEWER_STOPS, None, ParserCandidateType.PREFERENCE, evidence))
+        if any(token in compact for token in ("价格越便宜越好", "越便宜越好", "便宜也很重要")):
+            bindings.append(_simple_binding(ParserSemanticTarget.PRICE, None, ParserCandidateType.PREFERENCE, evidence))
         if "再从" in compact:
             bindings.append(
                 ParserSemanticBinding(
@@ -443,14 +454,18 @@ def _date_bindings(message: str, evidence: tuple[ParserSemanticEvidence, ...]) -
 
 
 def _price_binding(message: str, evidence: tuple[ParserSemanticEvidence, ...]) -> ParserSemanticBinding | None:
-    if "预算" not in message:
+    compact = re.sub(r"\s+", "", message)
+    if "预算" not in compact and "以内" not in compact:
         return None
-    if "一千多" in message:
+    if "一千多" in compact:
         return None
     numbers = tuple(item for item in evidence if item.kind is ParserEvidenceKind.VALUE_TEXT and item.normalized_text is not None)
     if not numbers:
         return None
-    value_text = numbers[-1].normalized_text
+    value_source = _price_value_evidence(message, numbers)
+    if value_source is None:
+        return None
+    value_text = value_source.normalized_text
     if value_text is None:
         return None
     value = Money(Decimal(value_text), "CNY")
@@ -459,9 +474,24 @@ def _price_binding(message: str, evidence: tuple[ParserSemanticEvidence, ...]) -
         ParserBindingState.RESOLVED,
         ParserCandidateType.MONEY,
         value=value,
-        value_signal=numbers[-1].source_text,
-        evidence_ids=(numbers[-1].evidence_id,),
+        value_signal=value_source.source_text,
+        evidence_ids=(value_source.evidence_id,),
     )
+
+
+def _price_value_evidence(
+    message: str,
+    numbers: tuple[ParserSemanticEvidence, ...],
+) -> ParserSemanticEvidence | None:
+    within_index = message.find("以内")
+    if within_index >= 0:
+        before_within = tuple(
+            item
+            for item in numbers
+            if item.source_location is not None and item.source_location.end <= within_index
+        )
+        return before_within[-1] if before_within else None
+    return numbers[-1]
 
 
 def _location_binding(
@@ -525,6 +555,8 @@ def _proposal_item(binding: ParserSemanticBinding) -> HardConstraint | SoftPrefe
         return _constraint("parser-max-price", ConstraintScope.MAX_PRICE, ConstraintOperator.AT_OR_BEFORE, binding.value)
     if binding.target is ParserSemanticTarget.MAX_STOPS and isinstance(binding.value, StopCount):
         return _constraint("parser-max-stops", ConstraintScope.MAX_STOPS, ConstraintOperator.AT_OR_BEFORE, binding.value)
+    if binding.target is ParserSemanticTarget.PRICE:
+        return SoftPreference(PreferenceId("parser-price"), PreferenceScope.PRICE, PreferenceImportance.HIGH)
     if binding.target is ParserSemanticTarget.FEWER_STOPS:
         return SoftPreference(PreferenceId("parser-fewer-stops"), PreferenceScope.FEWER_STOPS, PreferenceImportance.HIGH)
     return None
@@ -690,6 +722,7 @@ _BENIGN_RESIDUE_TOKENS = (
     "查一下",
     "查询",
     "看看",
+    "而且",
     "我想订",
     "我想买",
     "我想查",
