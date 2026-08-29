@@ -39,6 +39,7 @@ from flight_agent.domain.requirements import (
     ConstraintScope,
     HardConstraint,
     LocalDate,
+    PreferenceImportance,
     PreferenceScope,
     RequirementId,
     RequirementState,
@@ -120,6 +121,96 @@ def test_u6h_c_t1_c04_c07_to_c10_c15_strict_schema_and_evidence_closure() -> Non
     )
     assert valid.response is not None
     assert valid.response.status is SemanticResolverStatus.RESOLVED
+
+    soft_preference_ir, _ = build_deterministic_initial_proposal("9月10日从北京去上海，不要求直飞，但我更喜欢直飞。")
+    soft_preference_request = build_parser_resolver_request(
+        soft_preference_ir,
+        "9月10日从北京去上海，不要求直飞，但我更喜欢直飞。",
+    )
+    soft_fewer_stops = parse_semantic_resolver_response(
+        schema_payload(
+            {
+                "request_id": soft_preference_request.request_id,
+                "relations": [
+                    {
+                        "relation_kind": "ADD_SOFT_FEWER_STOPS_PREFERENCE",
+                        "evidence_ids": [soft_preference_ir.evidence[-1].evidence_id],
+                        "target": None,
+                        "value": None,
+                        "confidence": 0.82,
+                    }
+                ],
+            }
+        ),
+        soft_preference_request,
+    )
+    assert soft_fewer_stops.response is not None
+    assert soft_fewer_stops.response.status is SemanticResolverStatus.RESOLVED
+
+    numeric_string_confidence = parse_semantic_resolver_response(
+        schema_payload(
+            {
+                "request_id": soft_preference_request.request_id,
+                "relations": [
+                    {
+                        "relation_kind": "ADD_SOFT_FEWER_STOPS_PREFERENCE",
+                        "evidence_ids": [soft_preference_ir.evidence[-1].evidence_id],
+                        "target": None,
+                        "value": None,
+                        "confidence": "0.82",
+                    }
+                ],
+            }
+        ),
+        soft_preference_request,
+    )
+    assert numeric_string_confidence.response is not None
+    assert numeric_string_confidence.response.relations[0].confidence == 0.82
+
+    non_numeric_confidence = parse_semantic_resolver_response(
+        schema_payload(
+            {
+                "request_id": soft_preference_request.request_id,
+                "relations": [
+                    {
+                        "relation_kind": "ADD_SOFT_FEWER_STOPS_PREFERENCE",
+                        "evidence_ids": [soft_preference_ir.evidence[-1].evidence_id],
+                        "target": None,
+                        "value": None,
+                        "confidence": "high",
+                    }
+                ],
+            }
+        ),
+        soft_preference_request,
+    )
+    assert non_numeric_confidence.failure is not None
+    assert non_numeric_confidence.failure.code == "INVALID_CONFIDENCE"
+
+    no_positive_preference_ir, _ = build_deterministic_initial_proposal("9月10日从北京去上海，不一定非要直飞。")
+    no_positive_preference_request = build_parser_resolver_request(
+        no_positive_preference_ir,
+        "9月10日从北京去上海，不一定非要直飞。",
+    )
+    no_positive_preference = parse_semantic_resolver_response(
+        schema_payload(
+            {
+                "request_id": no_positive_preference_request.request_id,
+                "relations": [
+                    {
+                        "relation_kind": "ADD_SOFT_FEWER_STOPS_PREFERENCE",
+                        "evidence_ids": ["ev-unsupported-1"],
+                        "target": None,
+                        "value": None,
+                        "confidence": 0.82,
+                    }
+                ],
+            }
+        ),
+        no_positive_preference_request,
+    )
+    assert no_positive_preference.failure is not None
+    assert no_positive_preference.failure.code == "INSUFFICIENT_SOFT_PREFERENCE_EVIDENCE"
 
     unknown_evidence = parse_semantic_resolver_response(
         schema_payload(
@@ -207,6 +298,87 @@ def test_u6h_c_t1_c04_c07_to_c10_c15_strict_schema_and_evidence_closure() -> Non
     )
     assert prompt_injected.failure is not None
     assert prompt_injected.failure.code == "OUT_OF_VOCABULARY"
+
+    empty_soft_preference_evidence = parse_semantic_resolver_response(
+        schema_payload(
+            {
+                "request_id": request.request_id,
+                "relations": [
+                    {
+                        "relation_kind": "ADD_SOFT_FEWER_STOPS_PREFERENCE",
+                        "evidence_ids": [],
+                        "target": None,
+                        "value": None,
+                        "confidence": 0.9,
+                    }
+                ],
+            }
+        ),
+        request,
+    )
+    assert empty_soft_preference_evidence.failure is not None
+    assert empty_soft_preference_evidence.failure.kind is SemanticResolverFailureKind.MODEL_CONTRACT
+
+    hard_max_stops_injection = parse_semantic_resolver_response(
+        schema_payload(
+            {
+                "request_id": request.request_id,
+                "relations": [
+                    {
+                        "relation_kind": "ADD_SOFT_FEWER_STOPS_PREFERENCE",
+                        "evidence_ids": [ir.evidence[-1].evidence_id],
+                        "target": "MAX_STOPS",
+                        "value": "0",
+                        "confidence": 0.9,
+                    }
+                ],
+            }
+        ),
+        request,
+    )
+    assert hard_max_stops_injection.failure is not None
+    assert hard_max_stops_injection.failure.code == "UNAUTHORIZED_SOFT_PREFERENCE_PAYLOAD"
+
+    unknown_soft_preference_target = parse_semantic_resolver_response(
+        schema_payload(
+            {
+                "request_id": request.request_id,
+                "relations": [
+                    {
+                        "relation_kind": "ADD_SOFT_FEWER_STOPS_PREFERENCE",
+                        "evidence_ids": [ir.evidence[-1].evidence_id],
+                        "target": "SOME_UNKNOWN_TARGET",
+                        "value": None,
+                        "confidence": 0.9,
+                    }
+                ],
+            }
+        ),
+        request,
+    )
+    assert unknown_soft_preference_target.failure is not None
+    assert unknown_soft_preference_target.failure.code == "UNAUTHORIZED_SOFT_PREFERENCE_PAYLOAD"
+
+    arbitrary_importance = parse_semantic_resolver_response(
+        schema_payload(
+            {
+                "request_id": request.request_id,
+                "relations": [
+                    {
+                        "relation_kind": "ADD_SOFT_FEWER_STOPS_PREFERENCE",
+                        "evidence_ids": [ir.evidence[-1].evidence_id],
+                        "target": None,
+                        "value": None,
+                        "importance": "LOW",
+                        "confidence": 0.9,
+                    }
+                ],
+            }
+        ),
+        request,
+    )
+    assert arbitrary_importance.failure is not None
+    assert arbitrary_importance.failure.code == "UNKNOWN_RELATION_FIELD"
 
 
 def test_u6h_c_t2_c05_c14_patch_resolver_returns_through_builder_and_m3() -> None:
@@ -342,13 +514,13 @@ def test_u6h_c_parser_resolver_invoked_for_material_initial_tail_without_inventi
     assert all(constraint.scope is not ConstraintScope.MAX_STOPS for constraint in result.proposal.constraints)
 
 
-def test_u6h_c_parser_resolver_invoked_for_residual_direct_preference_paraphrase() -> None:
+def test_u6h_c_parser_resolver_maps_residual_direct_preference_paraphrases() -> None:
     resolver = FakeResolver(
         schema_payload(
             {
                 "relations": [
                     {
-                        "relation_kind": "NO_AUTHORITATIVE_BINDING",
+                        "relation_kind": "ADD_SOFT_FEWER_STOPS_PREFERENCE",
                         "evidence_ids": ["ev-unsupported-1"],
                         "target": None,
                         "value": None,
@@ -371,7 +543,44 @@ def test_u6h_c_parser_resolver_invoked_for_residual_direct_preference_paraphrase
     assert_constraint(result.proposal.constraints, ConstraintScope.ORIGIN_AIRPORT, AirportCode("PEK"))
     assert_constraint(result.proposal.constraints, ConstraintScope.DESTINATION_AIRPORT, AirportCode("SHA"))
     assert_constraint(result.proposal.constraints, ConstraintScope.DEPARTURE_DATE, LocalDate(date(2026, 9, 10)))
-    assert result.proposal.preferences == ()
+    assert all(constraint.scope is not ConstraintScope.MAX_STOPS for constraint in result.proposal.constraints)
+    assert len(result.proposal.preferences) == 1
+    assert result.proposal.preferences[0].scope is PreferenceScope.FEWER_STOPS
+    assert result.proposal.preferences[0].importance is PreferenceImportance.HIGH
+
+    split_resolver = FakeResolver(
+        schema_payload(
+            {
+                "relations": [
+                    {
+                        "relation_kind": "ADD_SOFT_FEWER_STOPS_PREFERENCE",
+                        "evidence_ids": ["ev-correction-1", "ev-unsupported-1", "ev-unsupported-2"],
+                        "target": None,
+                        "value": None,
+                        "confidence": 0.78,
+                    }
+                ]
+            }
+        )
+    )
+
+    split_result = SemanticResolverParserHybridInterpreter(split_resolver).interpret(
+        initial_input("9月10日从北京去上海，直飞不是必须，但优先直飞。")
+    )
+
+    assert split_resolver.calls == 1
+    assert split_resolver.last_request is not None
+    assert {item.source_text for item in split_resolver.last_request.evidence if item.kind == "UNSUPPORTED_TEXT"} == {
+        "直飞",
+        "必须，但优先直飞",
+    }
+    assert split_result.proposal is not None
+    assert isinstance(split_result.proposal, InitialRequirementProposal)
+    assert split_result.proposal.unresolved_semantics == ()
+    assert all(constraint.scope is not ConstraintScope.MAX_STOPS for constraint in split_result.proposal.constraints)
+    assert len(split_result.proposal.preferences) == 1
+    assert split_result.proposal.preferences[0].scope is PreferenceScope.FEWER_STOPS
+    assert split_result.proposal.preferences[0].importance is PreferenceImportance.HIGH
 
 
 def test_u6h_c_c11_c12_t4_adapter_maps_malformed_retry_and_deadline() -> None:

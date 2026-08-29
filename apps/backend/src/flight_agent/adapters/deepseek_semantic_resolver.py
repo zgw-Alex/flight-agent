@@ -118,6 +118,7 @@ def _render_resolver_prompt(request: SemanticResolverRequest) -> RenderedPrompt:
         "allowed_output_vocabulary": list(request.allowed_output_vocabulary),
         "deterministic_context": dict(request.deterministic_context),
         "trace_metadata": dict(request.trace_metadata),
+        "parser_soft_fewer_stops_evidence_hints": _parser_soft_fewer_stops_evidence_hints(request),
         "evidence": [
             {
                 "evidence_id": item.evidence_id,
@@ -146,6 +147,14 @@ def _render_resolver_prompt(request: SemanticResolverRequest) -> RenderedPrompt:
                 (
                     "Do not invent origin, destination, date, money, city, airport, IATA, "
                     "constraint, preference, or mutation facts. Use only allowed_output_vocabulary. "
+                    "For PARSER tasks, ADD_SOFT_FEWER_STOPS_PREFERENCE is authorized only when the "
+                    "trusted evidence expresses direct flight as not mandatory but preferred; it means "
+                    "the fixed canonical soft preference FEWER_STOPS/HIGH/value-null and must not create "
+                    "a hard MAX_STOPS constraint. Leave target and value null for this relation. Always "
+                    "include the supporting evidence_ids from the trusted context; if one evidence item "
+                    'contains the complete phrase, use that id, for example ["ev-unsupported-1"]. '
+                    "For split parser evidence, prefer parser_soft_fewer_stops_evidence_hints; if the "
+                    "hint list is empty, do not emit ADD_SOFT_FEWER_STOPS_PREFERENCE. "
                     "Free text diagnostics are not authoritative."
                 ),
             ),
@@ -154,7 +163,10 @@ def _render_resolver_prompt(request: SemanticResolverRequest) -> RenderedPrompt:
                 (
                     "Return exactly one JSON object with keys request_id, status, relations, "
                     "unresolved_items, diagnostics, model_metadata. Relation objects must use "
-                    "relation_kind, evidence_ids, target, value, confidence only."
+                    "relation_kind, evidence_ids, target, value, confidence only. confidence must be "
+                    'a JSON number between 0 and 1 or null, never a string. Example parser soft '
+                    'preference relation: {"relation_kind":"ADD_SOFT_FEWER_STOPS_PREFERENCE",'
+                    '"evidence_ids":["ev-unsupported-1"],"target":null,"value":null,"confidence":0.8}.'
                 ),
             ),
             PromptSection(
@@ -167,6 +179,17 @@ def _render_resolver_prompt(request: SemanticResolverRequest) -> RenderedPrompt:
             ),
         ),
     )
+
+
+def _parser_soft_fewer_stops_evidence_hints(request: SemanticResolverRequest) -> list[str]:
+    if request.task_kind.value != "PARSER" or "ADD_SOFT_FEWER_STOPS_PREFERENCE" not in request.allowed_output_vocabulary:
+        return []
+    hints: list[str] = []
+    for item in request.evidence:
+        compact = "".join(text for text in (item.source_text, item.normalized_text) if text is not None)
+        if "直飞" in compact and any(marker in compact for marker in ("更喜欢", "优先", "最好", "偏好", "倾向")):
+            hints.append(item.evidence_id)
+    return hints
 
 
 def _failure_from_invocation(code: LLMProviderFailureCode | None) -> SemanticResolverFailure:

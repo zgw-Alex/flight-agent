@@ -11,10 +11,13 @@ from flight_agent.application.requirement_parser_hybrid import (
     DeterministicInitialBinder,
     DeterministicInitialProposalBuilder,
     ParserBindingState,
+    ParserCandidateType,
     ParserEvidenceExtractor,
     ParserInterpretationRouter,
     ParserInterpretationStatus,
+    ParserSemanticBinding,
     ParserSemanticIR,
+    ParserSemanticTarget,
     RequiredSlotCompletenessDeriver,
 )
 from flight_agent.application.requirement_patch_hybrid import (
@@ -61,6 +64,7 @@ PATCH_OUTPUT_VOCABULARY = (
 )
 PARSER_OUTPUT_VOCABULARY = (
     "ACKNOWLEDGE_COMPLEX_PRICE_TIME_RELATION",
+    "ADD_SOFT_FEWER_STOPS_PREFERENCE",
     "NO_AUTHORITATIVE_BINDING",
 )
 _STRICT_RESPONSE_FIELDS = frozenset(
@@ -311,13 +315,14 @@ def _relations_from_payload(
             return _contract_failure("INVALID_RELATION_EVIDENCE", "relation evidence_ids must be strings")
         target = raw.get("target")
         value = raw.get("value")
-        confidence = raw.get("confidence")
+        confidence_result = _confidence_from_payload(raw.get("confidence"))
+        if isinstance(confidence_result, SemanticResolverFailure):
+            return SemanticResolverResult.failed(confidence_result)
+        confidence = confidence_result
         if target is not None and not isinstance(target, str):
             return _contract_failure("INVALID_TARGET", "relation target must be a string")
         if value is not None and not isinstance(value, str):
             return _contract_failure("INVALID_VALUE", "relation value must be a string")
-        if confidence is not None and (not isinstance(confidence, int | float) or isinstance(confidence, bool)):
-            return _contract_failure("INVALID_CONFIDENCE", "relation confidence must be numeric")
         key = (relation_kind, tuple(evidence_ids), target, value)
         if key in seen:
             return _contract_failure("DUPLICATE_RELATION", "duplicate semantic relation returned")
@@ -329,7 +334,7 @@ def _relations_from_payload(
                     tuple(evidence_ids),
                     target=target,
                     value=value,
-                    confidence=float(confidence) if confidence is not None else None,
+                    confidence=confidence,
                 )
             )
         except ValueError as exc:
@@ -399,6 +404,7 @@ def _validate_evidence_closed(
     response: SemanticResolverResponse, request: SemanticResolverRequest
 ) -> SemanticResolverResult:
     known_ids = frozenset(item.evidence_id for item in request.evidence)
+    known_evidence = {item.evidence_id: item for item in request.evidence}
     known_text = frozenset(
         text
         for evidence in request.evidence
@@ -408,6 +414,20 @@ def _validate_evidence_closed(
     for relation in response.relations:
         if not frozenset(relation.evidence_ids).issubset(known_ids):
             return _evidence_failure("UNKNOWN_EVIDENCE_ID", "Resolver referenced evidence outside request closure")
+        if relation.relation_kind == "ADD_SOFT_FEWER_STOPS_PREFERENCE" and (
+            relation.target is not None or relation.value is not None
+        ):
+            return _evidence_failure(
+                "UNAUTHORIZED_SOFT_PREFERENCE_PAYLOAD",
+                "Soft FEWER_STOPS parser relation must not carry model-controlled target or value",
+            )
+        if relation.relation_kind == "ADD_SOFT_FEWER_STOPS_PREFERENCE" and not _supports_soft_fewer_stops_relation(
+            tuple(known_evidence[evidence_id] for evidence_id in relation.evidence_ids)
+        ):
+            return _evidence_failure(
+                "INSUFFICIENT_SOFT_PREFERENCE_EVIDENCE",
+                "Soft FEWER_STOPS parser relation requires direct-flight evidence with a positive preference signal",
+            )
         if relation.target is not None and relation.target not in request.allowed_output_vocabulary:
             return _evidence_failure("OUT_OF_VOCABULARY_TARGET", "Resolver target is outside request vocabulary")
         if relation.value is not None and relation.value not in known_text and relation.value not in request.allowed_output_vocabulary:
@@ -492,6 +512,41 @@ def _parser_ir_from_result(ir: ParserSemanticIR, result: SemanticResolverResult)
                 _parser_issue(response.status.value if response else "MODEL_FAILURE", "Semantic resolver did not resolve authoritatively"),
             ),
         )
+    soft_preference_relations = tuple(
+        relation for relation in response.relations if relation.relation_kind == "ADD_SOFT_FEWER_STOPS_PREFERENCE"
+    )
+    if soft_preference_relations and all(
+        relation.relation_kind
+        in {
+            "ACKNOWLEDGE_COMPLEX_PRICE_TIME_RELATION",
+            "ADD_SOFT_FEWER_STOPS_PREFERENCE",
+            "NO_AUTHORITATIVE_BINDING",
+        }
+        for relation in response.relations
+    ):
+        existing_resolved = tuple(binding for binding in ir.bindings if binding.state is ParserBindingState.RESOLVED)
+        existing_targets = {binding.target for binding in existing_resolved}
+        semantic_bindings = existing_resolved
+        if ParserSemanticTarget.FEWER_STOPS not in existing_targets:
+            evidence_ids = tuple(
+                dict.fromkeys(
+                    evidence_id
+                    for relation in soft_preference_relations
+                    for evidence_id in relation.evidence_ids
+                )
+            )
+            semantic_bindings = (
+                *semantic_bindings,
+                ParserSemanticBinding(
+                    ParserSemanticTarget.FEWER_STOPS,
+                    ParserBindingState.RESOLVED,
+                    ParserCandidateType.PREFERENCE,
+                    value=None,
+                    value_signal="ADD_SOFT_FEWER_STOPS_PREFERENCE",
+                    evidence_ids=evidence_ids,
+                ),
+            )
+        return replace(ir, interpretation_status=ParserInterpretationStatus.RESOLVED, issues=(), bindings=semantic_bindings)
     non_binding_relations = {"ACKNOWLEDGE_COMPLEX_PRICE_TIME_RELATION", "NO_AUTHORITATIVE_BINDING"}
     if all(relation.relation_kind in non_binding_relations for relation in response.relations):
         return replace(
@@ -507,6 +562,31 @@ def _looks_like_invented_atomic_fact(value: str, known_text: frozenset[str]) -> 
     if value in known_text:
         return False
     return bool(re.fullmatch(r"\d+(?:\.\d+)?", value) or re.fullmatch(r"[A-Z]{3}", value) or re.fullmatch(r"\d{4}-\d{2}-\d{2}", value))
+
+
+def _confidence_from_payload(value: object) -> float | None | SemanticResolverFailure:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return _failure(SemanticResolverFailureKind.MODEL_CONTRACT, "INVALID_CONFIDENCE", "relation confidence must be numeric")
+    if isinstance(value, int | float):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value)
+        except ValueError:
+            return _failure(SemanticResolverFailureKind.MODEL_CONTRACT, "INVALID_CONFIDENCE", "relation confidence must be numeric")
+    return _failure(SemanticResolverFailureKind.MODEL_CONTRACT, "INVALID_CONFIDENCE", "relation confidence must be numeric")
+
+
+def _supports_soft_fewer_stops_relation(evidence: tuple[SemanticResolverEvidence, ...]) -> bool:
+    compact = "".join(
+        text
+        for item in evidence
+        for text in (item.source_text, item.normalized_text)
+        if text is not None
+    )
+    return "直飞" in compact and any(marker in compact for marker in ("更喜欢", "优先", "最好", "偏好", "倾向"))
 
 
 def _contract_failure(code: str, message: str) -> SemanticResolverResult:
