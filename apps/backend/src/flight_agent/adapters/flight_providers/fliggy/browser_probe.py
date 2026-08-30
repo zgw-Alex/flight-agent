@@ -76,6 +76,7 @@ class ExperimentDiagnosis(str, Enum):
 
 class FliggyPageIdentity(str, Enum):
     EXPECTED_FLIGHT_SEARCH = "EXPECTED_FLIGHT_SEARCH"
+    FLIGHT_RESULT_CANDIDATE = "FLIGHT_RESULT_CANDIDATE"
     WRONG_NAVIGATION_TARGET = "WRONG_NAVIGATION_TARGET"
     ACCESS_CHALLENGE = "ACCESS_CHALLENGE"
     LOGIN_REQUIRED = "LOGIN_REQUIRED"
@@ -160,6 +161,49 @@ class StageDiagnostic:
             "stage": self.stage.value,
             "elapsed_ms": self.elapsed_ms,
             "detail": self.detail,
+        }
+
+
+@dataclass(frozen=True)
+class ResultContextCandidate:
+    page_index: int
+    sanitized_url: str
+    title: str
+    identity: FliggyPageIdentity
+    search_plan_evidence: dict[str, bool]
+    is_current_page: bool
+
+    def score(self) -> int:
+        score = 0
+        if self.identity is FliggyPageIdentity.FLIGHT_RESULT_CANDIDATE:
+            score += 8
+        if self.search_plan_evidence.get("origin"):
+            score += 2
+        if self.search_plan_evidence.get("destination"):
+            score += 2
+        if self.search_plan_evidence.get("departure_date"):
+            score += 1
+        if "flight_search_result" in self.sanitized_url:
+            score += 1
+        if not self.is_current_page:
+            score += 1
+        return score
+
+    def route_matches(self) -> bool:
+        return self.search_plan_evidence.get("origin") is True and self.search_plan_evidence.get("destination") is True
+
+    def signature(self) -> tuple[str, str, str]:
+        return (self.sanitized_url, self.title, self.identity.value)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "page_index": self.page_index,
+            "sanitized_url": self.sanitized_url,
+            "title": self.title,
+            "identity": self.identity.value,
+            "search_plan_evidence": self.search_plan_evidence,
+            "is_current_page": self.is_current_page,
+            "score": self.score(),
         }
 
 
@@ -304,6 +348,10 @@ def classify_fliggy_page_identity(*, url: str, title: str, html: str) -> FliggyP
         return FliggyPageIdentity.LOGIN_REQUIRED
 
     expected_origin = "fliggy.com" in host or "alitrip.com" in host
+    result_path = _contains_any(urlsplit(url).path, ("flight_search_result", "trip_flight_search"))
+    result_title = _contains_any(title + page_text, ("航班查询", "特价机票", "国内机票", "起飞", "经济舱", "直飞"))
+    if expected_origin and result_path and result_title:
+        return FliggyPageIdentity.FLIGHT_RESULT_CANDIDATE
     expected_title = _contains_any(title, ("飞猪", "机票", "Fliggy"))
     expected_controls = bool(root.select(".rc-flight-searchbar")) and bool(root.select("input#form_depCity"))
     expected_text = _contains_any(page_text, ("搜索机票", "出发城市", "到达城市", "出发日期", "单程", "往返"))
@@ -312,6 +360,38 @@ def classify_fliggy_page_identity(*, url: str, title: str, html: str) -> FliggyP
     if _contains_any(page_text, ("请登录", "登录后", "请先登录")) and not expected_origin:
         return FliggyPageIdentity.LOGIN_REQUIRED
     return FliggyPageIdentity.UNKNOWN
+
+
+def summarize_search_plan_evidence(*, title: str, html: str, probe_input: ProbeInput) -> dict[str, bool]:
+    text = title + " " + parse_html(html).text_content()
+    departure_date = probe_input.departure_date.isoformat()
+    dotted_date = departure_date.replace("-", ".")
+    slash_date = departure_date.replace("-", "/")
+    chinese_date = f"{probe_input.departure_date.month}月{probe_input.departure_date.day}日"
+    compact_route = f"{probe_input.origin_text}到{probe_input.destination_text}"
+    return {
+        "origin": probe_input.origin_text in text or compact_route in text,
+        "destination": probe_input.destination_text in text or compact_route in text,
+        "departure_date": any(candidate in text for candidate in (departure_date, dotted_date, slash_date, chinese_date)),
+    }
+
+
+def choose_result_context_candidate(
+    candidates: tuple[ResultContextCandidate, ...],
+) -> ResultContextCandidate | None:
+    eligible = tuple(
+        candidate
+        for candidate in candidates
+        if candidate.identity is FliggyPageIdentity.FLIGHT_RESULT_CANDIDATE and candidate.route_matches()
+    )
+    if not eligible:
+        return None
+    ranked = sorted(eligible, key=lambda candidate: candidate.score(), reverse=True)
+    best = ranked[0]
+    tied = tuple(candidate for candidate in ranked if candidate.score() == best.score())
+    if len({candidate.signature() for candidate in tied}) > 1:
+        return None
+    return best
 
 
 def extract_level1_evidence(html: str) -> tuple[FliggyFlightEvidence, ...]:
@@ -464,6 +544,16 @@ async def run_fliggy_browser_probe(probe_input: ProbeInput) -> ProbeRunResult:
         "search_interaction_failed": False,
         "search_submission_attempted": False,
         "visible_public_form_used": False,
+        "result_context_handoff": {
+            "page_count_before_submit": None,
+            "page_count_after_submit": None,
+            "popup_or_new_page_event": False,
+            "candidate_pages": [],
+            "selected_page_index": None,
+            "selected_page_url": None,
+            "selected_page_identity": None,
+            "selection_reason": None,
+        },
         "document_ready_state": None,
         "final_sanitized_url": None,
     }
@@ -520,11 +610,27 @@ async def run_fliggy_browser_probe(probe_input: ProbeInput) -> ProbeRunResult:
                 await browser.close()
             else:
                 recorder.mark(BrowserProbeStage.SEARCH_INPUT_READY, "public flight-search controls detected")
+                page_count_before_submit = len(context.pages)
+                diagnostics["result_context_handoff"]["page_count_before_submit"] = page_count_before_submit
                 await _submit_public_flight_search(page, probe_input)
                 diagnostics["clicked"] = True
                 diagnostics["search_submission_attempted"] = True
                 diagnostics["visible_public_form_used"] = True
                 recorder.mark(BrowserProbeStage.SEARCH_SUBMITTED, "search submitted through public visible flight form")
+                page, handoff_diagnostics = await _select_result_context_page(
+                    context=context,
+                    current_page=page,
+                    probe_input=probe_input,
+                    page_error_type=PlaywrightError,
+                    page_count_before_submit=page_count_before_submit,
+                    wait_ms=min(5000, max(500, _remaining_ms(started, probe_input.overall_deadline_seconds) - 500)),
+                )
+                diagnostics["result_context_handoff"] = handoff_diagnostics
+                if handoff_diagnostics["selected_page_index"] is None:
+                    diagnostics["search_interaction_failed"] = True
+                else:
+                    diagnostics["final_sanitized_url"] = handoff_diagnostics["selected_page_url"]
+                    diagnostics["page_identity"] = handoff_diagnostics["selected_page_identity"]
                 should_wait_for_result_state = True
             if should_wait_for_result_state:
                 recorder.mark(BrowserProbeStage.RESULT_STATE_WAIT, "waiting for terminal/result state")
@@ -881,6 +987,62 @@ async def _submit_public_flight_search(page: Any, probe_input: ProbeInput) -> No
     await fill_input(".rc-flight-searchbar input#form_arrCity", probe_input.destination_text)
     await fill_input(".rc-flight-searchbar input#form_depDate", probe_input.departure_date.isoformat())
     await page.locator(".rc-flight-searchbar button.search-button").nth(0).click()
+
+
+async def _select_result_context_page(
+    *,
+    context: Any,
+    current_page: Any,
+    probe_input: ProbeInput,
+    page_error_type: type[Exception],
+    page_count_before_submit: int,
+    wait_ms: int,
+) -> tuple[Any, dict[str, Any]]:
+    await current_page.wait_for_timeout(wait_ms)
+    candidates: list[ResultContextCandidate] = []
+    pages = list(context.pages)
+    for index, candidate_page in enumerate(pages):
+        try:
+            title = await candidate_page.title()
+            html = await candidate_page.content()
+            identity = classify_fliggy_page_identity(url=candidate_page.url, title=title, html=html)
+            search_plan_evidence = summarize_search_plan_evidence(title=title, html=html, probe_input=probe_input)
+            candidates.append(
+                ResultContextCandidate(
+                    page_index=index,
+                    sanitized_url=_sanitize_source_ref(candidate_page.url),
+                    title=title,
+                    identity=identity,
+                    search_plan_evidence=search_plan_evidence,
+                    is_current_page=candidate_page == current_page,
+                )
+            )
+        except page_error_type:
+            candidates.append(
+                ResultContextCandidate(
+                    page_index=index,
+                    sanitized_url="<unavailable>",
+                    title="<unavailable>",
+                    identity=FliggyPageIdentity.UNKNOWN,
+                    search_plan_evidence={"origin": False, "destination": False, "departure_date": False},
+                    is_current_page=candidate_page == current_page,
+                )
+            )
+
+    selected = choose_result_context_candidate(tuple(candidates))
+    diagnostics = {
+        "page_count_before_submit": page_count_before_submit,
+        "page_count_after_submit": len(pages),
+        "popup_or_new_page_event": len(pages) > 1,
+        "candidate_pages": [candidate.to_dict() for candidate in candidates],
+        "selected_page_index": selected.page_index if selected is not None else None,
+        "selected_page_url": selected.sanitized_url if selected is not None else None,
+        "selected_page_identity": selected.identity.value if selected is not None else None,
+        "selection_reason": "result_identity_and_route_match" if selected is not None else "no_deterministic_result_context",
+    }
+    if selected is None:
+        return current_page, diagnostics
+    return pages[selected.page_index], diagnostics
 
 
 def _remaining_ms(started: float, deadline_seconds: float) -> int:

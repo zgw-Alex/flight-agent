@@ -14,8 +14,10 @@ from flight_agent.adapters.flight_providers.fliggy.browser_probe import (
     ProviderMarketCompleteness,
     ProbeInput,
     ProbeRunResult,
+    ResultContextCandidate,
     StageDiagnostic,
     assess_dom_coverage,
+    choose_result_context_candidate,
     classify_fliggy_page_identity,
     classify_experiment_diagnosis,
     classify_result_state,
@@ -81,6 +83,21 @@ FLIGGY_FLIGHT_ENTRY_HTML = """
 TAOBAO_STORE_NOT_FOUND_HTML = """
 <html><head><title>店铺浏览-淘宝网</title></head><body>
   <main>亲，请登录 宝贝 店铺 输入您想要的宝贝 搜索 没有找到相应的店铺信息</main>
+</body></html>
+"""
+
+
+FLIGGY_RESULT_PAGE_HTML = """
+<html><head><title>北京到杭州机票预订，北京到杭州特价机票，北京到杭州航班查询预订【飞猪国内机票】</title></head>
+<body>
+  <main>北京 到 杭州 航班查询 起飞 到达 经济舱 直飞 2026-09-14</main>
+</body></html>
+"""
+
+
+UNRELATED_FLIGGY_PAGE_HTML = """
+<html><head><title>飞猪旅行</title></head><body>
+  <main>酒店 火车票 旅游度假 景点门票</main>
 </body></html>
 """
 
@@ -163,6 +180,121 @@ def test_taobao_store_not_found_identity_is_wrong_navigation_target() -> None:
     )
 
     assert identity is FliggyPageIdentity.WRONG_NAVIGATION_TARGET
+
+
+def test_fliggy_result_page_identity_is_result_candidate() -> None:
+    identity = classify_fliggy_page_identity(
+        url="https://sjipiao.fliggy.com/flight_search_result.htm",
+        title="北京到杭州机票预订，北京到杭州特价机票，北京到杭州航班查询预订【飞猪国内机票】",
+        html=FLIGGY_RESULT_PAGE_HTML,
+    )
+
+    assert identity is FliggyPageIdentity.FLIGHT_RESULT_CANDIDATE
+
+
+def test_current_page_navigation_can_be_selected_as_result_context() -> None:
+    candidate = _result_context_candidate(
+        index=0,
+        url="https://sjipiao.fliggy.com/flight_search_result.htm",
+        title="北京到杭州机票预订",
+        identity=FliggyPageIdentity.FLIGHT_RESULT_CANDIDATE,
+        is_current=True,
+    )
+
+    assert choose_result_context_candidate((candidate,)) == candidate
+
+
+def test_popup_matching_route_is_selected_over_original_entry_page() -> None:
+    entry = _result_context_candidate(
+        index=0,
+        url="https://www.fliggy.com/?tab=flight",
+        title="飞机票查询-机票预订【飞猪旅行】",
+        identity=FliggyPageIdentity.EXPECTED_FLIGHT_SEARCH,
+        is_current=True,
+        origin=False,
+        destination=False,
+    )
+    popup = _result_context_candidate(
+        index=1,
+        url="https://sjipiao.fliggy.com/flight_search_result.htm",
+        title="北京到杭州机票预订",
+        identity=FliggyPageIdentity.FLIGHT_RESULT_CANDIDATE,
+        is_current=False,
+    )
+
+    assert choose_result_context_candidate((entry, popup)) == popup
+
+
+def test_multiple_pages_select_only_route_matching_result_context() -> None:
+    wrong_route = _result_context_candidate(
+        index=1,
+        url="https://sjipiao.fliggy.com/flight_search_result.htm",
+        title="北京到上海机票预订",
+        identity=FliggyPageIdentity.FLIGHT_RESULT_CANDIDATE,
+        is_current=False,
+        destination=False,
+    )
+    target_route = _result_context_candidate(
+        index=2,
+        url="https://sjipiao.fliggy.com/homeow/trip_flight_search.htm",
+        title="北京到杭州航班查询预订",
+        identity=FliggyPageIdentity.FLIGHT_RESULT_CANDIDATE,
+        is_current=False,
+    )
+
+    assert choose_result_context_candidate((wrong_route, target_route)) == target_route
+
+
+def test_wrong_and_unrelated_pages_are_rejected_as_result_context() -> None:
+    wrong = _result_context_candidate(
+        index=0,
+        url="https://store.taobao.com/shop/noshop.htm",
+        title="店铺浏览-淘宝网",
+        identity=FliggyPageIdentity.WRONG_NAVIGATION_TARGET,
+        is_current=False,
+    )
+    unrelated = _result_context_candidate(
+        index=1,
+        url="https://www.fliggy.com/?tab=hotel",
+        title="飞猪旅行",
+        identity=FliggyPageIdentity.UNKNOWN,
+        is_current=False,
+    )
+
+    assert choose_result_context_candidate((wrong, unrelated)) is None
+
+
+def test_ambiguous_multi_page_state_is_evidence_insufficient() -> None:
+    first = _result_context_candidate(
+        index=1,
+        url="https://sjipiao.fliggy.com/homeow/trip_flight_search.htm",
+        title="北京到杭州机票预订",
+        identity=FliggyPageIdentity.FLIGHT_RESULT_CANDIDATE,
+        is_current=False,
+    )
+    second = _result_context_candidate(
+        index=2,
+        url="https://sjipiao.fliggy.com/alternate/trip_flight_search.htm",
+        title="北京到杭州航班查询预订",
+        identity=FliggyPageIdentity.FLIGHT_RESULT_CANDIDATE,
+        is_current=False,
+    )
+
+    assert choose_result_context_candidate((first, second)) is None
+
+
+def test_no_new_page_no_navigation_preserves_search_interaction_failure_semantics() -> None:
+    entry = _result_context_candidate(
+        index=0,
+        url="https://www.fliggy.com/?tab=flight",
+        title="飞机票查询-机票预订【飞猪旅行】",
+        identity=FliggyPageIdentity.EXPECTED_FLIGHT_SEARCH,
+        is_current=True,
+        origin=False,
+        destination=False,
+    )
+
+    assert choose_result_context_candidate((entry,)) is None
 
 
 def test_navigation_source_ref_uses_stable_public_entry_and_sanitizes_tracking() -> None:
@@ -411,4 +543,25 @@ def _result(outcome: BrowserProbeOutcome, *, headless: bool) -> ProbeRunResult:
         sanitized_source_ref="https://flights.alitrip.com/flight_search_result.htm",
         evidence=(),
         diagnostics={"headless": headless},
+    )
+
+
+def _result_context_candidate(
+    *,
+    index: int,
+    url: str,
+    title: str,
+    identity: FliggyPageIdentity,
+    is_current: bool,
+    origin: bool = True,
+    destination: bool = True,
+    departure_date: bool = True,
+) -> ResultContextCandidate:
+    return ResultContextCandidate(
+        page_index=index,
+        sanitized_url=url,
+        title=title,
+        identity=identity,
+        search_plan_evidence={"origin": origin, "destination": destination, "departure_date": departure_date},
+        is_current_page=is_current,
     )
