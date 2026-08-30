@@ -28,6 +28,7 @@ from flight_agent.application.semantic_resolver import (
     SemanticResolverParserHybridInterpreter,
     SemanticResolverPatchHybridInterpreter,
     build_parser_resolver_request,
+    evaluate_parser_resolver_routing,
     parse_semantic_resolver_response,
     should_call_semantic_resolver,
 )
@@ -522,7 +523,7 @@ def test_ru2_parser_resolver_abstention_preserves_safe_initial_search_scope_only
         initial_input("9月10日从北京去上海，我更喜欢早上出发。")
     )
 
-    assert resolver.calls == 1
+    assert resolver.calls == 0
     assert result.proposal is not None
     assert isinstance(result.proposal, InitialRequirementProposal)
     assert result.proposal.unresolved_semantics == ()
@@ -555,7 +556,7 @@ def test_ru2_negated_price_resolver_output_is_rejected_without_positive_price_pr
         initial_input("9月10日从北京去上海，便宜不是最重要的。")
     )
 
-    assert resolver.calls == 1
+    assert resolver.calls == 0
     assert result.proposal is not None
     assert isinstance(result.proposal, InitialRequirementProposal)
     assert result.proposal.unresolved_semantics == ()
@@ -570,7 +571,7 @@ def test_ru2_unresolved_explicit_hard_residue_still_blocks_initial_progression()
 
     result = SemanticResolverParserHybridInterpreter(resolver).interpret(initial_input("9月10日从北京去上海，必须坐大飞机。"))
 
-    assert resolver.calls == 1
+    assert resolver.calls == 0
     assert result.proposal is not None
     assert isinstance(result.proposal, InitialRequirementProposal)
     assert result.proposal.unresolved_semantics
@@ -592,11 +593,141 @@ def test_ru2_residue_does_not_enter_m3_committed_ranking_preferences() -> None:
         recorded_at=instant(1),
     )
 
-    assert resolver.calls == 1
+    assert resolver.calls == 0
     assert outcome.status is RequirementPipelineOutcomeStatus.COMMITTED
     assert outcome.requirement is not None
     assert outcome.requirement.preferences == ()
     assert repository.get_current(RequirementId("req-ru2-residue")) == outcome.requirement
+
+
+def test_ru3_unsupported_initial_residue_has_no_downstream_resolver_value() -> None:
+    cases = [
+        ("9月10日从北京去上海，不要求直飞。", "unsupported_family"),
+        ("9月10日从北京去上海，便宜不是最重要的。", "unsupported_family"),
+        ("9月10日从北京去上海，我更喜欢早上出发。", "unsupported_family"),
+        ("9月10日从北京去上海，最好是大飞机。", "unsupported_family"),
+        ("9月10日从北京去上海，我比较在意航空公司。", "unsupported_family"),
+    ]
+
+    for message, expected_reason in cases:
+        ir, _ = build_deterministic_initial_proposal(message)
+        decision = evaluate_parser_resolver_routing(ir)
+        resolver = FakeResolver(schema_payload({}))
+
+        result = SemanticResolverParserHybridInterpreter(resolver).interpret(initial_input(message))
+
+        assert not decision.should_call
+        assert decision.reason == expected_reason
+        assert decision.candidate_semantic_space == ()
+        assert resolver.calls == 0
+        assert result.proposal is not None
+        assert isinstance(result.proposal, InitialRequirementProposal)
+        assert result.proposal.unresolved_semantics == ()
+        assert_constraint(result.proposal.constraints, ConstraintScope.ORIGIN_AIRPORT, AirportCode("PEK"))
+        assert_constraint(result.proposal.constraints, ConstraintScope.DESTINATION_AIRPORT, AirportCode("SHA"))
+        assert_constraint(result.proposal.constraints, ConstraintScope.DEPARTURE_DATE, LocalDate(date(2026, 9, 10)))
+        assert result.proposal.preferences == ()
+
+
+def test_ru3_deterministic_fast_path_cases_stay_resolver_free() -> None:
+    cases = [
+        ("9月10日从北京去上海，中转次数能少就少。", PreferenceScope.FEWER_STOPS),
+        ("9月10日从北京去上海，我更在意价格低。", PreferenceScope.PRICE),
+        ("9月10日从北京去上海，最多花1500。", None),
+        ("9月10日从北京去上海，只接受直达航班。", None),
+        ("9月10日从北京去上海，1500以内，另外中转越少越好。", PreferenceScope.FEWER_STOPS),
+    ]
+
+    for message, expected_preference in cases:
+        ir, _ = build_deterministic_initial_proposal(message)
+        decision = evaluate_parser_resolver_routing(ir)
+        resolver = FakeResolver(schema_payload({}))
+
+        result = SemanticResolverParserHybridInterpreter(resolver).interpret(initial_input(message))
+
+        assert decision.reason == "already_resolved_deterministically"
+        assert not decision.should_call
+        assert resolver.calls == 0
+        assert result.proposal is not None
+        assert isinstance(result.proposal, InitialRequirementProposal)
+        if expected_preference is not None:
+            assert any(preference.scope is expected_preference for preference in result.proposal.preferences)
+
+
+def test_ru3_missing_search_critical_evidence_remains_blocking_without_resolver() -> None:
+    cases = ["9月10日去上海", "9月10日从北京出发", "从北京去上海", "从北京或天津去上海，9月10日"]
+
+    for message in cases:
+        ir, _ = build_deterministic_initial_proposal(message)
+        decision = evaluate_parser_resolver_routing(ir)
+        resolver = FakeResolver(schema_payload({}))
+
+        result = SemanticResolverParserHybridInterpreter(resolver).interpret(initial_input(message))
+
+        assert not decision.should_call
+        assert decision.reason == "missing_required_evidence"
+        assert resolver.calls == 0
+        assert result.proposal is not None
+        assert isinstance(result.proposal, InitialRequirementProposal)
+        assert result.proposal.unresolved_semantics
+        assert result.proposal.constraints == ()
+
+
+def test_ru3_bounded_supported_initial_uncertainty_still_calls_resolver() -> None:
+    resolver = FakeResolver(
+        schema_payload(
+            {
+                "relations": [
+                    {
+                        "relation_kind": "ADD_SOFT_FEWER_STOPS_PREFERENCE",
+                        "evidence_ids": ["ev-unsupported-1"],
+                        "target": None,
+                        "value": None,
+                        "confidence": 0.75,
+                    }
+                ]
+            }
+        )
+    )
+    ir, _ = build_deterministic_initial_proposal("9月10日从北京去上海，不要求直飞，但我更喜欢直飞。")
+
+    result = SemanticResolverParserHybridInterpreter(resolver).interpret(
+        initial_input("9月10日从北京去上海，不要求直飞，但我更喜欢直飞。")
+    )
+
+    decision = evaluate_parser_resolver_routing(ir)
+    assert decision.should_call
+    assert decision.reason == "bounded_supported_relation"
+    assert decision.candidate_semantic_space == ("ADD_SOFT_FEWER_STOPS_PREFERENCE",)
+    assert resolver.calls == 1
+    assert resolver.last_request is not None
+    assert (
+        "candidate_semantic_space",
+        "ADD_SOFT_FEWER_STOPS_PREFERENCE",
+    ) in resolver.last_request.deterministic_context
+    assert result.proposal is not None
+    assert isinstance(result.proposal, InitialRequirementProposal)
+    assert result.proposal.unresolved_semantics == ()
+    assert result.proposal.preferences[0].scope is PreferenceScope.FEWER_STOPS
+
+
+def test_ru3_explicit_hard_unsupported_residue_blocks_without_resolver() -> None:
+    resolver = FakeResolver(schema_payload({}))
+    ir, _ = build_deterministic_initial_proposal("9月10日从北京去上海，必须坐大飞机。")
+
+    result = SemanticResolverParserHybridInterpreter(resolver).interpret(
+        initial_input("9月10日从北京去上海，必须坐大飞机。")
+    )
+
+    decision = evaluate_parser_resolver_routing(ir)
+    assert not decision.should_call
+    assert decision.reason == "explicit_hard_unresolved"
+    assert resolver.calls == 0
+    assert result.proposal is not None
+    assert isinstance(result.proposal, InitialRequirementProposal)
+    assert result.proposal.unresolved_semantics
+    assert result.proposal.constraints == ()
+    assert result.proposal.preferences == ()
 
 
 def test_u6h_c_parser_resolver_maps_residual_direct_preference_paraphrases() -> None:

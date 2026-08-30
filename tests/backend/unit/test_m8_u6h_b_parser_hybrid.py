@@ -160,6 +160,7 @@ def test_ru2_deterministic_soft_paraphrases_progress_without_whole_message_block
         ("9月10日从北京去上海，中转次数能少就少。", PreferenceScope.FEWER_STOPS),
         ("9月10日从北京去上海，我比较看重少中转。", PreferenceScope.FEWER_STOPS),
         ("9月10日从北京去上海，中转不是不行，不过越少越好。", PreferenceScope.FEWER_STOPS),
+        ("9月10日从北京去上海，转机越少越好。", PreferenceScope.FEWER_STOPS),
         ("9月10日从北京去上海，票价能省一点是一点。", PreferenceScope.PRICE),
         ("9月10日从北京去上海，我更在意价格低。", PreferenceScope.PRICE),
         ("9月10日从北京去上海，同等条件下选便宜的。", PreferenceScope.PRICE),

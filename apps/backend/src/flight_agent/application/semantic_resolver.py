@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import re
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from decimal import Decimal
+from enum import Enum
 from typing import Any
 
 from flight_agent.application.requirement_parser_hybrid import (
@@ -18,6 +19,7 @@ from flight_agent.application.requirement_parser_hybrid import (
     ParserInterpretationRouter,
     ParserInterpretationStatus,
     ParserSemanticBinding,
+    ParserSemanticEvidence,
     ParserSemanticIR,
     ParserSemanticTarget,
     RequiredSlotCompletenessDeriver,
@@ -73,6 +75,33 @@ PARSER_OUTPUT_VOCABULARY = (
     "ADD_HARD_MAX_STOPS_CONSTRAINT",
     "NO_AUTHORITATIVE_BINDING",
 )
+
+
+class ParserResolverRoutingOutcome(str, Enum):
+    DETERMINISTIC_COMPLETE = "DETERMINISTIC_COMPLETE"
+    RESOLVER_ELIGIBLE = "RESOLVER_ELIGIBLE"
+    NON_BLOCKING_UNSUPPORTED = "NON_BLOCKING_UNSUPPORTED"
+    MISSING_EVIDENCE_BLOCKING = "MISSING_EVIDENCE_BLOCKING"
+    HARD_UNRESOLVED_BLOCKING = "HARD_UNRESOLVED_BLOCKING"
+    IRRELEVANT = "IRRELEVANT"
+
+
+@dataclass(frozen=True)
+class ParserResolverRoutingDecision:
+    outcome: ParserResolverRoutingOutcome
+    reason: str
+    candidate_semantic_space: tuple[str, ...] = ()
+
+    @property
+    def should_call(self) -> bool:
+        return self.outcome is ParserResolverRoutingOutcome.RESOLVER_ELIGIBLE
+
+    @property
+    def should_progress_without_resolver(self) -> bool:
+        return self.outcome in {
+            ParserResolverRoutingOutcome.NON_BLOCKING_UNSUPPORTED,
+            ParserResolverRoutingOutcome.IRRELEVANT,
+        }
 _STRICT_RESPONSE_FIELDS = frozenset(
     {"request_id", "status", "relations", "unresolved_items", "diagnostics", "model_metadata"}
 )
@@ -177,7 +206,70 @@ class SemanticResolverParserHybridInterpreter:
 def should_call_semantic_resolver(ir: PatchSemanticIR | ParserSemanticIR) -> bool:
     if isinstance(ir, PatchSemanticIR):
         return ir.disposition is ResolutionDisposition.SEMANTIC_RESOLVER_REQUIRED
-    return ir.interpretation_status is ParserInterpretationStatus.SEMANTIC_RESOLVER_REQUIRED
+    return evaluate_parser_resolver_routing(ir).should_call
+
+
+def evaluate_parser_resolver_routing(ir: ParserSemanticIR) -> ParserResolverRoutingDecision:
+    if ir.interpretation_status is not ParserInterpretationStatus.SEMANTIC_RESOLVER_REQUIRED:
+        if ir.interpretation_status is ParserInterpretationStatus.RESOLVED:
+            return ParserResolverRoutingDecision(
+                ParserResolverRoutingOutcome.DETERMINISTIC_COMPLETE,
+                "already_resolved_deterministically",
+            )
+        if any(slot.state is not ParserBindingState.RESOLVED for slot in ir.required_slots):
+            return ParserResolverRoutingDecision(
+                ParserResolverRoutingOutcome.MISSING_EVIDENCE_BLOCKING,
+                "missing_required_evidence",
+            )
+        if any(
+            binding.state is not ParserBindingState.RESOLVED
+            and binding.target in {ParserSemanticTarget.MAX_PRICE, ParserSemanticTarget.MAX_STOPS, ParserSemanticTarget.TRIP_STRUCTURE}
+            for binding in ir.bindings
+        ):
+            return ParserResolverRoutingDecision(
+                ParserResolverRoutingOutcome.HARD_UNRESOLVED_BLOCKING,
+                "explicit_hard_unresolved",
+            )
+        return ParserResolverRoutingDecision(
+            ParserResolverRoutingOutcome.MISSING_EVIDENCE_BLOCKING,
+            "blocking_deterministic_issue",
+        )
+
+    if any(slot.state is not ParserBindingState.RESOLVED for slot in ir.required_slots):
+        return ParserResolverRoutingDecision(
+            ParserResolverRoutingOutcome.MISSING_EVIDENCE_BLOCKING,
+            "missing_required_evidence",
+        )
+    if any(binding.state is not ParserBindingState.RESOLVED for binding in ir.bindings):
+        return ParserResolverRoutingDecision(
+            ParserResolverRoutingOutcome.HARD_UNRESOLVED_BLOCKING,
+            "explicit_hard_unresolved",
+        )
+    unsupported_evidence = tuple(item for item in ir.evidence if item.kind is ParserEvidenceKind.UNSUPPORTED_TEXT)
+    if not unsupported_evidence:
+        return ParserResolverRoutingDecision(
+            ParserResolverRoutingOutcome.IRRELEVANT,
+            "no_downstream_proposal_value",
+        )
+    candidate_semantic_space = _parser_candidate_semantic_space(unsupported_evidence)
+    if candidate_semantic_space:
+        return ParserResolverRoutingDecision(
+            ParserResolverRoutingOutcome.RESOLVER_ELIGIBLE,
+            "bounded_supported_relation",
+            candidate_semantic_space,
+        )
+    if any(not _parser_residue_is_non_blocking(item.source_text) for item in unsupported_evidence):
+        return ParserResolverRoutingDecision(
+            ParserResolverRoutingOutcome.HARD_UNRESOLVED_BLOCKING,
+            "explicit_hard_unresolved",
+        )
+    reason = "known_negated_no_positive_preference" if _has_negated_price_preference_context(
+        _compact_parser_evidence_text(unsupported_evidence)
+    ) else "unsupported_family"
+    return ParserResolverRoutingDecision(
+        ParserResolverRoutingOutcome.NON_BLOCKING_UNSUPPORTED,
+        reason,
+    )
 
 
 def build_patch_resolver_request(ir: PatchSemanticIR, source_input: str) -> SemanticResolverRequest:
@@ -202,6 +294,7 @@ def build_patch_resolver_request(ir: PatchSemanticIR, source_input: str) -> Sema
 
 
 def build_parser_resolver_request(ir: ParserSemanticIR, source_input: str) -> SemanticResolverRequest:
+    routing = evaluate_parser_resolver_routing(ir)
     return SemanticResolverRequest(
         request_id=_request_id("parser", source_input),
         contract_version=SEMANTIC_RESOLVER_CONTRACT_VERSION,
@@ -219,6 +312,9 @@ def build_parser_resolver_request(ir: ParserSemanticIR, source_input: str) -> Se
         allowed_output_vocabulary=PARSER_OUTPUT_VOCABULARY,
         deterministic_context=(
             ("front_half", "M8-U6H-B"),
+            ("resolver_routing_outcome", routing.outcome.value),
+            ("resolver_routing_reason", routing.reason),
+            ("candidate_semantic_space", ",".join(routing.candidate_semantic_space) or "NONE"),
             *_parser_resolved_binding_context(ir),
         ),
         trace_metadata=ir.interpreter_metadata,
@@ -302,7 +398,11 @@ def resolve_parser_semantics(
     resolver: SemanticResolver,
 ) -> tuple[ParserSemanticIR, InitialRequirementProposal, SemanticResolverResult | None]:
     builder = DeterministicInitialProposalBuilder()
-    if not should_call_semantic_resolver(ir):
+    routing = evaluate_parser_resolver_routing(ir)
+    if not routing.should_call:
+        if routing.should_progress_without_resolver:
+            resolved_ir = _resolved_parser_ir_from_existing_bindings(ir)
+            return resolved_ir, builder.build(resolved_ir, source_input), None
         return ir, builder.build(ir, source_input), None
     request = build_parser_resolver_request(ir, source_input)
     result = resolver.resolve(request)
@@ -603,6 +703,69 @@ def _parser_residue_is_non_blocking(source_text: str) -> bool:
     if any(token in compact for token in ("必须", "只能", "只接受", "不能", "别高于", "不超过", "最多", "上限", "预算")):
         return False
     return not any(token in compact for token in ("如果", "但如果", "再从", "或者", "都可以"))
+
+
+def _parser_candidate_semantic_space(
+    evidence: tuple[ParserSemanticEvidence, ...],
+) -> tuple[str, ...]:
+    compact = _compact_parser_evidence_text(evidence)
+    candidates: list[str] = []
+    if _supports_parser_soft_fewer_stops_candidate(compact):
+        candidates.append("ADD_SOFT_FEWER_STOPS_PREFERENCE")
+    if _supports_parser_soft_price_candidate(compact):
+        candidates.append("ADD_SOFT_PRICE_PREFERENCE")
+    if _supports_parser_hard_price_candidate(compact):
+        candidates.append("ADD_HARD_MAX_PRICE_CONSTRAINT")
+    if _supports_parser_hard_stops_candidate(compact):
+        candidates.append("ADD_HARD_MAX_STOPS_CONSTRAINT")
+    if _supports_parser_complex_ack_candidate(compact):
+        candidates.append("ACKNOWLEDGE_COMPLEX_PRICE_TIME_RELATION")
+    return tuple(dict.fromkeys(candidates))
+
+
+def _compact_parser_evidence_text(evidence: tuple[ParserSemanticEvidence, ...]) -> str:
+    return "".join(
+        text
+        for item in evidence
+        for text in (item.source_text, item.normalized_text)
+        if text is not None
+    )
+
+
+def _supports_parser_soft_fewer_stops_candidate(compact: str) -> bool:
+    if any(token in compact for token in ("不要求直飞", "不一定非要直飞")) and not any(
+        marker in compact for marker in ("更喜欢直飞", "优先直飞", "直飞优先", "最好直飞", "最好不要转机")
+    ):
+        return False
+    return any(
+        token in compact
+        for token in (
+            "更喜欢直飞",
+            "优先直飞",
+            "直飞优先",
+            "最好不要转机",
+            "少转几次比较好",
+            "转机越少越好",
+        )
+    )
+
+
+def _supports_parser_soft_price_candidate(compact: str) -> bool:
+    return not _has_negated_price_preference_context(compact) and _has_explicit_soft_price_phrase(compact)
+
+
+def _supports_parser_hard_price_candidate(compact: str) -> bool:
+    return bool(re.search(r"\d", compact)) and any(token in compact for token in ("预算", "封顶", "别超过", "不超过", "别高于", "上限"))
+
+
+def _supports_parser_hard_stops_candidate(compact: str) -> bool:
+    return any(token in compact for token in ("不能转机", "不转机", "最多转一次", "最多允许一次中转"))
+
+
+def _supports_parser_complex_ack_candidate(compact: str) -> bool:
+    if "别太早" in compact and any(token in compact for token in ("越便宜越好", "价格越低越好", "便宜")):
+        return True
+    return "如果" in compact and any(token in compact for token in ("直飞", "便宜", "转一次"))
 
 
 def _looks_like_invented_atomic_fact(value: str, known_text: frozenset[str]) -> bool:
