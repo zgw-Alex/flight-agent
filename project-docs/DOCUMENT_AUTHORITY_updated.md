@@ -50,6 +50,19 @@ Scope。历史 Reference 仅用于追溯，不得覆盖正式收口结论。
     -   若正式收口已经锁定某项语义，而实施大纲仅给出建议 Unit
         拆分或执行顺序，以正式收口为语义上游。
 4.  **当前 Milestone / Implementation Unit 已确认规格**
+    -   `03_implementation-roadmap/milestones/M9/机票筛选Agent_第三阶段_M9_Real_Shopping_Provider_Implementation_Specification_V0.1.docx`
+        -   第三阶段 M9 One Real Flight Provider 的正式 Contract Authority / Implementation & Acceptance Baseline。
+        -   M9 status：OPEN / IN PROGRESS；授权真实 Provider evaluation 与受控 acquisition implementation，但不等于 M9 closure，也不因本次 intake 最终 SELECTED 首个 Provider。
+        -   不改写 M4 Provider/Snapshot、M6 Decision、M7 Impact/Execution、M8 Real LLM 或上游 Product/Architecture Contract；如需改变稳定 Contract，必须进入单独 Contract Amendment。
+    -   `03_implementation-roadmap/milestones/M9/机票筛选Agent_M9-BP5-U1_Fliggy_Browser_Acquisition_Read-Only_Probe_Specification_V0.1.docx`
+        -   当前授权的第一个 M9 Implementation Unit。
+        -   仅授权 FLIGGY + BROWSER 的 bounded / opt-in / read-only Probe，采集 Level-1 provider-side raw evidence 与明确 run outcome；不实现正式 Fliggy FlightProvider Adapter/Mapper、Level-2 Offer crawl、最终 PurchaseAccess 或 canonical Domain mapping。
+    -   `03_implementation-roadmap/milestones/M9/机票筛选Agent_M9_Browser_Acquisition_Provider_Exploration_and_Collaboration_Playbook_V1.0.docx`
+        -   M9 Track B 多 Provider Browser acquisition 的 supporting methodology / collaboration governance。
+        -   用于统一 Hard Gate、Evidence Grade、Outcome、Coverage、安全边界与多人 Git 同步语言；不得提升为稳定 Domain/Provider Contract。
+    -   `03_implementation-roadmap/milestones/M9/机票筛选Agent_M9_TrackB_Fliggy_Browser_Acquisition_Pilot_BP1-BP4阶段性实验结论_V0.2.docx`
+        -   FLIGGY Browser Pilot B-P1～B-P4 的 live experiment / supporting evidence。
+        -   记录人工探索结论和下一工程入口；不替代 M9 Formal Specification，不构成 M9 closure 或最终 Provider selection。
     -   `03_implementation-roadmap/milestones/M7/机票筛选Agent_第三阶段_M7_Patch_Impact_Orchestrator_Specification_V1.0.docx`
         -   第三阶段 M7 Patch + Impact + Orchestrator 的正式 Contract Authority / Implementation & Acceptance Baseline。
         -   权威范围包括 Requirement Semantic Diff、ImpactDecision、DataAction、selective ExecutionPlan、execution concurrency、Version Guard 与 Publication Guard。
@@ -68,13 +81,13 @@ Scope。历史 Reference 仅用于追溯，不得覆盖正式收口结论。
         -   第三阶段 M8 Real LLM 的正式 Milestone Closure Evidence。
         -   记录 M8-U1～M8-U7、U6H-A/B/C/D、CA01、原 Parser/Patch Real LLM baseline P0 blocker、Hybrid recovery、U6H-D evidence artifact、Aggregate Exit Gate G1～G17、Real-path P0 3-run、ordinary CI network independence 与 repository integrity 已 PASS。
         -   Contract Amendment：CA01 ACCEPTED + IMPLEMENTED + PASS；Additional Contract Amendment：NONE；M8 Milestone Status：CLOSED / PASS。
-        -   不替代 M8 Real LLM Specification 的 Contract Authority，也不启动 M9 implementation；M9 仅进入 READY / eligible for planning and specification。
+        -   不替代 M8 Real LLM Specification 的 Contract Authority；其 closure 当时使 M9 进入 READY / eligible for planning and specification。当前 M9 authority 由已纳入的 M9 Real Shopping Provider Implementation Specification V0.1 管辖。
     -   `03_implementation-roadmap/milestones/M8/机票筛选Agent_第三阶段_M8正式收口_V1.0.docx`
         -   第三阶段 M8 Real LLM / Hybrid Prototype 的正式 Repository Closure Evidence。
         -   记录 RU1 Blocking Taxonomy、RU2 Initial Progressive Interpretation、RU3 Resolver Eligibility & Routing、RU4 Patch Residue Classification & Atomicity 全部 PASS。
         -   记录 Closure Decision：`M8_RECOVERY_CLOSURE_READY_WITH_P2_GAPS`；CG1～CG10 全部 PASS；P0 findings：none；P1 findings：none；accepted P2 coverage gaps：departure-time preference、aircraft preference、airline-quality / comfort preference。
         -   记录 final unified backend：651 passed, 2 skipped；Initial Blocking Decision Accuracy：29/29；Initial Unnecessary Clarification Rate：0/24；Initial Unsafe Continuation：0/5；Initial Usable Search Recall：24/24；Patch Blocking Decision Accuracy：14/14；Patch Unsafe Partial Commit：0/5；Patch atomicity violations：0；Resolver Eligibility Precision：3/3；Resolver Eligibility Recall：3/3；Supported Top-K：7/7 deterministic；Explanation：43 tests PASS。
-        -   Baseline commit：`42faf4841506cacecc4b435c3906d863edef8b5e`；Contract Amendment：NONE；M8 Milestone Status：CLOSED；M9 Status：READY / eligible；M9 implementation NOT STARTED。
+        -   Baseline commit：`42faf4841506cacecc4b435c3906d863edef8b5e`；Contract Amendment：NONE；M8 Milestone Status：CLOSED；M8 closure 使 M9 READY / eligible。当前 M9 status 见 M9 authority 条目。
         -   不替代 M8 Real LLM Specification 的 Contract Authority；不得将 provider exposed fields 静默提升为 Domain-supported semantics 或 M6 ranking semantics。Accepted P2 gaps 的未来正式支持需要单独 capability / contract review。
     -   `03_implementation-roadmap/milestones/M8/机票筛选Agent_M8_U6H-C_Parser_Resolver_Soft_Preference_Contract_Amendment_CA02_V0.1.docx`
         -   第三阶段 M8 U6H-C Parser Resolver Soft Preference 的正式 additive Contract Amendment Authority。
@@ -312,6 +325,7 @@ Codex 在第三阶段默认遵守：
     默认 forward-only。
 -   每个 Implementation Unit 完成后 Repository 必须回到 Green baseline。
 -   真实工程事实若要求改变稳定 Contract，必须走受控 Contract Amendment。
+-   M9 多人并行时，不同合作者可评估不同 Provider + Acquisition Strategy 候选；每个实现 prompt 必须先执行 Git fetch、baseline、dirty-tree 与 remote synchronization 检查。其他合作者 push 后，新工程任务必须重新同步；任何单一合作者不得独立宣布最终 M9 Provider selection。
 
 ## 8. 当前阶段入口与后续流转
 
@@ -325,7 +339,7 @@ Codex 在第三阶段默认遵守：
 -   M6 Complete Decision Engine：CLOSED；M6-U1～M6-U6、M6-CA01-I1、GS-01～GS-08、P0-01～P0-14 与 Aggregate Exit Gate G1～G12 全部 PASS；M6-CA01 已接纳并实现；Additional Contract Amendment NONE。
 -   M7 Patch + Impact + Orchestrator：CLOSED；M7-U1～M7-U6、GS-01～GS-14 与 Aggregate Exit Gate G1～G12 全部 PASS；Contract Amendment NONE；current-main GitHub Actions CI run 33041817149 PASS。
 -   M8 Real LLM / Hybrid Prototype：CLOSED；formal repository closure evidence 为 `03_implementation-roadmap/milestones/M8/机票筛选Agent_第三阶段_M8正式收口_V1.0.docx`；Closure Decision 为 `M8_RECOVERY_CLOSURE_READY_WITH_P2_GAPS`；M8-U1～M8-U7、Aggregate Exit Gate G1～G17、Hybrid Recovery RU1～RU4、final CG1～CG10、historical Parser/Patch Real LLM P0 recovery、U6H-D evidence artifact、Real-path P0 3-run、2026-08-29 unified CI 与 final unified backend 651 passed / 2 skipped 全部 PASS；P0/P1 findings none；accepted P2 gaps 为 departure-time preference、aircraft preference、airline-quality / comfort preference；M8-U6H-CA01 ACCEPTED + IMPLEMENTED + PASS；Additional Contract Amendment NONE。
--   M9：READY / eligible for planning and specification；M9 implementation NOT STARTED。
+-   M9 One Real Flight Provider：OPEN / IN PROGRESS；formal implementation authority 为 `03_implementation-roadmap/milestones/M9/机票筛选Agent_第三阶段_M9_Real_Shopping_Provider_Implementation_Specification_V0.1.docx`。当前授权首个 Unit 为 `03_implementation-roadmap/milestones/M9/机票筛选Agent_M9-BP5-U1_Fliggy_Browser_Acquisition_Read-Only_Probe_Specification_V0.1.docx`。M9 closure 尚未声明；首个 Provider 尚未因本次 intake 最终 SELECTED；Contract Amendment NONE。
 
 当前 effective Requirement Contract：
 
@@ -374,7 +388,7 @@ M8 Real LLM 的正式 Contract Authority / Implementation & Acceptance Baseline
 保留为 M8 Real LLM 早期 closure evidence。M8 已完成 M8-U1～M8-U7、Hybrid Recovery RU1～RU4、M8-U6H-CA01、
 historical Parser/Patch Real LLM P0 recovery、U6H-D evidence bundle、Aggregate
 Exit Gate G1～G17、final CG1～CG10、Real-path P0 3-run、2026-08-29 unified CI 与 final unified backend 651 passed / 2 skipped 验证，并已登记为
-CLOSED；Closure Decision 为 `M8_RECOVERY_CLOSURE_READY_WITH_P2_GAPS`；accepted P2 gaps 为 departure-time preference、aircraft preference、airline-quality / comfort preference，未来正式支持需要单独 capability / contract review，M9 不得通过 real-provider fields 静默绕过 Domain / M6 semantic boundary。M9 进入 READY / eligible for planning and specification。M9 implementation NOT STARTED。
+CLOSED；Closure Decision 为 `M8_RECOVERY_CLOSURE_READY_WITH_P2_GAPS`；accepted P2 gaps 为 departure-time preference、aircraft preference、airline-quality / comfort preference，未来正式支持需要单独 capability / contract review，M9 不得通过 real-provider fields 静默绕过 Domain / M6 semantic boundary。M8 closure 当时使 M9 进入 READY / eligible for planning and specification；当前 M9 已由 M9 Real Shopping Provider Implementation Specification V0.1 授权进入 OPEN / IN PROGRESS，且 M9-BP5-U1 是当前授权首个实现 Unit。
 
 M3、M4、M5、M6 的正式 Contract 与 Closure Authority 保持既有权威；M7
 Specification 不替代 M1～M6 已稳定 Contract，也不提前授权 M8 capabilities
