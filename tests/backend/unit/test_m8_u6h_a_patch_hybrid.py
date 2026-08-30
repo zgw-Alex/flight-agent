@@ -286,6 +286,189 @@ def test_u6h_a_t1_consolidation_deduplicates_corrections_and_blocks_contradictio
     assert contradictory.ambiguities[0].code == "CONTRADICTORY_VALUES"
 
 
+def test_ru4_resolved_mutation_with_conversational_residue_commits_atomically() -> None:
+    repository = InMemoryRequirementRepository()
+    current = requirement_with(max_price_constraint(1800), max_stops_constraint(0), preference=soft_fewer_stops())
+    assert repository.commit_initial(current, operation_id="initial").status is CommitStatus.COMMITTED
+
+    ir, proposal = build_deterministic_patch_proposal("价格改成1500以内吧，差不多这样就行", current)
+    assert ir.disposition is ResolutionDisposition.RESOLVED
+    assert any(value == "NON_MUTATION_RESIDUE" for key, value in ir.interpreter_metadata if key.startswith("residue_classification."))
+    assert any(value == "conversational_closure" for key, value in ir.interpreter_metadata if key.startswith("residue_reason."))
+    assert tuple(operation.action for operation in proposal.operations) == (PatchProposalAction.REPLACE_CONSTRAINT,)
+
+    outcome = execute_patch_requirement_from_current(
+        repository=repository,
+        interpreter=DeterministicPatchHybridInterpreter(),
+        interpreter_input=patch_input("价格改成1500以内吧，差不多这样就行"),
+        normalization_context=normalization_context(),
+        current=current,
+        operation_id="ru4-p1",
+        recorded_at=instant(2),
+    )
+
+    assert outcome.status is RequirementPipelineOutcomeStatus.COMMITTED
+    assert outcome.requirement is not None
+    assert outcome.requirement.version == RequirementVersion(2)
+    assert max_price_value(outcome.requirement) == Decimal(1500)
+    assert max_stops_value(outcome.requirement) == 0
+    assert outcome.requirement.preferences == current.preferences
+
+
+def test_ru4_unresolved_independent_mutation_blocks_whole_patch_without_subset_commit() -> None:
+    repository = InMemoryRequirementRepository()
+    current = requirement_with(max_price_constraint(1800), max_stops_constraint(0))
+    assert repository.commit_initial(current, operation_id="initial").status is CommitStatus.COMMITTED
+
+    ir, proposal = build_deterministic_patch_proposal("价格改成1500以内，而且不要太早", current)
+    assert ir.disposition is ResolutionDisposition.CLARIFICATION_REQUIRED
+    assert [ambiguity.code for ambiguity in ir.ambiguities] == ["UNRESOLVED_REQUIRED_MUTATION"]
+    assert proposal.operations == ()
+    assert proposal.unresolved_semantics == ("Unsupported required patch mutation: 不要太早",)
+
+    outcome = execute_patch_requirement_from_current(
+        repository=repository,
+        interpreter=DeterministicPatchHybridInterpreter(),
+        interpreter_input=patch_input("价格改成1500以内，而且不要太早"),
+        normalization_context=normalization_context(),
+        current=current,
+        operation_id="ru4-p2",
+        recorded_at=instant(2),
+    )
+
+    assert outcome.status is RequirementPipelineOutcomeStatus.NEEDS_CLARIFICATION_BEFORE_COMMIT
+    assert outcome.requirement is None
+    assert repository.get_current(RequirementId("requirement-1")) == current
+
+
+def test_ru4_two_supported_mutations_still_progress_as_one_patch_message() -> None:
+    current = requirement_with(max_price_constraint(1800))
+
+    ir, proposal = build_deterministic_patch_proposal("价格改成1500以内，而且最好直飞", current)
+    assert ir.disposition is ResolutionDisposition.RESOLVED
+    assert tuple(operation.action for operation in proposal.operations) == (
+        PatchProposalAction.REPLACE_CONSTRAINT,
+        PatchProposalAction.ADD_PREFERENCE,
+    )
+
+    applied = apply_patch_proposal(current, proposal, recorded_at=instant(2))
+    assert applied.status is PatchTransitionStatus.APPLIED
+    assert applied.patch_set is not None
+    assert len(applied.patch_set.patches) == 2
+
+
+def test_ru4_preservation_and_descriptive_tails_do_not_mutate_untouched_fields() -> None:
+    current = requirement_with(max_price_constraint(1800), max_stops_constraint(0), preference=soft_fewer_stops())
+
+    for message in ("价格改成1500以内，其他不用动", "价格改成1500以内，这样更安心"):
+        ir, proposal = build_deterministic_patch_proposal(message, current)
+        assert ir.disposition is ResolutionDisposition.RESOLVED
+        assert tuple(operation.action for operation in proposal.operations) == (PatchProposalAction.REPLACE_CONSTRAINT,)
+
+        applied = apply_patch_proposal(current, proposal, recorded_at=instant(2))
+        assert applied.status is PatchTransitionStatus.APPLIED
+        assert applied.requirement is not None
+        assert max_price_value(applied.requirement) == Decimal(1500)
+        assert max_stops_value(applied.requirement) == 0
+        assert applied.requirement.preferences == current.preferences
+
+
+def test_ru4_ambiguous_and_explicit_hard_unsupported_tails_block() -> None:
+    current = requirement_with(max_price_constraint(1800), max_stops_constraint(0))
+
+    cases = [
+        ("价格改成1500以内，那个也调一下", "AMBIGUOUS_MUTATION_INTENT"),
+        ("价格改成1500以内，必须坐大飞机", "UNRESOLVED_REQUIRED_MUTATION"),
+    ]
+
+    for message, code in cases:
+        ir, proposal = build_deterministic_patch_proposal(message, current)
+        assert ir.disposition is ResolutionDisposition.CLARIFICATION_REQUIRED
+        assert [ambiguity.code for ambiguity in ir.ambiguities] == [code]
+        assert proposal.operations == ()
+
+
+def test_ru4_remove_clear_correction_contradiction_and_conversion_stay_bounded() -> None:
+    current = requirement_with(max_price_constraint(1800), max_stops_constraint(0), preference=soft_fewer_stops())
+
+    _, remove_price = build_deterministic_patch_proposal("取消预算限制", current)
+    assert tuple(operation.action for operation in remove_price.operations) == (PatchProposalAction.REMOVE_CONSTRAINT,)
+    assert remove_price.operations[0].target_id == ConstraintId("max-price")
+
+    _, clear_preferences = build_deterministic_patch_proposal("把偏好都清掉", current)
+    assert tuple(operation.action for operation in clear_preferences.operations) == (PatchProposalAction.CLEAR_PREFERENCES,)
+
+    correction_ir, correction = build_deterministic_patch_proposal("价格改成1800，算了还是1500以内", current)
+    assert correction_ir.disposition is ResolutionDisposition.RESOLVED
+    assert tuple(operation.action for operation in correction.operations) == (PatchProposalAction.REPLACE_CONSTRAINT,)
+    assert_price_constraint(correction.operations[0].item, Decimal(1500))
+
+    contradiction_ir, contradiction = build_deterministic_patch_proposal("价格改成1800，价格改成1500", current)
+    assert contradiction_ir.disposition is ResolutionDisposition.CLARIFICATION_REQUIRED
+    assert contradiction.operations == ()
+    assert contradiction.ambiguity_reasons == ("CONTRADICTORY_VALUES",)
+
+    _, conversion = build_deterministic_patch_proposal("直飞不用必须，最好就行", current)
+    assert tuple(operation.action for operation in conversion.operations) == (
+        PatchProposalAction.REMOVE_CONSTRAINT,
+        PatchProposalAction.REPLACE_PREFERENCE,
+    )
+
+
+def test_ru4_pending_patch_preserves_base_and_stale_pending_cannot_auto_commit() -> None:
+    repository = InMemoryRequirementRepository()
+    current = requirement_with(max_price_constraint(1800), max_stops_constraint(0))
+    assert repository.commit_initial(current, operation_id="initial").status is CommitStatus.COMMITTED
+
+    pending = execute_patch_requirement_from_current(
+        repository=repository,
+        interpreter=DeterministicPatchHybridInterpreter(),
+        interpreter_input=patch_input("价格改成1500以内，而且不要太早"),
+        normalization_context=normalization_context(),
+        current=current,
+        operation_id="ru4-pending",
+        recorded_at=instant(2),
+    )
+    assert pending.status is RequirementPipelineOutcomeStatus.NEEDS_CLARIFICATION_BEFORE_COMMIT
+    assert repository.get_current(RequirementId("requirement-1")) == current
+
+    advanced = execute_patch_requirement_from_current(
+        repository=repository,
+        interpreter=DeterministicPatchHybridInterpreter(),
+        interpreter_input=patch_input("价格改成1600以内，差不多这样就行"),
+        normalization_context=normalization_context(),
+        current=current,
+        operation_id="ru4-advance",
+        recorded_at=instant(3),
+    )
+    assert advanced.status is RequirementPipelineOutcomeStatus.COMMITTED
+    assert advanced.requirement is not None
+    assert advanced.requirement.version == RequirementVersion(2)
+
+    stale_pending = execute_patch_requirement_from_current(
+        repository=repository,
+        interpreter=DeterministicPatchHybridInterpreter(),
+        interpreter_input=patch_input("价格改成1500以内，而且不要太早"),
+        normalization_context=normalization_context(),
+        current=current,
+        operation_id="ru4-stale-pending",
+        recorded_at=instant(4),
+    )
+    assert stale_pending.status is RequirementPipelineOutcomeStatus.NEEDS_CLARIFICATION_BEFORE_COMMIT
+    assert repository.get_current(RequirementId("requirement-1")) == advanced.requirement
+
+
+def test_ru4_no_semantic_change_still_does_not_create_new_requirement_version() -> None:
+    current = requirement_with(max_price_constraint(1800))
+    ir, proposal = build_deterministic_patch_proposal("预算还是1800", current)
+
+    assert ir.disposition is ResolutionDisposition.RESOLVED
+    assert proposal.operations == ()
+    applied = apply_patch_proposal(current, proposal, recorded_at=instant(2))
+    assert applied.status is PatchTransitionStatus.INVALID_TRANSITION
+    assert applied.requirement is None
+
+
 def test_u6h_a_g_llm_0_hybrid_module_has_no_llm_or_network_dependency() -> None:
     source = (
         Path(__file__).parents[3] / "apps/backend/src/flight_agent/application/requirement_patch_hybrid.py"

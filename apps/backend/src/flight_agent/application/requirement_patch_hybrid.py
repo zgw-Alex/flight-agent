@@ -42,6 +42,7 @@ class SemanticEvidenceKind(str, Enum):
     REFERENCE_TEXT = "REFERENCE_TEXT"
     CORRECTION_TEXT = "CORRECTION_TEXT"
     PRESERVATION_TEXT = "PRESERVATION_TEXT"
+    RESIDUE_TEXT = "RESIDUE_TEXT"
 
 
 class SemanticTarget(str, Enum):
@@ -70,6 +71,13 @@ class ResolutionDisposition(str, Enum):
     CLARIFICATION_REQUIRED = "CLARIFICATION_REQUIRED"
     SEMANTIC_RESOLVER_REQUIRED = "SEMANTIC_RESOLVER_REQUIRED"
     INVALID = "INVALID"
+
+
+class PatchResidueClassification(str, Enum):
+    REQUIRED_MUTATION = "REQUIRED_MUTATION"
+    NON_MUTATION_RESIDUE = "NON_MUTATION_RESIDUE"
+    IRRELEVANT = "IRRELEVANT"
+    AMBIGUOUS_MUTATION_INTENT = "AMBIGUOUS_MUTATION_INTENT"
 
 
 @dataclass(frozen=True)
@@ -143,7 +151,7 @@ class PatchEvidenceExtractor:
                     source_location=SourceLocation(match.start(), match.end()),
                 )
             )
-        for index, token in enumerate(("预算", "价格", "直飞", "转一次", "限制", "日期"), start=1):
+        for index, token in enumerate(("预算", "价格", "直飞", "转一次", "限制", "日期", "偏好"), start=1):
             start = message.find(token)
             if start >= 0:
                 evidence.append(
@@ -155,7 +163,7 @@ class PatchEvidenceExtractor:
                         source_location=SourceLocation(start, start + len(token)),
                     )
                 )
-        for index, token in enumerate(("不对", "不是", "改成"), start=1):
+        for index, token in enumerate(("不对", "不是", "算了还是"), start=1):
             start = message.find(token)
             if start >= 0:
                 evidence.append(
@@ -166,13 +174,27 @@ class PatchEvidenceExtractor:
                         source_location=SourceLocation(start, start + len(token)),
                     )
                 )
-        for index, token in enumerate(("其他不变", "其余照旧"), start=1):
+        for index, token in enumerate(("其他不变", "其余照旧", "其他不用动"), start=1):
             start = message.find(token)
             if start >= 0:
                 evidence.append(
                     SemanticEvidence(
                         evidence_id=f"ev-preserve-{index}",
                         kind=SemanticEvidenceKind.PRESERVATION_TEXT,
+                        source_text=token,
+                        source_location=SourceLocation(start, start + len(token)),
+                    )
+                )
+        for index, token in enumerate(
+            ("不要太早", "别太早", "必须坐大飞机", "那个也调一下", "差不多这样就行", "就这样吧", "先这样", "这样更安心"),
+            start=1,
+        ):
+            start = message.find(token)
+            if start >= 0:
+                evidence.append(
+                    SemanticEvidence(
+                        evidence_id=f"ev-residue-{index}",
+                        kind=SemanticEvidenceKind.RESIDUE_TEXT,
                         source_text=token,
                         source_location=SourceLocation(start, start + len(token)),
                     )
@@ -196,12 +218,22 @@ class DeterministicPatchInterpreter:
             )
         clarification = _clarification_reason(compact)
         raw_mutations = _raw_mutations(compact, evidence)
+        residue_ambiguities, residue_metadata = _residue_classification(raw_mutations, evidence)
         if clarification is not None:
             return PatchSemanticIR(
                 disposition=ResolutionDisposition.CLARIFICATION_REQUIRED,
                 mutations=raw_mutations,
-                ambiguities=(SemanticAmbiguity("CLARIFICATION_REQUIRED", clarification),),
+                ambiguities=(SemanticAmbiguity("CLARIFICATION_REQUIRED", clarification), *residue_ambiguities),
                 evidence=evidence,
+                interpreter_metadata=residue_metadata,
+            )
+        if residue_ambiguities:
+            return PatchSemanticIR(
+                disposition=ResolutionDisposition.CLARIFICATION_REQUIRED,
+                mutations=raw_mutations,
+                ambiguities=residue_ambiguities,
+                evidence=evidence,
+                interpreter_metadata=residue_metadata,
             )
         assertions = (
             (
@@ -221,6 +253,7 @@ class DeterministicPatchInterpreter:
             if raw_mutations
             else (SemanticAmbiguity("NO_DETERMINISTIC_MUTATION", "No deterministic patch semantics found"),),
             evidence=evidence,
+            interpreter_metadata=residue_metadata,
         )
 
 
@@ -400,29 +433,30 @@ def _clarification_reason(message: str) -> str | None:
 def _raw_mutations(message: str, evidence: tuple[SemanticEvidence, ...]) -> tuple[SemanticMutation, ...]:
     mutations: list[SemanticMutation] = []
     numbers = tuple(item for item in evidence if item.kind is SemanticEvidenceKind.VALUE_TEXT)
-    last_number = numbers[-1] if numbers else None
-    if _mentions_price(message) and last_number is not None:
-        mutations.append(
-            SemanticMutation(
-                target=SemanticTarget.MAX_PRICE,
-                operation=SemanticOperation.SET,
-                value_evidence_id=last_number.evidence_id,
-                value=Money(Decimal(last_number.source_text), "CNY"),
-                importance_signal=SemanticImportanceSignal.HARD,
-                evidence_ids=(last_number.evidence_id,),
+    if _mentions_price(message) and numbers:
+        for number in numbers:
+            mutations.append(
+                SemanticMutation(
+                    target=SemanticTarget.MAX_PRICE,
+                    operation=SemanticOperation.SET,
+                    value_evidence_id=number.evidence_id,
+                    value=Money(Decimal(number.source_text), "CNY"),
+                    importance_signal=SemanticImportanceSignal.HARD,
+                    evidence_ids=(number.evidence_id,),
+                )
             )
-        )
-    elif ("不对" in message or "不是" in message) and last_number is not None:
-        mutations.append(
-            SemanticMutation(
-                target=SemanticTarget.MAX_PRICE,
-                operation=SemanticOperation.SET,
-                value_evidence_id=last_number.evidence_id,
-                value=Money(Decimal(last_number.source_text), "CNY"),
-                importance_signal=SemanticImportanceSignal.HARD,
-                evidence_ids=tuple(item.evidence_id for item in evidence),
+    elif ("不对" in message or "不是" in message or "算了还是" in message) and numbers:
+        for number in numbers:
+            mutations.append(
+                SemanticMutation(
+                    target=SemanticTarget.MAX_PRICE,
+                    operation=SemanticOperation.SET,
+                    value_evidence_id=number.evidence_id,
+                    value=Money(Decimal(number.source_text), "CNY"),
+                    importance_signal=SemanticImportanceSignal.HARD,
+                    evidence_ids=tuple(item.evidence_id for item in evidence),
+                )
             )
-        )
     if "取消预算限制" in message or "取消价格限制" in message:
         mutations.append(
             SemanticMutation(
@@ -480,11 +514,71 @@ def _raw_mutations(message: str, evidence: tuple[SemanticEvidence, ...]) -> tupl
         ]
     if "日期改" in message:
         mutations.append(SemanticMutation(SemanticTarget.DEPARTURE_DATE, SemanticOperation.SET))
+    if "偏好都清掉" in message or "清掉偏好" in message:
+        mutations.append(
+            SemanticMutation(
+                target=SemanticTarget.FEWER_STOPS,
+                operation=SemanticOperation.CLEAR,
+                importance_signal=SemanticImportanceSignal.SOFT,
+            )
+        )
     return tuple(mutations)
 
 
 def _mentions_price(message: str) -> bool:
     return any(token in message for token in ("预算", "价格", "不要超过", "不超过"))
+
+
+def _residue_classification(
+    mutations: tuple[SemanticMutation, ...],
+    evidence: tuple[SemanticEvidence, ...],
+) -> tuple[tuple[SemanticAmbiguity, ...], tuple[tuple[str, str], ...]]:
+    if not mutations:
+        return (), ()
+    ambiguities: list[SemanticAmbiguity] = []
+    metadata: list[tuple[str, str]] = []
+    for item in evidence:
+        if item.kind is SemanticEvidenceKind.PRESERVATION_TEXT:
+            metadata.append((f"residue_classification.{item.evidence_id}", PatchResidueClassification.NON_MUTATION_RESIDUE.value))
+            metadata.append((f"residue_reason.{item.evidence_id}", "preservation_tail"))
+            continue
+        if item.kind is not SemanticEvidenceKind.RESIDUE_TEXT:
+            continue
+        classification, reason = _classify_patch_residue_text(item.source_text)
+        metadata.append((f"residue_classification.{item.evidence_id}", classification.value))
+        metadata.append((f"residue_reason.{item.evidence_id}", reason))
+        if classification is PatchResidueClassification.REQUIRED_MUTATION:
+            ambiguities.append(
+                SemanticAmbiguity(
+                    "UNRESOLVED_REQUIRED_MUTATION",
+                    f"Unsupported required patch mutation: {item.source_text}",
+                    (item.evidence_id,),
+                )
+            )
+        elif classification is PatchResidueClassification.AMBIGUOUS_MUTATION_INTENT:
+            ambiguities.append(
+                SemanticAmbiguity(
+                    "AMBIGUOUS_MUTATION_INTENT",
+                    f"Ambiguous patch mutation intent: {item.source_text}",
+                    (item.evidence_id,),
+                )
+            )
+    return tuple(ambiguities), tuple(metadata)
+
+
+def _classify_patch_residue_text(source_text: str) -> tuple[PatchResidueClassification, str]:
+    compact = re.sub(r"\s+", "", source_text)
+    if any(token in compact for token in ("不要太早", "别太早")):
+        return PatchResidueClassification.REQUIRED_MUTATION, "unsupported_departure_time_mutation"
+    if "必须坐大飞机" in compact:
+        return PatchResidueClassification.REQUIRED_MUTATION, "unsupported_hard_aircraft_mutation"
+    if any(token in compact for token in ("那个也调一下", "也调一下", "也改一下")):
+        return PatchResidueClassification.AMBIGUOUS_MUTATION_INTENT, "ambiguous_additional_mutation"
+    if any(token in compact for token in ("差不多这样就行", "就这样吧", "先这样", "这样更安心")):
+        return PatchResidueClassification.NON_MUTATION_RESIDUE, "conversational_closure"
+    if not compact:
+        return PatchResidueClassification.IRRELEVANT, "empty"
+    return PatchResidueClassification.IRRELEVANT, "no_patch_effect"
 
 
 def _operation_for_mutation(
@@ -570,6 +664,8 @@ def _soft_direct_operation(
     mutation: SemanticMutation,
     current: RequirementState,
 ) -> tuple[PatchProposalOperation, ...] | str:
+    if mutation.operation is SemanticOperation.CLEAR:
+        return (PatchProposalOperation(PatchProposalAction.CLEAR_PREFERENCES),)
     matches = tuple(item for item in current.preferences if item.scope is PreferenceScope.FEWER_STOPS)
     item = SoftPreference(
         preference_id=PreferenceId("hybrid-fewer-stops"),
