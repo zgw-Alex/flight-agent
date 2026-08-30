@@ -50,6 +50,30 @@ class BrowserProbeOutcome(str, Enum):
     EVIDENCE_INSUFFICIENT = "EVIDENCE_INSUFFICIENT"
 
 
+class BrowserProbeStage(str, Enum):
+    BROWSER_LAUNCH = "BROWSER_LAUNCH"
+    ENTRY_NAVIGATION = "ENTRY_NAVIGATION"
+    SEARCH_INPUT_READY = "SEARCH_INPUT_READY"
+    SEARCH_SUBMITTED = "SEARCH_SUBMITTED"
+    RESULT_STATE_WAIT = "RESULT_STATE_WAIT"
+    RESULT_CONTAINER_DETECTED = "RESULT_CONTAINER_DETECTED"
+    LEVEL1_EXTRACTION = "LEVEL1_EXTRACTION"
+    COVERAGE_TRAVERSAL = "COVERAGE_TRAVERSAL"
+    COMPLETED = "COMPLETED"
+
+
+class ExperimentDiagnosis(str, Enum):
+    STABLE_SUCCESS = "STABLE_SUCCESS"
+    INTERMITTENT_SUCCESS = "INTERMITTENT_SUCCESS"
+    HEADLESS_SPECIFIC_FAILURE = "HEADLESS_SPECIFIC_FAILURE"
+    STABLE_TIMEOUT = "STABLE_TIMEOUT"
+    ACCESS_CHALLENGE = "ACCESS_CHALLENGE"
+    SELECTOR_MISMATCH = "SELECTOR_MISMATCH"
+    SEARCH_INTERACTION_FAILURE = "SEARCH_INTERACTION_FAILURE"
+    NETWORK_ENVIRONMENT_FAILURE = "NETWORK_ENVIRONMENT_FAILURE"
+    EVIDENCE_INSUFFICIENT = "EVIDENCE_INSUFFICIENT"
+
+
 class DomTraversalAssessment(str, Enum):
     COMPLETE_OBSERVED = "COMPLETE_OBSERVED"
     PARTIAL_OBSERVED = "PARTIAL_OBSERVED"
@@ -114,6 +138,20 @@ class FieldEvidence:
             "raw_text": self.raw_text,
             "selector": self.selector,
             "diagnostic": self.diagnostic,
+        }
+
+
+@dataclass(frozen=True)
+class StageDiagnostic:
+    stage: BrowserProbeStage
+    elapsed_ms: int
+    detail: str
+
+    def to_dict(self) -> dict[str, str | int]:
+        return {
+            "stage": self.stage.value,
+            "elapsed_ms": self.elapsed_ms,
+            "detail": self.detail,
         }
 
 
@@ -211,21 +249,36 @@ class ProbeRunResult:
 
 
 def classify_result_state(html: str, *, timed_out: bool = False) -> BrowserProbeOutcome:
-    root = parse_html(html)
-    page_text = root.text_content().lower()
-    if _contains_any(page_text, ("captcha", "验证码", "滑块", "安全验证", "访问验证", "拖动滑块")):
+    detector_state = summarize_detector_state(html)
+    if detector_state["access_challenge"]:
         return BrowserProbeOutcome.ACCESS_CHALLENGE
-    if _contains_any(page_text, ("请登录", "登录后", "login required", "sign in", "请先登录")):
+    if detector_state["login_required"]:
         return BrowserProbeOutcome.LOGIN_REQUIRED
-    if _contains_any(page_text, ("系统繁忙", "服务异常", "出错了", "provider error", "upstream error")):
+    if detector_state["provider_error"]:
         return BrowserProbeOutcome.PROVIDER_ERROR
-    if _result_rows(root):
+    if detector_state["result_container"]:
         return BrowserProbeOutcome.SUCCESS_COMPLETE
-    if _contains_any(page_text, ("暂无航班", "无航班", "没有找到", "no flights", "empty result")):
+    if detector_state["explicit_empty"]:
         return BrowserProbeOutcome.SUCCESS_EMPTY
     if timed_out:
         return BrowserProbeOutcome.TIMEOUT
     return BrowserProbeOutcome.EVIDENCE_INSUFFICIENT
+
+
+def summarize_detector_state(html: str) -> dict[str, bool | int]:
+    root = parse_html(html)
+    page_text = root.text_content().lower()
+    result_count = len(_result_rows(root))
+    terminal_observed, _ = _terminal_boundary_from_html(html)
+    return {
+        "access_challenge": _contains_any(page_text, ("captcha", "验证码", "滑块", "安全验证", "访问验证", "拖动滑块")),
+        "login_required": _contains_any(page_text, ("请登录", "登录后", "login required", "sign in", "请先登录")),
+        "provider_error": _contains_any(page_text, ("系统繁忙", "服务异常", "出错了", "provider error", "upstream error")),
+        "result_container": result_count > 0,
+        "explicit_empty": _contains_any(page_text, ("暂无航班", "无航班", "没有找到", "no flights", "empty result")),
+        "observed_row_count": result_count,
+        "terminal_boundary_observed": terminal_observed,
+    }
 
 
 def extract_level1_evidence(html: str) -> tuple[FliggyFlightEvidence, ...]:
@@ -327,13 +380,54 @@ def sanitize_probe_payload(value: Any) -> Any:
     return value
 
 
+def classify_experiment_diagnosis(results: tuple[ProbeRunResult, ...]) -> ExperimentDiagnosis:
+    if not results:
+        return ExperimentDiagnosis.EVIDENCE_INSUFFICIENT
+    outcomes = tuple(result.outcome for result in results)
+    if any(outcome is BrowserProbeOutcome.ACCESS_CHALLENGE for outcome in outcomes):
+        return ExperimentDiagnosis.ACCESS_CHALLENGE
+    if all(outcome is BrowserProbeOutcome.TIMEOUT for outcome in outcomes):
+        return ExperimentDiagnosis.STABLE_TIMEOUT
+    if all(outcome is BrowserProbeOutcome.NETWORK_ERROR for outcome in outcomes):
+        return ExperimentDiagnosis.NETWORK_ENVIRONMENT_FAILURE
+    success_outcomes = {BrowserProbeOutcome.SUCCESS_COMPLETE, BrowserProbeOutcome.SUCCESS_PARTIAL, BrowserProbeOutcome.SUCCESS_EMPTY}
+    success_flags = tuple(outcome in success_outcomes for outcome in outcomes)
+    if all(success_flags):
+        return ExperimentDiagnosis.STABLE_SUCCESS
+    if any(success_flags):
+        headless_results = [result for result in results if result.diagnostics.get("headless") is True]
+        headed_results = [result for result in results if result.diagnostics.get("headless") is False]
+        if headless_results and headed_results:
+            headless_success = any(result.outcome in success_outcomes for result in headless_results)
+            headed_success = any(result.outcome in success_outcomes for result in headed_results)
+            if headed_success and not headless_success:
+                return ExperimentDiagnosis.HEADLESS_SPECIFIC_FAILURE
+        return ExperimentDiagnosis.INTERMITTENT_SUCCESS
+    if any(result.diagnostics.get("search_interaction_failed") is True for result in results):
+        return ExperimentDiagnosis.SEARCH_INTERACTION_FAILURE
+    if any(result.diagnostics.get("selector_mismatch_suspected") is True for result in results):
+        return ExperimentDiagnosis.SELECTOR_MISMATCH
+    return ExperimentDiagnosis.EVIDENCE_INSUFFICIENT
+
+
 async def run_fliggy_browser_probe(probe_input: ProbeInput) -> ProbeRunResult:
     """Run the opt-in live browser probe without persisting browser session state."""
 
     started = time.monotonic()
     acquired_at = datetime.now(UTC)
     url = _build_fliggy_search_url(probe_input)
-    diagnostics: dict[str, Any] = {"read_only": True, "clicked": False, "retries": 0}
+    recorder = _StageRecorder(started)
+    diagnostics: dict[str, Any] = {
+        "read_only": True,
+        "clicked": False,
+        "retries": 0,
+        "headless": probe_input.headless,
+        "stage_diagnostics": [],
+        "last_stage": None,
+        "detector_state": summarize_detector_state(""),
+        "document_ready_state": None,
+        "final_sanitized_url": None,
+    }
     html = ""
     outcome = BrowserProbeOutcome.EVIDENCE_INSUFFICIENT
     terminal_observed = False
@@ -342,6 +436,7 @@ async def run_fliggy_browser_probe(probe_input: ProbeInput) -> ProbeRunResult:
     evidence: tuple[FliggyFlightEvidence, ...] = ()
 
     try:
+        recorder.mark(BrowserProbeStage.BROWSER_LAUNCH, "launching Playwright Chromium")
         from playwright.async_api import Error as PlaywrightError
         from playwright.async_api import TimeoutError as PlaywrightTimeoutError
         from playwright.async_api import async_playwright
@@ -354,9 +449,16 @@ async def run_fliggy_browser_probe(probe_input: ProbeInput) -> ProbeRunResult:
             context = await browser.new_context(storage_state=None)
             page = await context.new_page()
             page.set_default_timeout(_remaining_ms(started, probe_input.overall_deadline_seconds))
+            recorder.mark(BrowserProbeStage.ENTRY_NAVIGATION, "opening FLIGGY public search page")
             await page.goto(url, wait_until="domcontentloaded", timeout=_remaining_ms(started, probe_input.overall_deadline_seconds))
+            recorder.mark(BrowserProbeStage.SEARCH_INPUT_READY, "direct URL search parameters applied")
+            recorder.mark(BrowserProbeStage.SEARCH_SUBMITTED, "search submitted by public URL navigation")
+            recorder.mark(BrowserProbeStage.RESULT_STATE_WAIT, "waiting for terminal/result state")
             await page.wait_for_load_state("networkidle", timeout=_remaining_ms(started, probe_input.overall_deadline_seconds))
             html = await page.content()
+            diagnostics["document_ready_state"] = await page.evaluate("document.readyState")
+            diagnostics["final_sanitized_url"] = _sanitize_source_ref(page.url)
+            diagnostics["detector_state"] = summarize_detector_state(html)
             outcome = classify_result_state(html)
             if outcome in {
                 BrowserProbeOutcome.ACCESS_CHALLENGE,
@@ -368,14 +470,18 @@ async def run_fliggy_browser_probe(probe_input: ProbeInput) -> ProbeRunResult:
                 await context.close()
                 await browser.close()
             else:
+                recorder.mark(BrowserProbeStage.RESULT_CONTAINER_DETECTED, "result container detected")
+                recorder.mark(BrowserProbeStage.LEVEL1_EXTRACTION, "extracting Level-1 raw evidence")
                 initial_count = len(extract_level1_evidence(html))
                 previous_count = initial_count
+                recorder.mark(BrowserProbeStage.COVERAGE_TRAVERSAL, "starting bounded coverage traversal")
                 for _ in range(6):
                     if _remaining_ms(started, probe_input.overall_deadline_seconds) <= 250:
                         raise PlaywrightTimeoutError("overall deadline exhausted during traversal")
                     await page.mouse.wheel(0, 1600)
                     await page.wait_for_timeout(500)
                     html = await page.content()
+                    diagnostics["detector_state"] = summarize_detector_state(html)
                     current_count = len(extract_level1_evidence(html))
                     terminal_observed, terminal_evidence = _terminal_boundary_from_html(html)
                     if current_count == previous_count:
@@ -399,11 +505,15 @@ async def run_fliggy_browser_probe(probe_input: ProbeInput) -> ProbeRunResult:
                 )
                 diagnostics["initial_result_count"] = initial_count
                 diagnostics["stabilization_rounds"] = stabilization_rounds
+                recorder.mark(BrowserProbeStage.COMPLETED, "probe result completed")
                 await context.close()
                 await browser.close()
     except PlaywrightTimeoutError:
         outcome = BrowserProbeOutcome.TIMEOUT
         diagnostics["failure_kind"] = "timeout"
+        diagnostics["elapsed_ms"] = int((time.monotonic() - started) * 1000)
+        if html:
+            diagnostics["detector_state"] = summarize_detector_state(html)
     except PlaywrightError as exc:
         outcome = BrowserProbeOutcome.NETWORK_ERROR
         diagnostics["failure_kind"] = "playwright_error"
@@ -417,6 +527,15 @@ async def run_fliggy_browser_probe(probe_input: ProbeInput) -> ProbeRunResult:
         terminal_boundary_observed=terminal_observed,
         stabilization_rounds=stabilization_rounds,
     )
+    last_stage = recorder.last_stage()
+    if last_stage is not BrowserProbeStage.COMPLETED and outcome not in {
+        BrowserProbeOutcome.TIMEOUT,
+        BrowserProbeOutcome.NETWORK_ERROR,
+    }:
+        recorder.mark(BrowserProbeStage.COMPLETED, "probe result completed")
+    last_stage = recorder.last_stage()
+    diagnostics["last_stage"] = last_stage.value if last_stage is not None else None
+    diagnostics["stage_diagnostics"] = [stage.to_dict() for stage in recorder.stages]
     return ProbeRunResult(
         provider_identity=FLIGGY_PROVIDER_ID,
         acquisition_mode=BrowserAcquisitionMode.BROWSER,
@@ -467,6 +586,26 @@ def main(argv: list[str] | None = None) -> int:
         args.output_json.parent.mkdir(parents=True, exist_ok=True)
         args.output_json.write_text(rendered + "\n", encoding="utf-8")
     return 0 if result.outcome in {BrowserProbeOutcome.SUCCESS_COMPLETE, BrowserProbeOutcome.SUCCESS_PARTIAL, BrowserProbeOutcome.SUCCESS_EMPTY} else 2
+
+
+class _StageRecorder:
+    def __init__(self, started: float) -> None:
+        self._started = started
+        self.stages: list[StageDiagnostic] = []
+
+    def mark(self, stage: BrowserProbeStage, detail: str) -> None:
+        self.stages.append(
+            StageDiagnostic(
+                stage=stage,
+                elapsed_ms=int((time.monotonic() - self._started) * 1000),
+                detail=detail,
+            )
+        )
+
+    def last_stage(self) -> BrowserProbeStage | None:
+        if not self.stages:
+            return None
+        return self.stages[-1].stage
 
 
 class HtmlNode:

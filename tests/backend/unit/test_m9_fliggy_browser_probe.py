@@ -7,14 +7,19 @@ from flight_agent.adapters.flight_providers.fliggy.browser_probe import (
     FLIGGY_BROWSER_PROBE_VERSION,
     BrowserAcquisitionMode,
     BrowserProbeOutcome,
+    BrowserProbeStage,
     DomTraversalAssessment,
+    ExperimentDiagnosis,
     ProviderMarketCompleteness,
     ProbeInput,
     ProbeRunResult,
+    StageDiagnostic,
     assess_dom_coverage,
+    classify_experiment_diagnosis,
     classify_result_state,
     extract_level1_evidence,
     sanitize_probe_payload,
+    summarize_detector_state,
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -102,6 +107,20 @@ def test_classifier_detection_order_prioritizes_access_challenge() -> None:
     assert classify_result_state(html) is BrowserProbeOutcome.ACCESS_CHALLENGE
 
 
+def test_detector_state_summary_is_sanitized_and_machine_checkable() -> None:
+    state = summarize_detector_state(DIRECT_FLIGHT_HTML)
+
+    assert state == {
+        "access_challenge": False,
+        "login_required": False,
+        "provider_error": False,
+        "result_container": True,
+        "explicit_empty": False,
+        "observed_row_count": 1,
+        "terminal_boundary_observed": True,
+    }
+
+
 def test_classifier_distinguishes_explicit_states_and_zero_rows() -> None:
     assert classify_result_state("<main>暂无航班</main>") is BrowserProbeOutcome.SUCCESS_EMPTY
     assert classify_result_state("<main>请先登录后查看</main>") is BrowserProbeOutcome.LOGIN_REQUIRED
@@ -162,6 +181,58 @@ def test_sanitizer_excludes_sensitive_session_material() -> None:
     }
 
 
+def test_stage_diagnostics_and_timeout_last_stage_are_serialized() -> None:
+    result = ProbeRunResult(
+        provider_identity="FLIGGY",
+        acquisition_mode=BrowserAcquisitionMode.BROWSER,
+        acquired_at=datetime(2026, 8, 31, tzinfo=UTC),
+        experiment_run_id="run-timeout",
+        search_scope={"origin_text": "北京", "destination_text": "上海", "departure_date": "2026-09-14"},
+        search_plan_id=None,
+        execution_id=None,
+        outcome=BrowserProbeOutcome.TIMEOUT,
+        observed_result_count=0,
+        duration_ms=10000,
+        dom_traversal_assessment=DomTraversalAssessment.UNKNOWN,
+        provider_market_completeness=ProviderMarketCompleteness.UNKNOWN_NOT_PROVEN,
+        terminal_boundary_observed=False,
+        terminal_boundary_evidence=None,
+        parser_selector_probe_version=FLIGGY_BROWSER_PROBE_VERSION,
+        sanitized_source_ref="https://flights.alitrip.com/flight_search_result.htm",
+        evidence=(),
+        diagnostics={
+            "last_stage": BrowserProbeStage.RESULT_STATE_WAIT.value,
+            "stage_diagnostics": [
+                StageDiagnostic(BrowserProbeStage.BROWSER_LAUNCH, 1, "launch").to_dict(),
+                StageDiagnostic(BrowserProbeStage.RESULT_STATE_WAIT, 1000, "wait").to_dict(),
+            ],
+            "detector_state": summarize_detector_state(""),
+            "cookie": "abc",
+        },
+    ).to_dict()
+
+    assert result["outcome"] == BrowserProbeOutcome.TIMEOUT.value
+    assert result["diagnostics"]["last_stage"] == BrowserProbeStage.RESULT_STATE_WAIT.value
+    assert result["diagnostics"]["cookie"] == "[REDACTED]"
+    assert result["diagnostics"]["stage_diagnostics"][0]["stage"] == BrowserProbeStage.BROWSER_LAUNCH.value
+
+
+def test_experiment_diagnosis_classification() -> None:
+    timeout = _result(BrowserProbeOutcome.TIMEOUT, headless=True)
+    headed_success = _result(BrowserProbeOutcome.SUCCESS_PARTIAL, headless=False)
+    headless_timeout = _result(BrowserProbeOutcome.TIMEOUT, headless=True)
+
+    assert classify_experiment_diagnosis((timeout,)) is ExperimentDiagnosis.STABLE_TIMEOUT
+    assert (
+        classify_experiment_diagnosis((headless_timeout, headed_success))
+        is ExperimentDiagnosis.HEADLESS_SPECIFIC_FAILURE
+    )
+    assert classify_experiment_diagnosis((headed_success,)) is ExperimentDiagnosis.STABLE_SUCCESS
+    assert classify_experiment_diagnosis((_result(BrowserProbeOutcome.ACCESS_CHALLENGE, headless=True),)) is (
+        ExperimentDiagnosis.ACCESS_CHALLENGE
+    )
+
+
 def test_probe_input_keeps_browser_mode_runtime_only() -> None:
     probe_input = ProbeInput("北京", "上海", date(2026, 9, 14), headless=False)
 
@@ -212,3 +283,26 @@ def test_real_fliggy_smoke_is_explicit_opt_in_and_outside_ordinary_ci() -> None:
     assert smoke.exists()
     assert "fliggy-browser-probe-smoke" not in backend_ci
     assert "fliggy-browser-probe-smoke" not in all_ci
+
+
+def _result(outcome: BrowserProbeOutcome, *, headless: bool) -> ProbeRunResult:
+    return ProbeRunResult(
+        provider_identity="FLIGGY",
+        acquisition_mode=BrowserAcquisitionMode.BROWSER,
+        acquired_at=datetime(2026, 8, 31, tzinfo=UTC),
+        experiment_run_id="run",
+        search_scope={"origin_text": "北京", "destination_text": "上海", "departure_date": "2026-09-14"},
+        search_plan_id=None,
+        execution_id=None,
+        outcome=outcome,
+        observed_result_count=1 if outcome in {BrowserProbeOutcome.SUCCESS_COMPLETE, BrowserProbeOutcome.SUCCESS_PARTIAL} else 0,
+        duration_ms=100,
+        dom_traversal_assessment=DomTraversalAssessment.PARTIAL_OBSERVED,
+        provider_market_completeness=ProviderMarketCompleteness.UNKNOWN_NOT_PROVEN,
+        terminal_boundary_observed=False,
+        terminal_boundary_evidence=None,
+        parser_selector_probe_version=FLIGGY_BROWSER_PROBE_VERSION,
+        sanitized_source_ref="https://flights.alitrip.com/flight_search_result.htm",
+        evidence=(),
+        diagnostics={"headless": headless},
+    )
