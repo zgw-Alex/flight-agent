@@ -14,6 +14,7 @@ from flight_agent.application.requirement_parser_hybrid import (
     ParserBindingState,
     ParserCandidateType,
     ParserEvidenceExtractor,
+    ParserEvidenceKind,
     ParserInterpretationRouter,
     ParserInterpretationStatus,
     ParserSemanticBinding,
@@ -510,6 +511,8 @@ def _patch_ir_from_result(ir: PatchSemanticIR, result: SemanticResolverResult) -
 
 def _parser_ir_from_result(ir: ParserSemanticIR, result: SemanticResolverResult) -> ParserSemanticIR:
     if result.failure is not None:
+        if _parser_ir_can_progress_with_non_blocking_residue(ir):
+            return _resolved_parser_ir_from_existing_bindings(ir)
         return replace(
             ir,
             interpretation_status=ParserInterpretationStatus.CLARIFICATION_REQUIRED,
@@ -517,6 +520,8 @@ def _parser_ir_from_result(ir: ParserSemanticIR, result: SemanticResolverResult)
         )
     response = result.response
     if response is None or response.status is not SemanticResolverStatus.RESOLVED:
+        if _parser_ir_can_progress_with_non_blocking_residue(ir):
+            return _resolved_parser_ir_from_existing_bindings(ir)
         return replace(
             ir,
             interpretation_status=ParserInterpretationStatus.CLARIFICATION_REQUIRED,
@@ -556,6 +561,8 @@ def _parser_ir_from_result(ir: ParserSemanticIR, result: SemanticResolverResult)
             existing_targets.add(binding.target)
         if semantic_bindings or any(relation.relation_kind in {"ACKNOWLEDGE_COMPLEX_PRICE_TIME_RELATION", "NO_AUTHORITATIVE_BINDING"} for relation in response.relations):
             return replace(ir, interpretation_status=ParserInterpretationStatus.RESOLVED, issues=(), bindings=tuple(semantic_bindings))
+    if _parser_ir_can_progress_with_non_blocking_residue(ir):
+        return _resolved_parser_ir_from_existing_bindings(ir)
     non_binding_relations = {"ACKNOWLEDGE_COMPLEX_PRICE_TIME_RELATION", "NO_AUTHORITATIVE_BINDING"}
     if all(relation.relation_kind in non_binding_relations for relation in response.relations):
         return replace(
@@ -565,6 +572,37 @@ def _parser_ir_from_result(ir: ParserSemanticIR, result: SemanticResolverResult)
             bindings=tuple(binding for binding in ir.bindings if binding.state is ParserBindingState.RESOLVED),
         )
     return replace(ir, interpretation_status=ParserInterpretationStatus.CLARIFICATION_REQUIRED)
+
+
+def _resolved_parser_ir_from_existing_bindings(ir: ParserSemanticIR) -> ParserSemanticIR:
+    return replace(
+        ir,
+        interpretation_status=ParserInterpretationStatus.RESOLVED,
+        issues=(),
+        bindings=tuple(binding for binding in ir.bindings if binding.state is ParserBindingState.RESOLVED),
+    )
+
+
+def _parser_ir_can_progress_with_non_blocking_residue(ir: ParserSemanticIR) -> bool:
+    if _parser_ir_has_conditional_tradeoff(ir):
+        return False
+    if any(slot.state is not ParserBindingState.RESOLVED for slot in ir.required_slots):
+        return False
+    if any(binding.state is not ParserBindingState.RESOLVED for binding in ir.bindings):
+        return False
+    unsupported_evidence = tuple(item for item in ir.evidence if item.kind is ParserEvidenceKind.UNSUPPORTED_TEXT)
+    if not unsupported_evidence:
+        return False
+    return all(_parser_residue_is_non_blocking(item.source_text) for item in unsupported_evidence)
+
+
+def _parser_residue_is_non_blocking(source_text: str) -> bool:
+    compact = re.sub(r"[\s，,。；;、.!?！？]+", "", source_text)
+    if not compact:
+        return True
+    if any(token in compact for token in ("必须", "只能", "只接受", "不能", "别高于", "不超过", "最多", "上限", "预算")):
+        return False
+    return not any(token in compact for token in ("如果", "但如果", "再从", "或者", "都可以"))
 
 
 def _looks_like_invented_atomic_fact(value: str, known_text: frozenset[str]) -> bool:
@@ -612,7 +650,7 @@ def _validate_parser_relation_payload(
                 "UNAUTHORIZED_SOFT_PRICE_PAYLOAD",
                 "Soft PRICE parser relation must not carry model-controlled value",
             )
-        if not _supports_soft_price_relation(evidence):
+        if not _supports_soft_price_relation(evidence, request_evidence):
             return _evidence_failure(
                 "INSUFFICIENT_SOFT_PRICE_EVIDENCE",
                 "Soft PRICE parser relation requires explicit price preference evidence",
@@ -726,7 +764,12 @@ def _supports_soft_fewer_stops_relation(evidence: tuple[SemanticResolverEvidence
             "优先直飞",
             "最好不要转机",
             "转机越少越好",
+            "中转越少越好",
+            "中转次数能少就少",
+            "我比较看重少中转",
+            "中转不是不行不过越少越好",
             "转机少一点比较好",
+            "中转也少一点更好",
             "少转几次比较好",
             "少转",
         )
@@ -735,10 +778,28 @@ def _supports_soft_fewer_stops_relation(evidence: tuple[SemanticResolverEvidence
     )
 
 
-def _supports_soft_price_relation(evidence: tuple[SemanticResolverEvidence, ...]) -> bool:
+def _supports_soft_price_relation(
+    evidence: tuple[SemanticResolverEvidence, ...],
+    request_evidence: tuple[SemanticResolverEvidence, ...] = (),
+) -> bool:
     compact = _compact_evidence_text(evidence)
+    request_compact = _compact_evidence_text(request_evidence)
+    if _has_negated_price_preference_context(compact) or (
+        _has_negated_price_preference_context(request_compact) and not _has_explicit_soft_price_phrase(compact)
+    ):
+        return False
     if any(token in compact for token in ("封顶", "别超过", "不超过", "预算", "以内")):
         return False
+    return _has_explicit_soft_price_phrase(compact) or ("便宜" in compact and any(marker in compact for marker in ("优先", "重要", "尽量", "越好")))
+
+
+def _has_negated_price_preference_context(compact: str) -> bool:
+    if any(token in compact for token in ("便宜不是最重要", "价格不是最重要", "不是越便宜越好")):
+        return True
+    return "不是" in compact and "重要" in compact and any(token in compact for token in ("便宜", "价格", "票价"))
+
+
+def _has_explicit_soft_price_phrase(compact: str) -> bool:
     return any(
         token in compact
         for token in (
@@ -748,10 +809,16 @@ def _supports_soft_price_relation(evidence: tuple[SemanticResolverEvidence, ...]
             "便宜的优先",
             "便宜优先",
             "票价低一点优先",
+            "票价能省一点是一点",
+            "我更在意价格低",
+            "同等条件下选便宜的",
+            "价格越低越好",
+            "价格也尽量低",
+            "价格低一点更好",
             "价格也重要",
             "便宜也很重要",
         )
-    ) or ("便宜" in compact and any(marker in compact for marker in ("优先", "重要", "尽量", "越好")))
+    )
 
 
 def _supports_hard_max_price_relation(evidence: tuple[SemanticResolverEvidence, ...]) -> bool:
@@ -759,7 +826,7 @@ def _supports_hard_max_price_relation(evidence: tuple[SemanticResolverEvidence, 
     if "最好控制在" in compact:
         return False
     return bool(re.search(r"\d", compact)) and any(
-        marker in compact for marker in ("预算", "以内", "封顶", "别超过", "不超过")
+        marker in compact for marker in ("预算", "以内", "封顶", "别超过", "不超过", "最多花", "别高于", "上限", "不能超过")
     )
 
 
@@ -777,9 +844,9 @@ def _supports_hard_max_stops_relation(
     ):
         return False
     if value == "0":
-        return any(token in compact for token in ("必须直飞", "不要转机", "不能转机", "不转机"))
+        return any(token in compact for token in ("必须直飞", "不要转机", "不能转机", "不转机", "只接受直达航班", "只要直飞", "有中转的不要"))
     if value == "1":
-        return "最多转一次" in compact
+        return any(token in compact for token in ("最多转一次", "最多允许一次中转"))
     return False
 
 

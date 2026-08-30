@@ -155,6 +155,74 @@ def test_u6h_d_regression_case_19_preserves_multiple_soft_preferences() -> None:
     assert_no_constraint(proposal.constraints, ConstraintScope.MAX_PRICE)
 
 
+def test_ru2_deterministic_soft_paraphrases_progress_without_whole_message_block() -> None:
+    cases = [
+        ("9月10日从北京去上海，中转次数能少就少。", PreferenceScope.FEWER_STOPS),
+        ("9月10日从北京去上海，我比较看重少中转。", PreferenceScope.FEWER_STOPS),
+        ("9月10日从北京去上海，中转不是不行，不过越少越好。", PreferenceScope.FEWER_STOPS),
+        ("9月10日从北京去上海，票价能省一点是一点。", PreferenceScope.PRICE),
+        ("9月10日从北京去上海，我更在意价格低。", PreferenceScope.PRICE),
+        ("9月10日从北京去上海，同等条件下选便宜的。", PreferenceScope.PRICE),
+    ]
+
+    for message, expected_scope in cases:
+        ir, proposal = build_deterministic_initial_proposal(message)
+
+        assert ir.interpretation_status is ParserInterpretationStatus.RESOLVED
+        assert_preference(proposal.preferences, expected_scope)
+        assert proposal.unresolved_semantics == ()
+
+
+def test_ru2_deterministic_hard_paraphrases_bind_existing_constraints() -> None:
+    price_cases = [
+        "9月10日从北京去上海，最多花1500。",
+        "9月10日从北京去上海，机票别高于1500元。",
+        "9月10日从北京去上海，1500元是我的上限。",
+    ]
+    for message in price_cases:
+        ir, proposal = build_deterministic_initial_proposal(message)
+
+        assert ir.interpretation_status is ParserInterpretationStatus.RESOLVED
+        assert_constraint(
+            proposal.constraints,
+            ConstraintScope.MAX_PRICE,
+            Money(Decimal(1500), "CNY"),
+            ConstraintOperator.AT_OR_BEFORE,
+        )
+
+    max_stop_cases = [
+        ("9月10日从北京去上海，最多允许一次中转。", StopCount(1)),
+        ("9月10日从北京去上海，只接受直达航班。", StopCount(0)),
+        ("9月10日从北京去上海，有中转的不要。", StopCount(0)),
+    ]
+    for message, expected in max_stop_cases:
+        ir, proposal = build_deterministic_initial_proposal(message)
+
+        assert ir.interpretation_status is ParserInterpretationStatus.RESOLVED
+        assert_constraint(proposal.constraints, ConstraintScope.MAX_STOPS, expected, ConstraintOperator.AT_OR_BEFORE)
+
+
+def test_ru2_supported_members_survive_alongside_non_blocking_connectors() -> None:
+    ir, proposal = build_deterministic_initial_proposal("9月10日从北京去上海，1500以内，另外中转越少越好。")
+
+    assert ir.interpretation_status is ParserInterpretationStatus.RESOLVED
+    assert_constraint(
+        proposal.constraints,
+        ConstraintScope.MAX_PRICE,
+        Money(Decimal(1500), "CNY"),
+        ConstraintOperator.AT_OR_BEFORE,
+    )
+    assert_preference(proposal.preferences, PreferenceScope.FEWER_STOPS)
+
+
+def test_ru2_negated_price_preference_does_not_create_positive_price_preference() -> None:
+    ir, proposal = build_deterministic_initial_proposal("9月10日从北京去上海，便宜不是最重要的。")
+
+    assert ir.interpretation_status is ParserInterpretationStatus.SEMANTIC_RESOLVER_REQUIRED
+    assert all(preference.scope is not PreferenceScope.PRICE for preference in proposal.preferences)
+    assert_no_constraint(proposal.constraints, ConstraintScope.MAX_PRICE)
+
+
 def test_u6h_d_negative_controls_preserve_ambiguity_and_anti_invention() -> None:
     inexact_ir, inexact = build_deterministic_initial_proposal("9月10日从北京去上海，预算一千多。")
     assert inexact_ir.interpretation_status is ParserInterpretationStatus.CLARIFICATION_REQUIRED

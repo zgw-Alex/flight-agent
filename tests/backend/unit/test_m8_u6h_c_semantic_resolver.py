@@ -6,6 +6,7 @@ from decimal import Decimal
 from typing import Any
 
 import pytest
+
 from flight_agent.adapters.deepseek_semantic_resolver import (
     DeepSeekSemanticResolver,
     deepseek_semantic_resolver_from_config,
@@ -512,6 +513,90 @@ def test_u6h_c_parser_resolver_invoked_for_material_initial_tail_without_inventi
     assert "Conditional tradeoff remains outside parser resolver authority" in result.proposal.unresolved_semantics
     assert result.proposal.constraints == ()
     assert result.proposal.preferences == ()
+
+
+def test_ru2_parser_resolver_abstention_preserves_safe_initial_search_scope_only() -> None:
+    resolver = FakeResolver(schema_payload({"status": "UNSUPPORTED", "relations": []}))
+
+    result = SemanticResolverParserHybridInterpreter(resolver).interpret(
+        initial_input("9月10日从北京去上海，我更喜欢早上出发。")
+    )
+
+    assert resolver.calls == 1
+    assert result.proposal is not None
+    assert isinstance(result.proposal, InitialRequirementProposal)
+    assert result.proposal.unresolved_semantics == ()
+    assert_constraint(result.proposal.constraints, ConstraintScope.ORIGIN_AIRPORT, AirportCode("PEK"))
+    assert_constraint(result.proposal.constraints, ConstraintScope.DESTINATION_AIRPORT, AirportCode("SHA"))
+    assert_constraint(result.proposal.constraints, ConstraintScope.DEPARTURE_DATE, LocalDate(date(2026, 9, 10)))
+    assert result.proposal.preferences == ()
+    assert all(constraint.scope is not ConstraintScope.MAX_STOPS for constraint in result.proposal.constraints)
+    assert all(constraint.scope is not ConstraintScope.MAX_PRICE for constraint in result.proposal.constraints)
+
+
+def test_ru2_negated_price_resolver_output_is_rejected_without_positive_price_preference() -> None:
+    resolver = FakeResolver(
+        schema_payload(
+            {
+                "relations": [
+                    {
+                        "relation_kind": "ADD_SOFT_PRICE_PREFERENCE",
+                        "evidence_ids": ["ev-unsupported-1"],
+                        "target": None,
+                        "value": None,
+                        "confidence": 0.76,
+                    }
+                ]
+            }
+        )
+    )
+
+    result = SemanticResolverParserHybridInterpreter(resolver).interpret(
+        initial_input("9月10日从北京去上海，便宜不是最重要的。")
+    )
+
+    assert resolver.calls == 1
+    assert result.proposal is not None
+    assert isinstance(result.proposal, InitialRequirementProposal)
+    assert result.proposal.unresolved_semantics == ()
+    assert result.proposal.preferences == ()
+    assert_constraint(result.proposal.constraints, ConstraintScope.ORIGIN_AIRPORT, AirportCode("PEK"))
+    assert_constraint(result.proposal.constraints, ConstraintScope.DESTINATION_AIRPORT, AirportCode("SHA"))
+    assert_constraint(result.proposal.constraints, ConstraintScope.DEPARTURE_DATE, LocalDate(date(2026, 9, 10)))
+
+
+def test_ru2_unresolved_explicit_hard_residue_still_blocks_initial_progression() -> None:
+    resolver = FakeResolver(schema_payload({"status": "UNSUPPORTED", "relations": []}))
+
+    result = SemanticResolverParserHybridInterpreter(resolver).interpret(initial_input("9月10日从北京去上海，必须坐大飞机。"))
+
+    assert resolver.calls == 1
+    assert result.proposal is not None
+    assert isinstance(result.proposal, InitialRequirementProposal)
+    assert result.proposal.unresolved_semantics
+    assert result.proposal.constraints == ()
+    assert result.proposal.preferences == ()
+
+
+def test_ru2_residue_does_not_enter_m3_committed_ranking_preferences() -> None:
+    resolver = FakeResolver(schema_payload({"status": "UNSUPPORTED", "relations": []}))
+    repository = InMemoryRequirementRepository()
+
+    outcome = execute_initial_requirement(
+        repository=repository,
+        interpreter=SemanticResolverParserHybridInterpreter(resolver),
+        interpreter_input=initial_input("9月10日从北京去上海，我更喜欢早上出发。"),
+        normalization_context=normalization_context(),
+        requirement_id=RequirementId("req-ru2-residue"),
+        operation_id="op-ru2-residue",
+        recorded_at=instant(1),
+    )
+
+    assert resolver.calls == 1
+    assert outcome.status is RequirementPipelineOutcomeStatus.COMMITTED
+    assert outcome.requirement is not None
+    assert outcome.requirement.preferences == ()
+    assert repository.get_current(RequirementId("req-ru2-residue")) == outcome.requirement
 
 
 def test_u6h_c_parser_resolver_maps_residual_direct_preference_paraphrases() -> None:

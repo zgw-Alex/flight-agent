@@ -77,6 +77,13 @@ class ParserInterpretationStatus(str, Enum):
     INVALID = "INVALID"
 
 
+class ParserBlockingDisposition(str, Enum):
+    SEARCH_CRITICAL_BLOCKING = "SEARCH_CRITICAL_BLOCKING"
+    HARD_BLOCKING = "HARD_BLOCKING"
+    NON_BLOCKING_RESIDUE = "NON_BLOCKING_RESIDUE"
+    IRRELEVANT = "IRRELEVANT"
+
+
 class ParserCandidateType(str, Enum):
     CITY = "CITY"
     AIRPORT = "AIRPORT"
@@ -170,15 +177,40 @@ class ParserEvidenceExtractor:
         for token in ("从", "去", "到", "出发", "再从"):
             for start in _token_starts(message, token):
                 add(ParserEvidenceKind.RELATION_TEXT, token, start, token)
-        for token in ("预算", "以内", "必须直飞", "最多转一次", "不要转机"):
+        for token in (
+            "预算",
+            "以内",
+            "最多花",
+            "别高于",
+            "上限",
+            "不能超过",
+            "必须直飞",
+            "最多转一次",
+            "最多允许一次中转",
+            "不要转机",
+            "只接受直达航班",
+            "只要直飞",
+            "有中转的不要",
+        ):
             for start in _token_starts(message, token):
                 add(ParserEvidenceKind.CONSTRAINT_TEXT, token, start, token)
         for token in (
             "最好直飞",
             "直飞最好",
+            "中转次数能少就少",
+            "我比较看重少中转",
+            "中转不是不行，不过越少越好",
+            "中转越少越好",
             "转机少一点比较好",
+            "价格越低越好",
             "价格越便宜越好",
             "越便宜越好",
+            "票价能省一点是一点",
+            "我更在意价格低",
+            "同等条件下选便宜的",
+            "价格也尽量低",
+            "价格低一点更好",
+            "中转也少一点更好",
             "便宜也很重要",
             "其他没要求",
         ):
@@ -207,13 +239,26 @@ class DeterministicInitialBinder:
         price = _price_binding(message, evidence)
         if price is not None:
             bindings.append(price)
-        if "必须直飞" in compact or ("不要转机" in compact and "最好不要转机" not in compact):
+        if _has_hard_direct_signal(compact):
             bindings.append(_simple_binding(ParserSemanticTarget.MAX_STOPS, StopCount(0), ParserCandidateType.STOP_COUNT, evidence))
-        if "最多转一次" in compact:
+        if any(token in compact for token in ("最多转一次", "最多允许一次中转")):
             bindings.append(_simple_binding(ParserSemanticTarget.MAX_STOPS, StopCount(1), ParserCandidateType.STOP_COUNT, evidence))
-        if any(token in compact for token in ("最好直飞", "直飞最好", "转机少一点比较好")):
+        if any(
+            token in compact
+            for token in (
+                "最好直飞",
+                "直飞最好",
+                "中转次数能少就少",
+                "我比较看重少中转",
+                "中转不是不行，不过越少越好",
+                "中转不是不行不过越少越好",
+                "中转越少越好",
+                "转机少一点比较好",
+                "中转也少一点更好",
+            )
+        ) or ("中转不是不行" in compact and "越少越好" in compact):
             bindings.append(_simple_binding(ParserSemanticTarget.FEWER_STOPS, None, ParserCandidateType.PREFERENCE, evidence))
-        if any(token in compact for token in ("价格越便宜越好", "越便宜越好", "便宜也很重要")):
+        if _has_soft_price_signal(compact):
             bindings.append(_simple_binding(ParserSemanticTarget.PRICE, None, ParserCandidateType.PREFERENCE, evidence))
         if "再从" in compact:
             bindings.append(
@@ -299,14 +344,25 @@ class ParserInterpretationRouter:
         evidence: tuple[ParserSemanticEvidence, ...],
     ) -> ParserSemanticIR:
         issues: list[ParserSemanticIssue] = []
+        metadata: list[tuple[str, str]] = []
         for slot in required_slots:
             if slot.state is not ParserBindingState.RESOLVED:
                 issues.append(ParserSemanticIssue(slot.state.value, slot.message, slot.evidence_ids))
+                metadata.append((f"blocking_disposition.{slot.target.value}", ParserBlockingDisposition.SEARCH_CRITICAL_BLOCKING.value))
         for binding in bindings:
             if binding.state in {ParserBindingState.AMBIGUOUS, ParserBindingState.CONFLICTING, ParserBindingState.UNSUPPORTED}:
+                disposition = _blocking_disposition_for_binding(binding)
                 issues.append(ParserSemanticIssue(binding.state.value, f"{binding.target.value} is {binding.state.value}", binding.evidence_ids))
+                metadata.append((f"blocking_disposition.{binding.target.value}", disposition.value))
         if issues:
-            return ParserSemanticIR(ParserInterpretationStatus.CLARIFICATION_REQUIRED, required_slots, bindings, tuple(issues), evidence)
+            return ParserSemanticIR(
+                ParserInterpretationStatus.CLARIFICATION_REQUIRED,
+                required_slots,
+                bindings,
+                tuple(issues),
+                evidence,
+                tuple(metadata),
+            )
         semantic_resolver_evidence_ids = _semantic_resolver_required_evidence_ids(evidence)
         if semantic_resolver_evidence_ids:
             return ParserSemanticIR(
@@ -455,7 +511,7 @@ def _date_bindings(message: str, evidence: tuple[ParserSemanticEvidence, ...]) -
 
 def _price_binding(message: str, evidence: tuple[ParserSemanticEvidence, ...]) -> ParserSemanticBinding | None:
     compact = re.sub(r"\s+", "", message)
-    if "预算" not in compact and "以内" not in compact:
+    if not _has_hard_price_ceiling_signal(compact):
         return None
     if "一千多" in compact:
         return None
@@ -476,6 +532,35 @@ def _price_binding(message: str, evidence: tuple[ParserSemanticEvidence, ...]) -
         value=value,
         value_signal=value_source.source_text,
         evidence_ids=(value_source.evidence_id,),
+    )
+
+
+def _has_hard_price_ceiling_signal(compact: str) -> bool:
+    return any(token in compact for token in ("预算", "以内", "最多花", "别高于", "上限", "不能超过"))
+
+
+def _has_hard_direct_signal(compact: str) -> bool:
+    if "最好不要转机" in compact:
+        return False
+    return any(token in compact for token in ("必须直飞", "不要转机", "只接受直达航班", "只要直飞", "有中转的不要"))
+
+
+def _has_soft_price_signal(compact: str) -> bool:
+    if any(token in compact for token in ("便宜不是最重要", "价格不是最重要", "不是越便宜越好")):
+        return False
+    return any(
+        token in compact
+        for token in (
+            "价格越便宜越好",
+            "越便宜越好",
+            "价格越低越好",
+            "票价能省一点是一点",
+            "我更在意价格低",
+            "同等条件下选便宜的",
+            "价格也尽量低",
+            "价格低一点更好",
+            "便宜也很重要",
+        )
     )
 
 
@@ -617,6 +702,18 @@ def _requires_semantic_resolver(source_text: str) -> bool:
     return not _is_benign_residue(source_text)
 
 
+def _blocking_disposition_for_binding(binding: ParserSemanticBinding) -> ParserBlockingDisposition:
+    if binding.target in {ParserSemanticTarget.ORIGIN, ParserSemanticTarget.DESTINATION, ParserSemanticTarget.DEPARTURE_DATE}:
+        return ParserBlockingDisposition.SEARCH_CRITICAL_BLOCKING
+    if binding.target in {ParserSemanticTarget.MAX_PRICE, ParserSemanticTarget.MAX_STOPS}:
+        return ParserBlockingDisposition.HARD_BLOCKING
+    if binding.target is ParserSemanticTarget.TRIP_STRUCTURE:
+        return ParserBlockingDisposition.SEARCH_CRITICAL_BLOCKING
+    if binding.target in {ParserSemanticTarget.PRICE, ParserSemanticTarget.FEWER_STOPS}:
+        return ParserBlockingDisposition.NON_BLOCKING_RESIDUE
+    return ParserBlockingDisposition.IRRELEVANT
+
+
 def _material_semantic_residue_spans(
     message: str,
     evidence: tuple[ParserSemanticEvidence, ...],
@@ -723,6 +820,8 @@ _BENIGN_RESIDUE_TOKENS = (
     "查询",
     "看看",
     "而且",
+    "另外",
+    "同时",
     "我想订",
     "我想买",
     "我想查",
@@ -740,6 +839,9 @@ _BENIGN_RESIDUE_TOKENS = (
     "不一定要直飞",
     "元",
     "人民币",
+    "是我的",
+    "是我",
+    "是",
     "谢谢",
     "多谢",
     "您好",
