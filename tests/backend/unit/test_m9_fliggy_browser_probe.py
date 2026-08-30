@@ -10,11 +10,13 @@ from flight_agent.adapters.flight_providers.fliggy.browser_probe import (
     BrowserProbeStage,
     DomTraversalAssessment,
     ExperimentDiagnosis,
+    FliggyPageIdentity,
     ProviderMarketCompleteness,
     ProbeInput,
     ProbeRunResult,
     StageDiagnostic,
     assess_dom_coverage,
+    classify_fliggy_page_identity,
     classify_experiment_diagnosis,
     classify_result_state,
     extract_level1_evidence,
@@ -57,6 +59,28 @@ CODESHARE_HTML = """
     <td><span data-testid="share-flight-tip">实际乘坐航班：东方航空MU5100</span></td>
     <td class="flight-operate"><button aria-label="订票">订票</button></td>
   </tr>
+</body></html>
+"""
+
+
+FLIGGY_FLIGHT_ENTRY_HTML = """
+<html><head><title>飞机票查询-机票预订【飞猪旅行】</title></head><body>
+  <div class="rc-flight-searchbar">
+    <button class="tab-item selected-tab-item">国内</button>
+    <button role="radio">单程</button>
+    <div id="form_depCity"><input id="form_depCity" value="北京" /></div>
+    <div id="form_arrCity"><input id="form_arrCity" value="杭州" /></div>
+    <input id="form_depDate" value="2026-09-01" />
+    <button class="search-button">搜索机票</button>
+  </div>
+  <main>机票 出发城市 到达城市 出发日期 单程 往返</main>
+</body></html>
+"""
+
+
+TAOBAO_STORE_NOT_FOUND_HTML = """
+<html><head><title>店铺浏览-淘宝网</title></head><body>
+  <main>亲，请登录 宝贝 店铺 输入您想要的宝贝 搜索 没有找到相应的店铺信息</main>
 </body></html>
 """
 
@@ -119,6 +143,88 @@ def test_detector_state_summary_is_sanitized_and_machine_checkable() -> None:
         "observed_row_count": 1,
         "terminal_boundary_observed": True,
     }
+
+
+def test_fliggy_reference_entry_identity_is_accepted_without_tracking_params() -> None:
+    identity = classify_fliggy_page_identity(
+        url="https://www.fliggy.com/?tab=flight",
+        title="飞机票查询-机票预订【飞猪旅行】",
+        html=FLIGGY_FLIGHT_ENTRY_HTML,
+    )
+
+    assert identity is FliggyPageIdentity.EXPECTED_FLIGHT_SEARCH
+
+
+def test_taobao_store_not_found_identity_is_wrong_navigation_target() -> None:
+    identity = classify_fliggy_page_identity(
+        url="https://store.taobao.com/shop/noshop.htm",
+        title="店铺浏览-淘宝网",
+        html=TAOBAO_STORE_NOT_FOUND_HTML,
+    )
+
+    assert identity is FliggyPageIdentity.WRONG_NAVIGATION_TARGET
+
+
+def test_navigation_source_ref_uses_stable_public_entry_and_sanitizes_tracking() -> None:
+    result = ProbeRunResult(
+        provider_identity="FLIGGY",
+        acquisition_mode=BrowserAcquisitionMode.BROWSER,
+        acquired_at=datetime(2026, 8, 31, tzinfo=UTC),
+        experiment_run_id="run-entry",
+        search_scope={"origin_text": "北京", "destination_text": "上海", "departure_date": "2026-09-14"},
+        search_plan_id=None,
+        execution_id=None,
+        outcome=BrowserProbeOutcome.EVIDENCE_INSUFFICIENT,
+        observed_result_count=0,
+        duration_ms=10,
+        dom_traversal_assessment=DomTraversalAssessment.UNKNOWN,
+        provider_market_completeness=ProviderMarketCompleteness.UNKNOWN_NOT_PROVEN,
+        terminal_boundary_observed=False,
+        terminal_boundary_evidence=None,
+        parser_selector_probe_version=FLIGGY_BROWSER_PROBE_VERSION,
+        sanitized_source_ref="https://www.fliggy.com/?tab=flight",
+        evidence=(),
+        diagnostics={
+            "entry_url_strategy": "public_fliggy_flight_entry_tab",
+            "final_sanitized_url": "https://www.fliggy.com/?tab=flight",
+            "source_with_spm": "https://www.fliggy.com/?spm=abc&tab=flight&session=secret",
+            "page_identity": FliggyPageIdentity.EXPECTED_FLIGHT_SEARCH.value,
+        },
+    ).to_dict()
+
+    assert result["sanitized_source_ref"] == "https://www.fliggy.com/?tab=flight"
+    assert result["diagnostics"]["source_with_spm"] == "[REDACTED]"
+    assert result["diagnostics"]["page_identity"] == FliggyPageIdentity.EXPECTED_FLIGHT_SEARCH.value
+
+
+def test_wrong_target_diagnostic_marks_search_interaction_failure_without_new_outcome() -> None:
+    result = ProbeRunResult(
+        provider_identity="FLIGGY",
+        acquisition_mode=BrowserAcquisitionMode.BROWSER,
+        acquired_at=datetime(2026, 8, 31, tzinfo=UTC),
+        experiment_run_id="run-wrong-target",
+        search_scope={"origin_text": "北京", "destination_text": "上海", "departure_date": "2026-09-14"},
+        search_plan_id=None,
+        execution_id=None,
+        outcome=BrowserProbeOutcome.EVIDENCE_INSUFFICIENT,
+        observed_result_count=0,
+        duration_ms=10,
+        dom_traversal_assessment=DomTraversalAssessment.UNKNOWN,
+        provider_market_completeness=ProviderMarketCompleteness.UNKNOWN_NOT_PROVEN,
+        terminal_boundary_observed=False,
+        terminal_boundary_evidence=None,
+        parser_selector_probe_version=FLIGGY_BROWSER_PROBE_VERSION,
+        sanitized_source_ref="https://www.fliggy.com/?tab=flight",
+        evidence=(),
+        diagnostics={
+            "page_identity": FliggyPageIdentity.WRONG_NAVIGATION_TARGET.value,
+            "wrong_navigation_target": True,
+            "search_interaction_failed": True,
+        },
+    )
+
+    assert result.outcome is BrowserProbeOutcome.EVIDENCE_INSUFFICIENT
+    assert classify_experiment_diagnosis((result,)) is ExperimentDiagnosis.SEARCH_INTERACTION_FAILURE
 
 
 def test_classifier_distinguishes_explicit_states_and_zero_rows() -> None:

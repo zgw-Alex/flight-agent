@@ -16,12 +16,12 @@ from enum import Enum
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any, Self
-from urllib.parse import quote, urlsplit, urlunsplit
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 FLIGGY_BROWSER_PROBE_VERSION = "m9-bp5-u1-fliggy-browser-probe-v0.1"
 FLIGGY_PROVIDER_ID = "FLIGGY"
 FLIGGY_ACQUISITION_MODE = "BROWSER"
-_FLIGGY_SEARCH_ENDPOINT = "https://flights.alitrip.com/flight_search_result.htm"
+_FLIGGY_FLIGHT_ENTRY_URL = "https://www.fliggy.com/?tab=flight"
 
 _SENSITIVE_KEY_FRAGMENTS = (
     "authorization",
@@ -72,6 +72,14 @@ class ExperimentDiagnosis(str, Enum):
     SEARCH_INTERACTION_FAILURE = "SEARCH_INTERACTION_FAILURE"
     NETWORK_ENVIRONMENT_FAILURE = "NETWORK_ENVIRONMENT_FAILURE"
     EVIDENCE_INSUFFICIENT = "EVIDENCE_INSUFFICIENT"
+
+
+class FliggyPageIdentity(str, Enum):
+    EXPECTED_FLIGHT_SEARCH = "EXPECTED_FLIGHT_SEARCH"
+    WRONG_NAVIGATION_TARGET = "WRONG_NAVIGATION_TARGET"
+    ACCESS_CHALLENGE = "ACCESS_CHALLENGE"
+    LOGIN_REQUIRED = "LOGIN_REQUIRED"
+    UNKNOWN = "UNKNOWN"
 
 
 class DomTraversalAssessment(str, Enum):
@@ -281,6 +289,31 @@ def summarize_detector_state(html: str) -> dict[str, bool | int]:
     }
 
 
+def classify_fliggy_page_identity(*, url: str, title: str, html: str) -> FliggyPageIdentity:
+    root = parse_html(html)
+    page_text = root.text_content()
+    lowered_text = page_text.lower()
+    host = urlsplit(url).netloc.lower()
+    if _contains_any(lowered_text, ("captcha", "验证码", "滑块", "安全验证", "访问验证", "拖动滑块")):
+        return FliggyPageIdentity.ACCESS_CHALLENGE
+    if _contains_any(page_text, ("没有找到相应的店铺信息", "没有找到店铺", "店铺不存在", "找不到店铺")):
+        return FliggyPageIdentity.WRONG_NAVIGATION_TARGET
+    if "taobao.com" in host and _contains_any(title + page_text, ("店铺浏览", "店铺", "宝贝")):
+        return FliggyPageIdentity.WRONG_NAVIGATION_TARGET
+    if _contains_any(lowered_text, ("login required", "sign in")):
+        return FliggyPageIdentity.LOGIN_REQUIRED
+
+    expected_origin = "fliggy.com" in host or "alitrip.com" in host
+    expected_title = _contains_any(title, ("飞猪", "机票", "Fliggy"))
+    expected_controls = bool(root.select(".rc-flight-searchbar")) and bool(root.select("input#form_depCity"))
+    expected_text = _contains_any(page_text, ("搜索机票", "出发城市", "到达城市", "出发日期", "单程", "往返"))
+    if expected_origin and (expected_controls or (expected_title and expected_text)):
+        return FliggyPageIdentity.EXPECTED_FLIGHT_SEARCH
+    if _contains_any(page_text, ("请登录", "登录后", "请先登录")) and not expected_origin:
+        return FliggyPageIdentity.LOGIN_REQUIRED
+    return FliggyPageIdentity.UNKNOWN
+
+
 def extract_level1_evidence(html: str) -> tuple[FliggyFlightEvidence, ...]:
     root = parse_html(html)
     evidence: list[FliggyFlightEvidence] = []
@@ -422,9 +455,15 @@ async def run_fliggy_browser_probe(probe_input: ProbeInput) -> ProbeRunResult:
         "clicked": False,
         "retries": 0,
         "headless": probe_input.headless,
+        "entry_url_strategy": "public_fliggy_flight_entry_tab",
         "stage_diagnostics": [],
         "last_stage": None,
         "detector_state": summarize_detector_state(""),
+        "page_identity": FliggyPageIdentity.UNKNOWN.value,
+        "wrong_navigation_target": False,
+        "search_interaction_failed": False,
+        "search_submission_attempted": False,
+        "visible_public_form_used": False,
         "document_ready_state": None,
         "final_sanitized_url": None,
     }
@@ -451,15 +490,69 @@ async def run_fliggy_browser_probe(probe_input: ProbeInput) -> ProbeRunResult:
             page.set_default_timeout(_remaining_ms(started, probe_input.overall_deadline_seconds))
             recorder.mark(BrowserProbeStage.ENTRY_NAVIGATION, "opening FLIGGY public search page")
             await page.goto(url, wait_until="domcontentloaded", timeout=_remaining_ms(started, probe_input.overall_deadline_seconds))
-            recorder.mark(BrowserProbeStage.SEARCH_INPUT_READY, "direct URL search parameters applied")
-            recorder.mark(BrowserProbeStage.SEARCH_SUBMITTED, "search submitted by public URL navigation")
-            recorder.mark(BrowserProbeStage.RESULT_STATE_WAIT, "waiting for terminal/result state")
-            await page.wait_for_load_state("networkidle", timeout=_remaining_ms(started, probe_input.overall_deadline_seconds))
             html = await page.content()
+            title = await page.title()
             diagnostics["document_ready_state"] = await page.evaluate("document.readyState")
             diagnostics["final_sanitized_url"] = _sanitize_source_ref(page.url)
             diagnostics["detector_state"] = summarize_detector_state(html)
-            outcome = classify_result_state(html)
+            page_identity = classify_fliggy_page_identity(url=page.url, title=title, html=html)
+            diagnostics["page_identity"] = page_identity.value
+            diagnostics["page_title"] = title
+            should_wait_for_result_state = False
+            if page_identity is FliggyPageIdentity.ACCESS_CHALLENGE:
+                outcome = BrowserProbeOutcome.ACCESS_CHALLENGE
+                await context.close()
+                await browser.close()
+            elif page_identity is FliggyPageIdentity.LOGIN_REQUIRED:
+                outcome = BrowserProbeOutcome.LOGIN_REQUIRED
+                await context.close()
+                await browser.close()
+            elif page_identity is FliggyPageIdentity.WRONG_NAVIGATION_TARGET:
+                outcome = BrowserProbeOutcome.EVIDENCE_INSUFFICIENT
+                diagnostics["wrong_navigation_target"] = True
+                diagnostics["search_interaction_failed"] = True
+                await context.close()
+                await browser.close()
+            elif page_identity is FliggyPageIdentity.UNKNOWN:
+                diagnostics["search_interaction_failed"] = True
+                outcome = BrowserProbeOutcome.EVIDENCE_INSUFFICIENT
+                await context.close()
+                await browser.close()
+            else:
+                recorder.mark(BrowserProbeStage.SEARCH_INPUT_READY, "public flight-search controls detected")
+                await _submit_public_flight_search(page, probe_input)
+                diagnostics["clicked"] = True
+                diagnostics["search_submission_attempted"] = True
+                diagnostics["visible_public_form_used"] = True
+                recorder.mark(BrowserProbeStage.SEARCH_SUBMITTED, "search submitted through public visible flight form")
+                should_wait_for_result_state = True
+            if should_wait_for_result_state:
+                recorder.mark(BrowserProbeStage.RESULT_STATE_WAIT, "waiting for terminal/result state")
+                await page.wait_for_load_state("networkidle", timeout=_remaining_ms(started, probe_input.overall_deadline_seconds))
+                html = await page.content()
+                title = await page.title()
+                diagnostics["document_ready_state"] = await page.evaluate("document.readyState")
+                diagnostics["final_sanitized_url"] = _sanitize_source_ref(page.url)
+                diagnostics["detector_state"] = summarize_detector_state(html)
+                page_identity = classify_fliggy_page_identity(url=page.url, title=title, html=html)
+                diagnostics["page_identity"] = page_identity.value
+                diagnostics["page_title"] = title
+                if page_identity is FliggyPageIdentity.WRONG_NAVIGATION_TARGET:
+                    diagnostics["wrong_navigation_target"] = True
+                    diagnostics["search_interaction_failed"] = True
+                    outcome = BrowserProbeOutcome.EVIDENCE_INSUFFICIENT
+                elif page_identity is FliggyPageIdentity.ACCESS_CHALLENGE:
+                    outcome = BrowserProbeOutcome.ACCESS_CHALLENGE
+                elif page_identity is FliggyPageIdentity.LOGIN_REQUIRED:
+                    outcome = BrowserProbeOutcome.LOGIN_REQUIRED
+                else:
+                    outcome = classify_result_state(html)
+                if (
+                    diagnostics["search_submission_attempted"] is True
+                    and page_identity is FliggyPageIdentity.EXPECTED_FLIGHT_SEARCH
+                    and outcome is BrowserProbeOutcome.EVIDENCE_INSUFFICIENT
+                ):
+                    diagnostics["search_interaction_failed"] = True
             if outcome in {
                 BrowserProbeOutcome.ACCESS_CHALLENGE,
                 BrowserProbeOutcome.LOGIN_REQUIRED,
@@ -536,6 +629,7 @@ async def run_fliggy_browser_probe(probe_input: ProbeInput) -> ProbeRunResult:
     last_stage = recorder.last_stage()
     diagnostics["last_stage"] = last_stage.value if last_stage is not None else None
     diagnostics["stage_diagnostics"] = [stage.to_dict() for stage in recorder.stages]
+    diagnostics["elapsed_ms"] = int((time.monotonic() - started) * 1000)
     return ProbeRunResult(
         provider_identity=FLIGGY_PROVIDER_ID,
         acquisition_mode=BrowserAcquisitionMode.BROWSER,
@@ -765,17 +859,28 @@ def _terminal_boundary_from_html(html: str) -> tuple[bool, str | None]:
 
 
 def _build_fliggy_search_url(probe_input: ProbeInput) -> str:
-    params = (
-        f"tripType=0&depCityName={quote(probe_input.origin_text)}"
-        f"&arrCityName={quote(probe_input.destination_text)}"
-        f"&depDate={probe_input.departure_date.isoformat()}"
-    )
-    return f"{_FLIGGY_SEARCH_ENDPOINT}?{params}"
+    return _FLIGGY_FLIGHT_ENTRY_URL
 
 
 def _sanitize_source_ref(url: str) -> str:
     parts = urlsplit(url)
-    return urlunsplit((parts.scheme, parts.netloc, parts.path, "", ""))
+    allowed_query = tuple((key, value) for key, value in parse_qsl(parts.query) if key == "tab")
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(allowed_query), ""))
+
+
+async def _submit_public_flight_search(page: Any, probe_input: ProbeInput) -> None:
+    async def fill_input(selector: str, value: str) -> None:
+        field = page.locator(selector).nth(0)
+        await field.click()
+        await field.fill(value)
+        await page.keyboard.press("Enter")
+        await page.wait_for_timeout(300)
+
+    await page.wait_for_selector(".rc-flight-searchbar input#form_depCity")
+    await fill_input(".rc-flight-searchbar input#form_depCity", probe_input.origin_text)
+    await fill_input(".rc-flight-searchbar input#form_arrCity", probe_input.destination_text)
+    await fill_input(".rc-flight-searchbar input#form_depDate", probe_input.departure_date.isoformat())
+    await page.locator(".rc-flight-searchbar button.search-button").nth(0).click()
 
 
 def _remaining_ms(started: float, deadline_seconds: float) -> int:
