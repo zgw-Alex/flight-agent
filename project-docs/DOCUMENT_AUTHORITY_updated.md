@@ -69,6 +69,13 @@ Scope。历史 Reference 仅用于追溯，不得覆盖正式收口结论。
         -   记录 M8-U1～M8-U7、U6H-A/B/C/D、CA01、原 Parser/Patch Real LLM baseline P0 blocker、Hybrid recovery、U6H-D evidence artifact、Aggregate Exit Gate G1～G17、Real-path P0 3-run、ordinary CI network independence 与 repository integrity 已 PASS。
         -   Contract Amendment：CA01 ACCEPTED + IMPLEMENTED + PASS；Additional Contract Amendment：NONE；M8 Milestone Status：CLOSED / PASS。
         -   不替代 M8 Real LLM Specification 的 Contract Authority，也不启动 M9 implementation；M9 仅进入 READY / eligible for planning and specification。
+    -   `03_implementation-roadmap/milestones/M8/机票筛选Agent_第三阶段_M8正式收口_V1.0.docx`
+        -   第三阶段 M8 Real LLM / Hybrid Prototype 的正式 Repository Closure Evidence。
+        -   记录 RU1 Blocking Taxonomy、RU2 Initial Progressive Interpretation、RU3 Resolver Eligibility & Routing、RU4 Patch Residue Classification & Atomicity 全部 PASS。
+        -   记录 Closure Decision：`M8_RECOVERY_CLOSURE_READY_WITH_P2_GAPS`；CG1～CG10 全部 PASS；P0 findings：none；P1 findings：none；accepted P2 coverage gaps：departure-time preference、aircraft preference、airline-quality / comfort preference。
+        -   记录 final unified backend：651 passed, 2 skipped；Initial Blocking Decision Accuracy：29/29；Initial Unnecessary Clarification Rate：0/24；Initial Unsafe Continuation：0/5；Initial Usable Search Recall：24/24；Patch Blocking Decision Accuracy：14/14；Patch Unsafe Partial Commit：0/5；Patch atomicity violations：0；Resolver Eligibility Precision：3/3；Resolver Eligibility Recall：3/3；Supported Top-K：7/7 deterministic；Explanation：43 tests PASS。
+        -   Baseline commit：`42faf4841506cacecc4b435c3906d863edef8b5e`；Contract Amendment：NONE；M8 Milestone Status：CLOSED；M9 Status：READY / eligible；M9 implementation NOT STARTED。
+        -   不替代 M8 Real LLM Specification 的 Contract Authority；不得将 provider exposed fields 静默提升为 Domain-supported semantics 或 M6 ranking semantics。Accepted P2 gaps 的未来正式支持需要单独 capability / contract review。
     -   `03_implementation-roadmap/milestones/M8/机票筛选Agent_M8_U6H-C_Parser_Resolver_Soft_Preference_Contract_Amendment_CA02_V0.1.docx`
         -   第三阶段 M8 U6H-C Parser Resolver Soft Preference 的正式 additive Contract Amendment Authority。
         -   CA02 Decision Status：ACCEPTED；Implementation Authority：ENABLED。
@@ -317,7 +324,7 @@ Codex 在第三阶段默认遵守：
 -   M5 Walking Skeleton：CLOSED。
 -   M6 Complete Decision Engine：CLOSED；M6-U1～M6-U6、M6-CA01-I1、GS-01～GS-08、P0-01～P0-14 与 Aggregate Exit Gate G1～G12 全部 PASS；M6-CA01 已接纳并实现；Additional Contract Amendment NONE。
 -   M7 Patch + Impact + Orchestrator：CLOSED；M7-U1～M7-U6、GS-01～GS-14 与 Aggregate Exit Gate G1～G12 全部 PASS；Contract Amendment NONE；current-main GitHub Actions CI run 33041817149 PASS。
--   M8 Real LLM：CLOSED / PASS；M8-U1～M8-U7、Aggregate Exit Gate G1～G17、Hybrid Recovery U6H-A/B/C/D、M8-U6H-CA01、historical Parser/Patch Real LLM P0 recovery、U6H-D evidence artifact、Real-path P0 3-run 与 2026-08-29 unified CI 全部 PASS；M8-U6H-CA01 ACCEPTED + IMPLEMENTED + PASS；M8-U6H-A CLOSED / PASS，current Specification Authority 为 V1.2；M8-U6H-B CLOSED / PASS，current Specification Authority 为 V1.1；M8-U6H-C CLOSED / PASS，current Specification Authority 为 V1.1；M8-U6H-D CLOSED / PASS，current Specification Authority 为 V1.1，V1.0 historical / superseded；Additional Contract Amendment NONE。
+-   M8 Real LLM / Hybrid Prototype：CLOSED；formal repository closure evidence 为 `03_implementation-roadmap/milestones/M8/机票筛选Agent_第三阶段_M8正式收口_V1.0.docx`；Closure Decision 为 `M8_RECOVERY_CLOSURE_READY_WITH_P2_GAPS`；M8-U1～M8-U7、Aggregate Exit Gate G1～G17、Hybrid Recovery RU1～RU4、final CG1～CG10、historical Parser/Patch Real LLM P0 recovery、U6H-D evidence artifact、Real-path P0 3-run、2026-08-29 unified CI 与 final unified backend 651 passed / 2 skipped 全部 PASS；P0/P1 findings none；accepted P2 gaps 为 departure-time preference、aircraft preference、airline-quality / comfort preference；M8-U6H-CA01 ACCEPTED + IMPLEMENTED + PASS；Additional Contract Amendment NONE。
 -   M9：READY / eligible for planning and specification；M9 implementation NOT STARTED。
 
 当前 effective Requirement Contract：
@@ -361,13 +368,13 @@ eligible for planning and specification。
 M8 Real LLM 的正式 Contract Authority / Implementation & Acceptance Baseline
 由
 `03_implementation-roadmap/milestones/M8/机票筛选Agent_第三阶段_M8_Real_LLM_Specification_V1.0.docx`
-定义。M8 formal Closure Evidence 由
-`03_implementation-roadmap/milestones/M8/机票筛选Agent_第三阶段_M8_Real_LLM正式收口_V1.0.docx`
-记录。M8 已完成 M8-U1～M8-U7、Hybrid Recovery U6H-A/B/C/D、M8-U6H-CA01、
+定义。M8 formal repository Closure Evidence 由
+`03_implementation-roadmap/milestones/M8/机票筛选Agent_第三阶段_M8正式收口_V1.0.docx`
+记录；`03_implementation-roadmap/milestones/M8/机票筛选Agent_第三阶段_M8_Real_LLM正式收口_V1.0.docx`
+保留为 M8 Real LLM 早期 closure evidence。M8 已完成 M8-U1～M8-U7、Hybrid Recovery RU1～RU4、M8-U6H-CA01、
 historical Parser/Patch Real LLM P0 recovery、U6H-D evidence bundle、Aggregate
-Exit Gate G1～G17、Real-path P0 3-run 与 2026-08-29 unified CI 验证，并已登记为
-CLOSED / PASS；M9 进入 READY / eligible for planning and specification。M9
-implementation NOT STARTED。
+Exit Gate G1～G17、final CG1～CG10、Real-path P0 3-run、2026-08-29 unified CI 与 final unified backend 651 passed / 2 skipped 验证，并已登记为
+CLOSED；Closure Decision 为 `M8_RECOVERY_CLOSURE_READY_WITH_P2_GAPS`；accepted P2 gaps 为 departure-time preference、aircraft preference、airline-quality / comfort preference，未来正式支持需要单独 capability / contract review，M9 不得通过 real-provider fields 静默绕过 Domain / M6 semantic boundary。M9 进入 READY / eligible for planning and specification。M9 implementation NOT STARTED。
 
 M3、M4、M5、M6 的正式 Contract 与 Closure Authority 保持既有权威；M7
 Specification 不替代 M1～M6 已稳定 Contract，也不提前授权 M8 capabilities
