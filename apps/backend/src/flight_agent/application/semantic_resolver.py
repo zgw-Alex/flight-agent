@@ -36,7 +36,7 @@ from flight_agent.application.requirement_patch_hybrid import (
     SemanticTarget,
 )
 from flight_agent.domain.flights import Money
-from flight_agent.domain.requirements import RequirementState, StopCount
+from flight_agent.domain.requirements import PreferenceImportance, RequirementState, StopCount
 from flight_agent.ports import (
     InitialRequirementProposal,
     InterpreterFailure,
@@ -903,6 +903,7 @@ def _parser_binding_from_relation(
             ParserCandidateType.PREFERENCE,
             None,
             relation,
+            _parser_preference_importance(relation.importance),
         )
     if relation.relation_kind == "ADD_SOFT_PRICE_PREFERENCE":
         return _new_parser_binding(
@@ -911,6 +912,7 @@ def _parser_binding_from_relation(
             ParserCandidateType.PREFERENCE,
             None,
             relation,
+            _parser_preference_importance(relation.importance),
         )
     if relation.relation_kind == "ADD_HARD_MAX_PRICE_CONSTRAINT" and relation.value is not None:
         return _new_parser_binding(
@@ -937,6 +939,7 @@ def _new_parser_binding(
     candidate_type: ParserCandidateType,
     value: object | None,
     relation: SemanticResolverRelation,
+    preference_importance: PreferenceImportance = PreferenceImportance.HIGH,
 ) -> ParserSemanticBinding | None:
     if target in existing_targets:
         return None
@@ -947,7 +950,18 @@ def _new_parser_binding(
         value=value,
         value_signal=relation.relation_kind,
         evidence_ids=relation.evidence_ids,
+        preference_importance=preference_importance,
     )
+
+
+def _parser_preference_importance(
+    importance: SemanticResolverPreferenceImportance | None,
+) -> PreferenceImportance:
+    if importance is SemanticResolverPreferenceImportance.LOW:
+        return PreferenceImportance.LOW
+    if importance is SemanticResolverPreferenceImportance.MEDIUM:
+        return PreferenceImportance.MEDIUM
+    return PreferenceImportance.HIGH
 
 
 def _confidence_from_payload(value: object) -> float | None | SemanticResolverFailure:

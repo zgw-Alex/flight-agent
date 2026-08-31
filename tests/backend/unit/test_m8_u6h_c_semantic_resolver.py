@@ -30,7 +30,20 @@ from flight_agent.application.semantic_resolver import (
     build_parser_resolver_request,
     evaluate_parser_resolver_routing,
     parse_semantic_resolver_response,
+    resolve_parser_semantics,
     should_call_semantic_resolver,
+)
+from flight_agent.application.requirement_parser_hybrid import (
+    ParserBindingState,
+    ParserCandidateType,
+    ParserEvidenceKind,
+    ParserInterpretationStatus,
+    ParserSemanticBinding,
+    ParserSemanticEvidence,
+    ParserSemanticIR,
+    ParserSemanticIssue,
+    ParserSemanticTarget,
+    RequiredSlotState,
 )
 from flight_agent.config import Settings
 from flight_agent.domain.flights import Money
@@ -652,6 +665,216 @@ def test_ca04_u1_non_resolved_response_still_cannot_carry_relations() -> None:
 
     assert result.failure is not None
     assert result.failure.code == "INVALID_RESPONSE_SHAPE"
+
+
+@pytest.mark.parametrize(
+    ("relation_kind", "scope", "importance", "expected"),
+    (
+        ("ADD_SOFT_PRICE_PREFERENCE", PreferenceScope.PRICE, SemanticResolverPreferenceImportance.LOW, PreferenceImportance.LOW),
+        ("ADD_SOFT_PRICE_PREFERENCE", PreferenceScope.PRICE, SemanticResolverPreferenceImportance.MEDIUM, PreferenceImportance.MEDIUM),
+        ("ADD_SOFT_PRICE_PREFERENCE", PreferenceScope.PRICE, SemanticResolverPreferenceImportance.HIGH, PreferenceImportance.HIGH),
+        ("ADD_SOFT_PRICE_PREFERENCE", PreferenceScope.PRICE, None, PreferenceImportance.HIGH),
+        ("ADD_SOFT_FEWER_STOPS_PREFERENCE", PreferenceScope.FEWER_STOPS, SemanticResolverPreferenceImportance.LOW, PreferenceImportance.LOW),
+        ("ADD_SOFT_FEWER_STOPS_PREFERENCE", PreferenceScope.FEWER_STOPS, SemanticResolverPreferenceImportance.MEDIUM, PreferenceImportance.MEDIUM),
+        ("ADD_SOFT_FEWER_STOPS_PREFERENCE", PreferenceScope.FEWER_STOPS, SemanticResolverPreferenceImportance.HIGH, PreferenceImportance.HIGH),
+        ("ADD_SOFT_FEWER_STOPS_PREFERENCE", PreferenceScope.FEWER_STOPS, None, PreferenceImportance.HIGH),
+    ),
+)
+def test_ca04_u2_parser_consumes_validated_soft_relation_importance(
+    relation_kind: str,
+    scope: PreferenceScope,
+    importance: SemanticResolverPreferenceImportance | None,
+    expected: PreferenceImportance,
+) -> None:
+    ir = ca04_parser_ir("优先直飞，价格越便宜越好，价格最重要，价格其次，价格只稍微考虑")
+    relation = {
+        "relation_kind": relation_kind,
+        "evidence_ids": ["ev-unsupported-1"],
+        "target": None,
+        "value": None,
+        "confidence": 0.1,
+    }
+    if importance is not None:
+        relation["importance"] = importance.value
+    _, proposal, resolver_result = resolve_parser_semantics(
+        ir,
+        "9月10日从北京去上海，优先直飞，价格越便宜越好，价格最重要",
+        FakeResolver(schema_payload({"relations": [relation]})),
+    )
+
+    assert resolver_result is not None
+    assert resolver_result.failure is None
+    assert proposal.unresolved_semantics == ()
+    assert_preference(proposal.preferences, scope, expected)
+
+
+@pytest.mark.parametrize(
+    ("relations", "expected"),
+    (
+        (
+            (
+                ("ADD_SOFT_FEWER_STOPS_PREFERENCE", SemanticResolverPreferenceImportance.HIGH),
+                ("ADD_SOFT_PRICE_PREFERENCE", SemanticResolverPreferenceImportance.MEDIUM),
+            ),
+            {
+                PreferenceScope.FEWER_STOPS: PreferenceImportance.HIGH,
+                PreferenceScope.PRICE: PreferenceImportance.MEDIUM,
+            },
+        ),
+        (
+            (
+                ("ADD_SOFT_PRICE_PREFERENCE", SemanticResolverPreferenceImportance.HIGH),
+                ("ADD_SOFT_FEWER_STOPS_PREFERENCE", SemanticResolverPreferenceImportance.LOW),
+            ),
+            {
+                PreferenceScope.PRICE: PreferenceImportance.HIGH,
+                PreferenceScope.FEWER_STOPS: PreferenceImportance.LOW,
+            },
+        ),
+    ),
+)
+def test_ca04_u2_parser_consumes_controlled_two_preference_importance(
+    relations: tuple[tuple[str, SemanticResolverPreferenceImportance], ...],
+    expected: dict[PreferenceScope, PreferenceImportance],
+) -> None:
+    ir = ca04_parser_ir("优先直飞，价格越便宜越好，直飞最重要，价格其次，直飞只稍微考虑")
+    payload_relations = [
+        {
+            "relation_kind": relation_kind,
+            "evidence_ids": ["ev-unsupported-1"],
+            "target": None,
+            "value": None,
+            "importance": importance.value,
+            "confidence": 0.99,
+        }
+        for relation_kind, importance in relations
+    ]
+
+    _, proposal, resolver_result = resolve_parser_semantics(
+        ir,
+        "9月10日从北京去上海，优先直飞，价格越便宜越好，直飞最重要，价格其次",
+        FakeResolver(schema_payload({"relations": payload_relations})),
+    )
+
+    assert resolver_result is not None
+    assert resolver_result.failure is None
+    assert proposal.unresolved_semantics == ()
+    assert {
+        preference.scope: preference.importance for preference in proposal.preferences
+    } == expected
+    assert all(constraint.scope not in {ConstraintScope.MAX_PRICE, ConstraintScope.MAX_STOPS} for constraint in proposal.constraints)
+
+
+def test_ca04_u2_confidence_does_not_set_parser_importance() -> None:
+    ir = ca04_parser_ir("价格越便宜越好")
+
+    _, proposal, resolver_result = resolve_parser_semantics(
+        ir,
+        "9月10日从北京去上海，价格越便宜越好",
+        FakeResolver(
+            schema_payload(
+                {
+                    "relations": [
+                        {
+                            "relation_kind": "ADD_SOFT_PRICE_PREFERENCE",
+                            "evidence_ids": ["ev-unsupported-1"],
+                            "target": None,
+                            "value": None,
+                            "confidence": 0.01,
+                        }
+                    ]
+                }
+            )
+        ),
+    )
+
+    assert resolver_result is not None
+    assert resolver_result.failure is None
+    assert_preference(proposal.preferences, PreferenceScope.PRICE, PreferenceImportance.HIGH)
+
+
+def test_ca04_u2_invalid_importance_is_rejected_before_parser_builder_consumption() -> None:
+    ir = ca04_parser_ir("价格越便宜越好，价格最重要")
+
+    _, proposal, resolver_result = resolve_parser_semantics(
+        ir,
+        "9月10日从北京去上海，价格越便宜越好，价格最重要",
+        FakeResolver(
+            schema_payload(
+                {
+                    "relations": [
+                        {
+                            "relation_kind": "ADD_SOFT_PRICE_PREFERENCE",
+                            "evidence_ids": ["ev-unsupported-1"],
+                            "target": None,
+                            "value": None,
+                            "importance": "CRITICAL",
+                            "confidence": 0.8,
+                        }
+                    ]
+                }
+            )
+        ),
+    )
+
+    assert resolver_result is not None
+    assert resolver_result.failure is not None
+    assert resolver_result.failure.code == "INVALID_IMPORTANCE"
+    assert proposal.preferences == ()
+
+
+def test_ca04_u2_hard_parser_relations_ignore_importance_and_preserve_hard_semantics() -> None:
+    max_price_ir = ca04_parser_ir("预算1500以内")
+    _, max_price_proposal, max_price_result = resolve_parser_semantics(
+        max_price_ir,
+        "9月10日从北京去上海，预算1500以内",
+        FakeResolver(
+            schema_payload(
+                {
+                    "relations": [
+                        {
+                            "relation_kind": "ADD_HARD_MAX_PRICE_CONSTRAINT",
+                            "evidence_ids": ["ev-value-1", "ev-unsupported-1"],
+                            "target": "MAX_PRICE",
+                            "value": "1500",
+                            "confidence": 0.1,
+                        }
+                    ]
+                }
+            )
+        ),
+    )
+
+    assert max_price_result is not None
+    assert max_price_result.failure is None
+    assert_constraint(max_price_proposal.constraints, ConstraintScope.MAX_PRICE, Money(Decimal(1500), "CNY"))
+    assert max_price_proposal.preferences == ()
+
+    max_stops_ir = ca04_parser_ir("不转机")
+    _, max_stops_proposal, max_stops_result = resolve_parser_semantics(
+        max_stops_ir,
+        "9月10日从北京去上海，不转机",
+        FakeResolver(
+            schema_payload(
+                {
+                    "relations": [
+                        {
+                            "relation_kind": "ADD_HARD_MAX_STOPS_CONSTRAINT",
+                            "evidence_ids": ["ev-unsupported-1"],
+                            "target": "MAX_STOPS",
+                            "value": "0",
+                            "confidence": 0.1,
+                        }
+                    ]
+                }
+            )
+        ),
+    )
+
+    assert max_stops_result is not None
+    assert max_stops_result.failure is None
+    assert_constraint(max_stops_proposal.constraints, ConstraintScope.MAX_STOPS, StopCount(0))
+    assert max_stops_proposal.preferences == ()
 
 
 def test_u6h_c_t2_c05_c14_patch_resolver_returns_through_builder_and_m3() -> None:
@@ -1425,6 +1648,41 @@ def schema_payload_json(overrides: dict[str, Any]) -> str:
     import json
 
     return json.dumps(schema_payload(overrides))
+
+
+def ca04_parser_ir(evidence_text: str) -> ParserSemanticIR:
+    evidence_items = [
+        ParserSemanticEvidence("ev-unsupported-1", ParserEvidenceKind.UNSUPPORTED_TEXT, evidence_text, evidence_text)
+    ]
+    if "1500" in evidence_text:
+        evidence_items.insert(0, ParserSemanticEvidence("ev-value-1", ParserEvidenceKind.VALUE_TEXT, "1500", "1500"))
+    return ParserSemanticIR(
+        interpretation_status=ParserInterpretationStatus.SEMANTIC_RESOLVER_REQUIRED,
+        required_slots=(
+            RequiredSlotState(ParserSemanticTarget.ORIGIN, ParserBindingState.RESOLVED),
+            RequiredSlotState(ParserSemanticTarget.DESTINATION, ParserBindingState.RESOLVED),
+            RequiredSlotState(ParserSemanticTarget.DEPARTURE_DATE, ParserBindingState.RESOLVED),
+        ),
+        bindings=(),
+        issues=(
+            ParserSemanticIssue(
+                "SEMANTIC_RESOLVER_REQUIRED",
+                "Complex preference relation requires semantic resolver",
+                ("ev-unsupported-1",),
+            ),
+        ),
+        evidence=tuple(evidence_items),
+    )
+
+
+def assert_preference(
+    preferences: tuple,
+    scope: PreferenceScope,
+    importance: PreferenceImportance,
+) -> None:
+    matches = tuple(preference for preference in preferences if preference.scope is scope)
+    assert len(matches) == 1
+    assert matches[0].importance is importance
 
 
 def ca04_request(
