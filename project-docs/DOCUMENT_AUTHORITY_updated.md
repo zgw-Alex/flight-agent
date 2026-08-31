@@ -62,6 +62,12 @@ Scope。历史 Reference 仅用于追溯，不得覆盖正式收口结论。
         -   当前授权的下一个 M9 Implementation Unit。
         -   仅授权 BP5-U1 probe-local observability、stage diagnostics、bounded opt-in live repeatability experiments、diagnosis aggregation，以及 direct evidence 支持时的最小修复。
         -   不完成 M9，不最终 SELECTED FLIGGY 为 First Provider，不授权 Level-2 full Offer crawl、正式 FLIGGY Adapter/Mapper、PurchaseAccess implementation、Domain/Provider Port/Public API change 或 Browser Acquisition security bypass。
+    -   `03_implementation-roadmap/milestones/M9/机票筛选Agent_M9-BP6-CA01_Lower-Bound_Offer_Price_Semantics_Contract_Amendment_Proposal_V0.1.docx`
+        -   M9-BP6-CA01 Lower-Bound Offer Price Semantics 的正式 human-approved Contract Amendment governance authority。
+        -   CA01 Decision Status：APPROVED；Implementation Status：NOT IMPLEMENTED。
+        -   仅授权 price semantics 范围内的正式 CA01 contract/specification work 与后续明确授权的 implementation units；本 Proposal intake 不直接授权 source-code implementation。
+        -   影响范围限于 M2 Offer price semantics、M4 MappedOffer / Common Normalizer / Offer commercial equivalence、M6 MAX_PRICE / Ranking price-evidence safety，以及 lower-bound 对用户暴露时的 API/UI semantic preservation。
+        -   明确不改变 Money、SearchPlan、ProviderRawEvidence architecture、CandidateSnapshot top-level structure、M7 ENRICH core semantic、current persistence、FLIGGY Browser Probe selectors、Level-2 acquisition 或 broader commercial model。
     -   `03_implementation-roadmap/milestones/M9/机票筛选Agent_M9_Browser_Acquisition_Provider_Exploration_and_Collaboration_Playbook_V1.0.docx`
         -   M9 Track B 多 Provider Browser acquisition 的 supporting methodology / collaboration governance。
         -   用于统一 Hard Gate、Evidence Grade、Outcome、Coverage、安全边界与多人 Git 同步语言；不得提升为稳定 Domain/Provider Contract。
@@ -344,7 +350,7 @@ Codex 在第三阶段默认遵守：
 -   M6 Complete Decision Engine：CLOSED；M6-U1～M6-U6、M6-CA01-I1、GS-01～GS-08、P0-01～P0-14 与 Aggregate Exit Gate G1～G12 全部 PASS；M6-CA01 已接纳并实现；Additional Contract Amendment NONE。
 -   M7 Patch + Impact + Orchestrator：CLOSED；M7-U1～M7-U6、GS-01～GS-14 与 Aggregate Exit Gate G1～G12 全部 PASS；Contract Amendment NONE；current-main GitHub Actions CI run 33041817149 PASS。
 -   M8 Real LLM / Hybrid Prototype：CLOSED；formal repository closure evidence 为 `03_implementation-roadmap/milestones/M8/机票筛选Agent_第三阶段_M8正式收口_V1.0.docx`；Closure Decision 为 `M8_RECOVERY_CLOSURE_READY_WITH_P2_GAPS`；M8-U1～M8-U7、Aggregate Exit Gate G1～G17、Hybrid Recovery RU1～RU4、final CG1～CG10、historical Parser/Patch Real LLM P0 recovery、U6H-D evidence artifact、Real-path P0 3-run、2026-08-29 unified CI 与 final unified backend 651 passed / 2 skipped 全部 PASS；P0/P1 findings none；accepted P2 gaps 为 departure-time preference、aircraft preference、airline-quality / comfort preference；M8-U6H-CA01 ACCEPTED + IMPLEMENTED + PASS；Additional Contract Amendment NONE。
--   M9 One Real Flight Provider：OPEN / IN PROGRESS；formal implementation authority 为 `03_implementation-roadmap/milestones/M9/机票筛选Agent_第三阶段_M9_Real_Shopping_Provider_Implementation_Specification_V0.1.docx`。M9-BP5-U1 已实现，commit `7a29c4f2d2bd921d423551bc9caa3556b93acb83`。当前授权下一 Unit 为 `03_implementation-roadmap/milestones/M9/机票筛选Agent_M9-BP5-U2_Fliggy_Browser_Probe_Live_Diagnosis_and_Repeatability_Specification_V0.1.docx`。M9 closure 尚未声明；首个 Provider 尚未最终 SELECTED；Contract Amendment NONE。
+-   M9 One Real Flight Provider：OPEN / IN PROGRESS；formal implementation authority 为 `03_implementation-roadmap/milestones/M9/机票筛选Agent_第三阶段_M9_Real_Shopping_Provider_Implementation_Specification_V0.1.docx`。M9-BP5-U1 已实现，commit `7a29c4f2d2bd921d423551bc9caa3556b93acb83`。当前授权下一 Unit 为 `03_implementation-roadmap/milestones/M9/机票筛选Agent_M9-BP5-U2_Fliggy_Browser_Probe_Live_Diagnosis_and_Repeatability_Specification_V0.1.docx`。M9-BP6-CA01 Lower-Bound Offer Price Semantics Proposal 已完成 human-approved governance registration，Decision Status：APPROVED，Implementation Status：NOT IMPLEMENTED。M9 closure 尚未声明；首个 Provider 尚未最终 SELECTED。
 
 当前 effective Requirement Contract：
 
@@ -398,6 +404,8 @@ CLOSED；Closure Decision 为 `M8_RECOVERY_CLOSURE_READY_WITH_P2_GAPS`；accepte
 M3、M4、M5、M6 的正式 Contract 与 Closure Authority 保持既有权威；M7
 Specification 不替代 M1～M6 已稳定 Contract，也不提前授权 M8 capabilities
 或 M8 implementation。
+
+M9-BP6-CA01 Lower-Bound Offer Price Semantics Contract Amendment Proposal V0.1 已由用户明确批准进入 governance authority registration。该批准只覆盖 price semantics：Money 不变，Canonical Offer 增加 price semantics 的正式修订工作可继续；MappedOffer、Common Normalizer、Offer commercial equivalence、M6 MAX_PRICE / Ranking price-evidence safety、以及对用户暴露时的 API/UI semantic preservation 需要在后续明确授权的 implementation units 中处理。本登记不表示 CA01 已实现、已验证、已部署或 M9 已关闭。
 
 当前首先完成：
 
