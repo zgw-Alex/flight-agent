@@ -66,6 +66,19 @@ describe("App", () => {
     expect(screen.queryByText("recommendation-result-1")).not.toBeInTheDocument();
   });
 
+  it("renders lower-bound published prices with visible semantics", async () => {
+    mockedStartConversation.mockResolvedValueOnce(
+      publishedConversation({
+        selected_price_semantics: "LOWER_BOUND",
+      }),
+    );
+    render(<App />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Search" }));
+
+    expect(await screen.findByText("CNY 980 起")).toBeInTheDocument();
+  });
+
   it.each([
     ["SEARCH_EMPTY", "No search results were returned for this requirement."],
     ["FILTER_EMPTY", "Search results were found, but none satisfied the max price."],
@@ -88,7 +101,11 @@ describe("App", () => {
   });
 });
 
-function publishedConversation(): ConversationReadResponse {
+function publishedConversation(
+  publishedOverrides: Partial<
+    NonNullable<ConversationReadResponse["current_published_recommendation"]>
+  > = {},
+): ConversationReadResponse {
   return {
     conversation_id: "conversation-1",
     outcome: "PUBLISHED",
@@ -109,9 +126,11 @@ function publishedConversation(): ConversationReadResponse {
       departure_date: "2026-09-01",
       selected_price_amount: "980",
       selected_price_currency: "CNY",
+      selected_price_semantics: "EXACT",
       role: "BEST_OVERALL",
       reason: "Selected from rank 1 lower-price result",
       evidence: ["OFFER:offer-a"],
+      ...publishedOverrides,
     },
   };
 }

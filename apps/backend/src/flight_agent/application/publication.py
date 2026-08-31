@@ -10,7 +10,13 @@ from enum import Enum
 from typing import Protocol
 
 from flight_agent.application.minimal_decision import MinimalDecisionResult, MinimalDecisionStatus
-from flight_agent.domain.flights import CandidateSnapshot, FlightSegment, Itinerary, Offer
+from flight_agent.domain.flights import (
+    CandidateSnapshot,
+    FlightSegment,
+    Itinerary,
+    Offer,
+    PriceSemantics,
+)
 from flight_agent.domain.requirements import RequirementId
 from flight_agent.domain.shared import DomainInstant, DomainInvariantViolation
 from flight_agent.domain.workflow import (
@@ -42,6 +48,7 @@ class PublishedRecommendationRecord:
     departure_date: date
     selected_price_amount: Decimal
     selected_price_currency: str
+    selected_price_semantics: PriceSemantics
     reason: str
     evidence: tuple[EvidenceRef, ...]
 
@@ -122,6 +129,7 @@ class PublishRecommendation:
             departure_date=first_segment.departure_at.value.date(),
             selected_price_amount=offer.total_price.amount,
             selected_price_currency=offer.total_price.currency,
+            selected_price_semantics=offer.price_semantics,
             reason=_reason(item.evidence),
             evidence=item.evidence,
         )
