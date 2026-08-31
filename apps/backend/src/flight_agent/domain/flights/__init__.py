@@ -1,6 +1,12 @@
 """Flight and CandidateSnapshot contract objects for M2-U3."""
 
-from flight_agent.domain.flights.entities import FlightSegment, Itinerary, Money, Offer
+from flight_agent.domain.flights.entities import (
+    FlightSegment,
+    Itinerary,
+    Money,
+    Offer,
+    PriceSemantics,
+)
 from flight_agent.domain.flights.identity import (
     CandidateSnapshotId,
     ItineraryId,
@@ -26,5 +32,6 @@ __all__ = [
     "Money",
     "Offer",
     "OfferId",
+    "PriceSemantics",
     "SegmentId",
 ]

@@ -19,6 +19,7 @@ from flight_agent.domain.flights import (
     Money,
     Offer,
     OfferId,
+    PriceSemantics,
     SegmentId,
 )
 from flight_agent.domain.shared import (
@@ -191,7 +192,60 @@ def test_offer_has_commercial_facts_freshness_and_provider_neutral_provenance() 
         flight_offer.total_price = Money(Decimal("1"), "USD")  # type: ignore[misc]
 
 
+def test_offer_defaults_to_exact_price_semantics_for_legacy_construction() -> None:
+    flight_offer = offer()
+
+    assert flight_offer.price_semantics is PriceSemantics.EXACT
+
+
+def test_offer_accepts_explicit_exact_price_semantics() -> None:
+    flight_offer = Offer(
+        offer_id=OfferId("offer-1"),
+        itinerary_id=ItineraryId("itinerary-1"),
+        total_price=Money(Decimal("810.50"), "usd"),
+        offer_freshness=OfferFreshness(FreshnessState.FRESH),
+        booking_reference=DomainValue[str].not_provided(),
+        provenance=(provenance("offer-source-1"), provenance("offer-source-2")),
+        price_semantics=PriceSemantics.EXACT,
+    )
+
+    assert flight_offer.price_semantics is PriceSemantics.EXACT
+
+
+def test_offer_accepts_explicit_lower_bound_price_semantics() -> None:
+    flight_offer = Offer(
+        offer_id=OfferId("offer-1"),
+        itinerary_id=ItineraryId("itinerary-1"),
+        total_price=Money(Decimal("810.50"), "usd"),
+        offer_freshness=OfferFreshness(FreshnessState.FRESH),
+        booking_reference=DomainValue[str].not_provided(),
+        provenance=(provenance("offer-source-1"), provenance("offer-source-2")),
+        price_semantics=PriceSemantics.LOWER_BOUND,
+    )
+
+    assert flight_offer.price_semantics is PriceSemantics.LOWER_BOUND
+
+
+def test_offer_equality_distinguishes_price_semantics() -> None:
+    exact = offer()
+    lower_bound = Offer(
+        offer_id=OfferId("offer-1"),
+        itinerary_id=ItineraryId("itinerary-1"),
+        total_price=Money(Decimal("810.50"), "usd"),
+        offer_freshness=OfferFreshness(FreshnessState.FRESH),
+        booking_reference=DomainValue[str].not_provided(),
+        provenance=(provenance("offer-source-1"), provenance("offer-source-2")),
+        price_semantics=PriceSemantics.LOWER_BOUND,
+    )
+
+    assert exact != lower_bound
+    assert len({exact, lower_bound}) == 2
+
+
 def test_money_rejects_invalid_commercial_facts() -> None:
+    assert Money(Decimal("10"), "usd") == Money(Decimal("10"), "USD")
+    assert not hasattr(Money(Decimal("10"), "USD"), "price_semantics")
+
     with pytest.raises(DomainInvariantViolation):
         Money(Decimal("0"), "USD")
     with pytest.raises(DomainInvariantViolation):

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from decimal import Decimal
+from enum import Enum
 
 from flight_agent.domain.flights.identity import ItineraryId, OfferId, SegmentId
 from flight_agent.domain.shared import (
@@ -27,6 +28,11 @@ class Money:
         if len(currency) != 3 or not currency.isascii() or not currency.isalpha():
             raise DomainInvariantViolation("Money currency requires a three-letter code")
         object.__setattr__(self, "currency", currency)
+
+
+class PriceSemantics(str, Enum):
+    EXACT = "EXACT"
+    LOWER_BOUND = "LOWER_BOUND"
 
 
 @dataclass(frozen=True)
@@ -84,6 +90,7 @@ class Offer:
     offer_freshness: OfferFreshness
     booking_reference: DomainValue[str]
     provenance: tuple[ProvenanceRef, ...]
+    price_semantics: PriceSemantics
 
     def __init__(
         self,
@@ -93,6 +100,7 @@ class Offer:
         offer_freshness: OfferFreshness,
         booking_reference: DomainValue[str],
         provenance: tuple[ProvenanceRef, ...] = (),
+        price_semantics: PriceSemantics = PriceSemantics.EXACT,
     ) -> None:
         object.__setattr__(self, "offer_id", offer_id)
         object.__setattr__(self, "itinerary_id", itinerary_id)
@@ -100,6 +108,7 @@ class Offer:
         object.__setattr__(self, "offer_freshness", offer_freshness)
         object.__setattr__(self, "booking_reference", booking_reference)
         object.__setattr__(self, "provenance", tuple(provenance))
+        object.__setattr__(self, "price_semantics", price_semantics)
 
 
 def _require_non_empty(name: str, value: str) -> None:
