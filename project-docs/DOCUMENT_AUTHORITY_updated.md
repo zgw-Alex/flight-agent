@@ -106,6 +106,12 @@ Scope。历史 Reference 仅用于追溯，不得覆盖正式收口结论。
         -   记录 final unified backend：651 passed, 2 skipped；Initial Blocking Decision Accuracy：29/29；Initial Unnecessary Clarification Rate：0/24；Initial Unsafe Continuation：0/5；Initial Usable Search Recall：24/24；Patch Blocking Decision Accuracy：14/14；Patch Unsafe Partial Commit：0/5；Patch atomicity violations：0；Resolver Eligibility Precision：3/3；Resolver Eligibility Recall：3/3；Supported Top-K：7/7 deterministic；Explanation：43 tests PASS。
         -   Baseline commit：`42faf4841506cacecc4b435c3906d863edef8b5e`；Contract Amendment：NONE；M8 Milestone Status：CLOSED；M8 closure 使 M9 READY / eligible。当前 M9 status 见 M9 authority 条目。
         -   不替代 M8 Real LLM Specification 的 Contract Authority；不得将 provider exposed fields 静默提升为 Domain-supported semantics 或 M6 ranking semantics。Accepted P2 gaps 的未来正式支持需要单独 capability / contract review。
+    -   `03_implementation-roadmap/milestones/M8/机票筛选Agent_M8-U6H-CA04_Preference_Importance_Semantic_Expansion_Specification_V0.1.docx`
+        -   第三阶段 M8-U6H-CA04 Preference Importance Semantic Expansion 的正式 additive Contract Amendment / Implementation Specification Authority。
+        -   CA04 Decision Status：ACCEPTED；Implementation Authority：ENABLED / STAGED；Implementation Status：NOT IMPLEMENTED。
+        -   仅授权既有 `PRICE` 与 `FEWER_STOPS` SoftPreference 的受限 importance 语义扩展，canonical importance 仅为 `LOW` / `MEDIUM` / `HIGH`，并保留 Specification-defined `null` legacy fallback semantics。
+        -   DeepSeek 仍保持 evidence-closed / schema-constrained / non-authoritative semantic proposal only；最终 SoftPreference 必须由 deterministic validation / builder / M3 commit gate 控制。
+        -   M3 Requirement authority、M6 ranking authority / weights / formula、M7 semantic diff / impact / execution authority 保持不变；不授权 `DEPARTURE_TIME`、`ARRIVAL_TIME`、`AIRPORT_MATCH` ranking expansion，不授权 conditional tradeoff IR、free numeric weights、direct LLM commit authority；后续实现只能按 CA04 Specification 的 staged Implementation Units 逐步执行。
     -   `03_implementation-roadmap/milestones/M8/机票筛选Agent_M8_U6H-C_Parser_Resolver_Soft_Preference_Contract_Amendment_CA02_V0.1.docx`
         -   第三阶段 M8 U6H-C Parser Resolver Soft Preference 的正式 additive Contract Amendment Authority。
         -   CA02 Decision Status：ACCEPTED；Implementation Authority：ENABLED。
@@ -406,6 +412,8 @@ M8 Real LLM 的正式 Contract Authority / Implementation & Acceptance Baseline
 historical Parser/Patch Real LLM P0 recovery、U6H-D evidence bundle、Aggregate
 Exit Gate G1～G17、final CG1～CG10、Real-path P0 3-run、2026-08-29 unified CI 与 final unified backend 651 passed / 2 skipped 验证，并已登记为
 CLOSED；Closure Decision 为 `M8_RECOVERY_CLOSURE_READY_WITH_P2_GAPS`；accepted P2 gaps 为 departure-time preference、aircraft preference、airline-quality / comfort preference，未来正式支持需要单独 capability / contract review，M9 不得通过 real-provider fields 静默绕过 Domain / M6 semantic boundary。M8 closure 当时使 M9 进入 READY / eligible for planning and specification；当前 M9 已由 M9 Real Shopping Provider Implementation Specification V0.1 授权进入 OPEN / IN PROGRESS，M9-BP5-U1 已实现，且 M9-BP5-U2 是当前授权下一实现 Unit。
+
+M8-U6H-CA04 Preference Importance Semantic Expansion Specification V0.1 已登记为 accepted additive Contract Amendment / Implementation Specification Authority。CA04 仅把 M3/M6 已存在的 PreferenceImportance 能力以受限方式接入 M8 Hybrid Parser/Patch，范围限于既有 PRICE 与 FEWER_STOPS SoftPreference；importance 仅允许 LOW / MEDIUM / HIGH 与 Specification-defined null legacy fallback。CA04 不新增业务维度，不改变 Hard Constraint / Soft Preference 边界，不修改 M6 权重值或聚合公式，不改变 M3 Requirement authority 或 M7 impact/execution authority，不授权 DEPARTURE_TIME / ARRIVAL_TIME / AIRPORT_MATCH ranking expansion、conditional tradeoff IR、free numeric weights 或 direct LLM commit authority。CA04-U1～U5 后续实现必须按 staged Implementation Units 单独执行并验证；本治理登记不表示 CA04 已实现。
 
 M3、M4、M5、M6 的正式 Contract 与 Closure Authority 保持既有权威；M7
 Specification 不替代 M1～M6 已稳定 Contract，也不提前授权 M8 capabilities
