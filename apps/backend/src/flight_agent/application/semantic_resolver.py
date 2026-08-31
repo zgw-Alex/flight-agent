@@ -66,6 +66,9 @@ PATCH_OUTPUT_VOCABULARY = (
     "RELAX_MAX_STOPS_TO_ONE",
     "CONVERT_HARD_DIRECT_TO_SOFT_FEWER_STOPS",
     "PRICE_RELAXATION_LOWER_PRIORITY_THAN_DIRECT",
+    "ADD_SOFT_FEWER_STOPS_PREFERENCE",
+    "ADD_SOFT_PRICE_PREFERENCE",
+    "REMOVE_SOFT_PREFERENCE",
     "NO_AUTHORITATIVE_MUTATION",
 )
 PARSER_OUTPUT_VOCABULARY = (
@@ -543,11 +546,16 @@ def _validate_evidence_closed(
         if not frozenset(relation.evidence_ids).issubset(known_ids):
             return _evidence_failure("UNKNOWN_EVIDENCE_ID", "Resolver referenced evidence outside request closure")
         relation_evidence = tuple(known_evidence[evidence_id] for evidence_id in relation.evidence_ids)
-        relation_failure = _validate_parser_relation_payload(relation, relation_evidence, request.evidence, known_text)
+        relation_failure = _validate_relation_payload(relation, relation_evidence, request.evidence, known_text, request)
         if relation_failure is not None:
             return relation_failure
-        if relation.target is not None and relation.target not in _AUTHORIZED_PARSER_RELATION_TARGETS:
-            return _evidence_failure("OUT_OF_VOCABULARY_TARGET", "Resolver target is outside authorized parser semantic targets")
+        authorized_targets = (
+            _AUTHORIZED_PATCH_RELATION_TARGETS
+            if request.task_kind is SemanticResolverTaskKind.PATCH
+            else _AUTHORIZED_PARSER_RELATION_TARGETS
+        )
+        if relation.target is not None and relation.target not in authorized_targets:
+            return _evidence_failure("OUT_OF_VOCABULARY_TARGET", "Resolver target is outside authorized semantic targets")
         if (
             relation.value is not None
             and relation.value not in known_text
@@ -614,6 +622,39 @@ def _patch_ir_from_result(ir: PatchSemanticIR, result: SemanticResolverResult) -
             "NO_AUTHORITATIVE_MUTATION",
         }:
             continue
+        elif relation.relation_kind == "ADD_SOFT_FEWER_STOPS_PREFERENCE":
+            mutations.append(
+                SemanticMutation(
+                    SemanticTarget.FEWER_STOPS,
+                    SemanticOperation.SET,
+                    importance_signal=SemanticImportanceSignal.SOFT,
+                    preference_importance=_parser_preference_importance(relation.importance),
+                    allow_add=False,
+                    evidence_ids=relation.evidence_ids,
+                )
+            )
+        elif relation.relation_kind == "ADD_SOFT_PRICE_PREFERENCE":
+            mutations.append(
+                SemanticMutation(
+                    SemanticTarget.PRICE,
+                    SemanticOperation.SET,
+                    importance_signal=SemanticImportanceSignal.SOFT,
+                    preference_importance=_parser_preference_importance(relation.importance),
+                    allow_add=False,
+                    evidence_ids=relation.evidence_ids,
+                )
+            )
+        elif relation.relation_kind == "REMOVE_SOFT_PREFERENCE":
+            target = SemanticTarget.PRICE if relation.target == ParserSemanticTarget.PRICE.value else SemanticTarget.FEWER_STOPS
+            mutations.append(
+                SemanticMutation(
+                    target,
+                    SemanticOperation.REMOVE,
+                    importance_signal=SemanticImportanceSignal.SOFT,
+                    allow_add=False,
+                    evidence_ids=relation.evidence_ids,
+                )
+            )
     resolved = replace(ir, disposition=ResolutionDisposition.RESOLVED, mutations=tuple(mutations), ambiguities=())
     return PatchInterpretationRouter().route(MutationConsolidator().consolidate(resolved))
 
@@ -797,6 +838,83 @@ _AUTHORIZED_PARSER_RELATION_TARGETS = frozenset(
         ParserSemanticTarget.MAX_STOPS,
     )
 )
+_AUTHORIZED_PATCH_RELATION_TARGETS = frozenset(
+    target.value for target in (ParserSemanticTarget.FEWER_STOPS, ParserSemanticTarget.PRICE)
+)
+
+
+def _validate_relation_payload(
+    relation: SemanticResolverRelation,
+    evidence: tuple[SemanticResolverEvidence, ...],
+    request_evidence: tuple[SemanticResolverEvidence, ...],
+    known_text: frozenset[str],
+    request: SemanticResolverRequest,
+) -> SemanticResolverResult | None:
+    if request.task_kind is SemanticResolverTaskKind.PATCH:
+        return _validate_patch_relation_payload(relation, evidence)
+    return _validate_parser_relation_payload(relation, evidence, request_evidence, known_text)
+
+
+def _validate_patch_relation_payload(
+    relation: SemanticResolverRelation,
+    evidence: tuple[SemanticResolverEvidence, ...],
+) -> SemanticResolverResult | None:
+    if relation.relation_kind == "REMOVE_SOFT_PREFERENCE":
+        if relation.target not in _AUTHORIZED_PATCH_RELATION_TARGETS:
+            return _evidence_failure(
+                "UNAUTHORIZED_REMOVE_SOFT_PREFERENCE_TARGET",
+                "REMOVE_SOFT_PREFERENCE target must be PRICE or FEWER_STOPS",
+            )
+        if relation.value is not None:
+            return _evidence_failure(
+                "UNAUTHORIZED_REMOVE_SOFT_PREFERENCE_VALUE",
+                "REMOVE_SOFT_PREFERENCE must not carry model-controlled value",
+            )
+        if relation.importance is not None:
+            return _contract_failure(
+                "UNAUTHORIZED_IMPORTANCE_FIELD",
+                "REMOVE_SOFT_PREFERENCE must not carry preference importance",
+            )
+        if not _supports_soft_preference_removal_relation(relation, evidence):
+            return _evidence_failure(
+                "INSUFFICIENT_SOFT_PREFERENCE_REMOVAL_EVIDENCE",
+                "REMOVE_SOFT_PREFERENCE requires explicit no-preference/removal evidence for its target",
+            )
+        return None
+    if relation.importance is not None and relation.relation_kind not in _CA04_IMPORTANCE_RELATION_KINDS:
+        return _contract_failure(
+            "UNAUTHORIZED_IMPORTANCE_FIELD",
+            "Preference importance is authorized only for CA04 soft preference relations",
+        )
+    if relation.relation_kind == "ADD_SOFT_FEWER_STOPS_PREFERENCE":
+        importance_failure = _validate_soft_preference_importance(relation, evidence)
+        if importance_failure is not None:
+            return importance_failure
+        if relation.target not in {None, ParserSemanticTarget.FEWER_STOPS.value} or relation.value is not None:
+            return _evidence_failure(
+                "UNAUTHORIZED_SOFT_PREFERENCE_PAYLOAD",
+                "Soft FEWER_STOPS patch relation must not carry model-controlled value",
+            )
+        if not _supports_soft_fewer_stops_relation(evidence):
+            return _evidence_failure(
+                "INSUFFICIENT_SOFT_PREFERENCE_EVIDENCE",
+                "Soft FEWER_STOPS patch relation requires explicit fewer-stops preference evidence",
+            )
+    if relation.relation_kind == "ADD_SOFT_PRICE_PREFERENCE":
+        importance_failure = _validate_soft_preference_importance(relation, evidence)
+        if importance_failure is not None:
+            return importance_failure
+        if relation.target not in {None, ParserSemanticTarget.PRICE.value} or relation.value is not None:
+            return _evidence_failure(
+                "UNAUTHORIZED_SOFT_PRICE_PAYLOAD",
+                "Soft PRICE patch relation must not carry model-controlled value",
+            )
+        if not _supports_soft_price_relation(evidence) and not _supports_price_importance_target(evidence):
+            return _evidence_failure(
+                "INSUFFICIENT_SOFT_PRICE_EVIDENCE",
+                "Soft PRICE patch relation requires explicit price preference evidence",
+            )
+    return None
 
 
 def _validate_parser_relation_payload(
@@ -805,6 +923,11 @@ def _validate_parser_relation_payload(
     request_evidence: tuple[SemanticResolverEvidence, ...],
     known_text: frozenset[str],
 ) -> SemanticResolverResult | None:
+    if relation.relation_kind == "REMOVE_SOFT_PREFERENCE":
+        return _contract_failure(
+            "PATCH_ONLY_RELATION",
+            "REMOVE_SOFT_PREFERENCE is authorized only for PATCH resolver tasks",
+        )
     if relation.importance is not None and relation.relation_kind not in _CA04_IMPORTANCE_RELATION_KINDS:
         return _contract_failure(
             "UNAUTHORIZED_IMPORTANCE_FIELD",
@@ -887,6 +1010,50 @@ def _supports_preference_importance(
     if importance is SemanticResolverPreferenceImportance.LOW:
         return any(token in compact for token in ("稍微考虑", "有更好", "不太重要", "不那么重要", "只稍微"))
     return False
+
+
+def _supports_soft_preference_removal_relation(
+    relation: SemanticResolverRelation,
+    evidence: tuple[SemanticResolverEvidence, ...],
+) -> bool:
+    compact = _compact_evidence_text(evidence)
+    no_preference = any(token in compact for token in ("无所谓", "不在意", "不看", "不用考虑", "不用管", "都可以"))
+    if not no_preference:
+        return False
+    if relation.target == ParserSemanticTarget.PRICE.value:
+        return any(token in compact for token in ("价格", "票价", "便宜"))
+    if relation.target == ParserSemanticTarget.FEWER_STOPS.value:
+        return any(token in compact for token in ("直飞", "转机", "中转", "转不转"))
+    return False
+
+
+def _supports_price_importance_target(evidence: tuple[SemanticResolverEvidence, ...]) -> bool:
+    compact = _compact_evidence_text(evidence)
+    if not any(token in compact for token in ("价格", "票价", "便宜")):
+        return False
+    return any(
+        token in compact
+        for token in (
+            "最重要",
+            "最看重",
+            "核心考虑",
+            "特别重要",
+            "非常重要",
+            "更重要",
+            "主要",
+            "其次",
+            "第二考虑",
+            "次要",
+            "一般重要",
+            "也重要",
+            "比较重要",
+            "稍微考虑",
+            "有更好",
+            "不太重要",
+            "不那么重要",
+            "只稍微",
+        )
+    )
 
 
 def _value_is_authorized_by_relation(relation: SemanticResolverRelation) -> bool:

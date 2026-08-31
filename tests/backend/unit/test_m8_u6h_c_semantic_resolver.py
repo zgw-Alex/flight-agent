@@ -30,8 +30,16 @@ from flight_agent.application.semantic_resolver import (
     build_parser_resolver_request,
     evaluate_parser_resolver_routing,
     parse_semantic_resolver_response,
+    resolve_patch_semantics,
     resolve_parser_semantics,
     should_call_semantic_resolver,
+)
+from flight_agent.application.requirement_patch_hybrid import (
+    PatchSemanticIR,
+    ResolutionDisposition,
+    SemanticAmbiguity,
+    SemanticEvidence,
+    SemanticEvidenceKind,
 )
 from flight_agent.application.requirement_parser_hybrid import (
     ParserBindingState,
@@ -55,9 +63,11 @@ from flight_agent.domain.requirements import (
     HardConstraint,
     LocalDate,
     PreferenceImportance,
+    PreferenceId,
     PreferenceScope,
     RequirementId,
     RequirementState,
+    SoftPreference,
     StopCount,
 )
 from flight_agent.domain.shared import DomainInstant, RequirementVersion
@@ -76,6 +86,7 @@ from flight_agent.ports import (
     LLMProviderFailureCode,
     LLMProviderName,
     PatchInterpreterPayload,
+    PatchProposalAction,
     PatchRequirementProposal,
     RequirementInterpretationContext,
 )
@@ -941,6 +952,346 @@ def test_u6h_c_c06_confidence_does_not_commit_without_authoritative_mutation() -
     assert result.proposal.operations == ()
 
 
+@pytest.mark.parametrize(
+    ("scope", "relation_kind", "initial", "updated", "evidence_text"),
+    (
+        (PreferenceScope.PRICE, "ADD_SOFT_PRICE_PREFERENCE", PreferenceImportance.HIGH, SemanticResolverPreferenceImportance.LOW, "价格不太重要"),
+        (PreferenceScope.PRICE, "ADD_SOFT_PRICE_PREFERENCE", PreferenceImportance.LOW, SemanticResolverPreferenceImportance.MEDIUM, "价格其次考虑"),
+        (PreferenceScope.PRICE, "ADD_SOFT_PRICE_PREFERENCE", PreferenceImportance.MEDIUM, SemanticResolverPreferenceImportance.HIGH, "价格最重要"),
+        (PreferenceScope.FEWER_STOPS, "ADD_SOFT_FEWER_STOPS_PREFERENCE", PreferenceImportance.HIGH, SemanticResolverPreferenceImportance.LOW, "少转只稍微考虑"),
+        (PreferenceScope.FEWER_STOPS, "ADD_SOFT_FEWER_STOPS_PREFERENCE", PreferenceImportance.LOW, SemanticResolverPreferenceImportance.MEDIUM, "少转其次考虑"),
+        (PreferenceScope.FEWER_STOPS, "ADD_SOFT_FEWER_STOPS_PREFERENCE", PreferenceImportance.MEDIUM, SemanticResolverPreferenceImportance.HIGH, "少转最重要"),
+    ),
+)
+def test_ca04_u3_patch_updates_existing_preference_importance_without_duplicates(
+    scope: PreferenceScope,
+    relation_kind: str,
+    initial: PreferenceImportance,
+    updated: SemanticResolverPreferenceImportance,
+    evidence_text: str,
+) -> None:
+    current = requirement_with(preferences=(soft_preference(scope, initial),))
+
+    _, proposal, resolver_result = resolve_patch_semantics(
+        ca04_patch_ir(evidence_text),
+        current,
+        evidence_text,
+        FakeResolver(
+            schema_payload(
+                {
+                    "relations": [
+                        {
+                            "relation_kind": relation_kind,
+                            "evidence_ids": ["ev-ca04-patch-1"],
+                            "target": scope.value,
+                            "value": None,
+                            "importance": updated.value,
+                            "confidence": 0.1,
+                        }
+                    ]
+                }
+            )
+        ),
+    )
+
+    assert resolver_result is not None
+    assert resolver_result.failure is None
+    assert tuple(operation.action for operation in proposal.operations) == (PatchProposalAction.REPLACE_PREFERENCE,)
+    assert proposal.operations[0].target_id == PreferenceId(scope.value.lower())
+    assert_preference((proposal.operations[0].item,), scope, PreferenceImportance(updated.value))
+
+
+@pytest.mark.parametrize("target", ("PRICE", "FEWER_STOPS"))
+def test_ca04_ca01_patch_accepts_valid_remove_soft_preference_relation(target: str) -> None:
+    request = ca04_patch_request(f"{'价格' if target == 'PRICE' else '直飞'}无所谓")
+
+    result = parse_semantic_resolver_response(
+        schema_payload(
+            {
+                "request_id": request.request_id,
+                "relations": [
+                    {
+                        "relation_kind": "REMOVE_SOFT_PREFERENCE",
+                        "evidence_ids": ["ev-ca04-patch-1"],
+                        "target": target,
+                        "value": None,
+                        "importance": None,
+                        "confidence": 0.2,
+                    }
+                ],
+            }
+        ),
+        request,
+    )
+
+    assert result.failure is None
+    assert result.response is not None
+    assert result.response.relations[0].relation_kind == "REMOVE_SOFT_PREFERENCE"
+
+
+@pytest.mark.parametrize(
+    ("relation", "expected_code"),
+    (
+        ({"target": "DEPARTURE_TIME", "value": None, "importance": None, "evidence_ids": ["ev-ca04-patch-1"]}, "UNAUTHORIZED_REMOVE_SOFT_PREFERENCE_TARGET"),
+        ({"target": "PRICE", "value": "PRICE", "importance": None, "evidence_ids": ["ev-ca04-patch-1"]}, "UNAUTHORIZED_REMOVE_SOFT_PREFERENCE_VALUE"),
+        ({"target": "PRICE", "value": None, "importance": "LOW", "evidence_ids": ["ev-ca04-patch-1"]}, "UNAUTHORIZED_IMPORTANCE_FIELD"),
+        ({"target": "PRICE", "value": None, "importance": None, "evidence_ids": ["ev-missing"]}, "UNKNOWN_EVIDENCE_ID"),
+        ({"target": "PRICE", "value": None, "importance": None, "evidence_ids": ["ev-ca04-patch-1"]}, "INSUFFICIENT_SOFT_PREFERENCE_REMOVAL_EVIDENCE"),
+    ),
+)
+def test_ca04_ca01_patch_rejects_invalid_remove_soft_preference_relation(
+    relation: dict[str, Any],
+    expected_code: str,
+) -> None:
+    request = ca04_patch_request("价格比较重要")
+
+    result = parse_semantic_resolver_response(
+        schema_payload(
+            {
+                "request_id": request.request_id,
+                "relations": [{"relation_kind": "REMOVE_SOFT_PREFERENCE", "confidence": 0.2, **relation}],
+            }
+        ),
+        request,
+    )
+
+    assert result.failure is not None
+    assert result.failure.code == expected_code
+
+
+def test_ca04_ca01_remove_soft_preference_is_patch_only() -> None:
+    request = ca04_request("价格无所谓", "REMOVE_SOFT_PREFERENCE")
+
+    result = parse_semantic_resolver_response(
+        schema_payload(
+            {
+                "request_id": request.request_id,
+                "relations": [
+                    {
+                        "relation_kind": "REMOVE_SOFT_PREFERENCE",
+                        "evidence_ids": ["ev-ca04-1"],
+                        "target": "PRICE",
+                        "value": None,
+                        "importance": None,
+                        "confidence": 0.2,
+                    }
+                ],
+            }
+        ),
+        request,
+    )
+
+    assert result.failure is not None
+    assert result.failure.code == "PATCH_ONLY_RELATION"
+
+
+@pytest.mark.parametrize(
+    ("scope", "text"),
+    (
+        (PreferenceScope.PRICE, "价格无所谓"),
+        (PreferenceScope.FEWER_STOPS, "直飞无所谓"),
+    ),
+)
+def test_ca04_u3_patch_removes_existing_preference_and_absent_target_is_no_op(
+    scope: PreferenceScope,
+    text: str,
+) -> None:
+    current = requirement_with(
+        max_price_constraint(1500),
+        max_stops_constraint(0),
+        preferences=(soft_preference(scope, PreferenceImportance.HIGH),),
+    )
+    _, proposal, resolver_result = resolve_patch_semantics(
+        ca04_patch_ir(text),
+        current,
+        text,
+        FakeResolver(schema_payload({"relations": [remove_relation(scope, text)]})),
+    )
+
+    assert resolver_result is not None
+    assert resolver_result.failure is None
+    assert tuple(operation.action for operation in proposal.operations) == (PatchProposalAction.REMOVE_PREFERENCE,)
+    assert proposal.operations[0].target_id == PreferenceId(scope.value.lower())
+
+    absent_current = requirement_with(max_price_constraint(1500), max_stops_constraint(0))
+    _, absent_proposal, absent_result = resolve_patch_semantics(
+        ca04_patch_ir(text),
+        absent_current,
+        text,
+        FakeResolver(schema_payload({"relations": [remove_relation(scope, text)]})),
+    )
+
+    assert absent_result is not None
+    assert absent_result.failure is None
+    assert absent_proposal.operations == ()
+    assert absent_proposal.unresolved_semantics == ()
+
+
+def test_ca04_u3_none_low_and_confidence_do_not_remove_or_touch_hard_constraints() -> None:
+    current = requirement_with(
+        max_price_constraint(1500),
+        max_stops_constraint(0),
+        preferences=(soft_preference(PreferenceScope.PRICE, PreferenceImportance.HIGH),),
+    )
+    _, none_proposal, none_result = resolve_patch_semantics(
+        ca04_patch_ir("价格越便宜越好"),
+        current,
+        "价格越便宜越好",
+        FakeResolver(
+            schema_payload(
+                {
+                    "relations": [
+                        {
+                            "relation_kind": "ADD_SOFT_PRICE_PREFERENCE",
+                            "evidence_ids": ["ev-ca04-patch-1"],
+                            "target": "PRICE",
+                            "value": None,
+                            "importance": None,
+                            "confidence": 1.0,
+                        }
+                    ]
+                }
+            )
+        ),
+    )
+    _, low_proposal, low_result = resolve_patch_semantics(
+        ca04_patch_ir("价格不太重要"),
+        current,
+        "价格不太重要",
+        FakeResolver(
+            schema_payload(
+                {
+                    "relations": [
+                        {
+                            "relation_kind": "ADD_SOFT_PRICE_PREFERENCE",
+                            "evidence_ids": ["ev-ca04-patch-1"],
+                            "target": "PRICE",
+                            "value": None,
+                            "importance": "LOW",
+                            "confidence": 0.01,
+                        }
+                    ]
+                }
+            )
+        ),
+    )
+
+    assert none_result is not None
+    assert none_result.failure is None
+    assert none_proposal.operations == ()
+    assert low_result is not None
+    assert low_result.failure is None
+    assert tuple(operation.action for operation in low_proposal.operations) == (PatchProposalAction.REPLACE_PREFERENCE,)
+    assert low_proposal.operations[0].action is not PatchProposalAction.REMOVE_PREFERENCE
+    assert current.constraints == (max_price_constraint(1500), max_stops_constraint(0))
+
+
+def test_ca04_u3_ambiguous_remove_target_and_mixed_invalid_do_not_partially_commit() -> None:
+    current = requirement_with(
+        preferences=(
+            soft_preference(PreferenceScope.PRICE, PreferenceImportance.HIGH, "price-a"),
+            soft_preference(PreferenceScope.PRICE, PreferenceImportance.LOW, "price-b"),
+        )
+    )
+
+    _, ambiguous, ambiguous_result = resolve_patch_semantics(
+        ca04_patch_ir("价格无所谓"),
+        current,
+        "价格无所谓",
+        FakeResolver(schema_payload({"relations": [remove_relation(PreferenceScope.PRICE, "价格无所谓")]})),
+    )
+
+    assert ambiguous_result is not None
+    assert ambiguous_result.failure is None
+    assert ambiguous.operations == ()
+    assert ambiguous.unresolved_semantics == ("PRICE preference target is ambiguous",)
+
+    _, mixed_invalid, mixed_result = resolve_patch_semantics(
+        ca04_patch_ir("价格不太重要，直飞无所谓"),
+        requirement_with(preferences=(soft_preference(PreferenceScope.PRICE, PreferenceImportance.HIGH),)),
+        "价格不太重要，直飞无所谓",
+        FakeResolver(
+            schema_payload(
+                {
+                    "relations": [
+                        {
+                            "relation_kind": "ADD_SOFT_PRICE_PREFERENCE",
+                            "evidence_ids": ["ev-ca04-patch-1"],
+                            "target": "PRICE",
+                            "value": None,
+                            "importance": "LOW",
+                            "confidence": 0.2,
+                        },
+                        {
+                            "relation_kind": "REMOVE_SOFT_PREFERENCE",
+                            "evidence_ids": ["ev-ca04-patch-2"],
+                            "target": "DEPARTURE_TIME",
+                            "value": None,
+                            "importance": None,
+                            "confidence": 0.2,
+                        },
+                    ]
+                }
+            )
+        ),
+    )
+
+    assert mixed_result is not None
+    assert mixed_result.failure is not None
+    assert mixed_invalid.operations == ()
+    assert mixed_invalid.unresolved_semantics
+
+
+def test_ca04_u3_multi_preference_importance_update_remains_one_atomic_patch_proposal() -> None:
+    current = requirement_with(
+        preferences=(
+            soft_preference(PreferenceScope.PRICE, PreferenceImportance.HIGH),
+            soft_preference(PreferenceScope.FEWER_STOPS, PreferenceImportance.LOW),
+        )
+    )
+
+    _, proposal, resolver_result = resolve_patch_semantics(
+        ca04_patch_ir("价格不太重要，少转最重要"),
+        current,
+        "价格不太重要，少转最重要",
+        FakeResolver(
+            schema_payload(
+                {
+                    "relations": [
+                        {
+                            "relation_kind": "ADD_SOFT_PRICE_PREFERENCE",
+                            "evidence_ids": ["ev-ca04-patch-1"],
+                            "target": "PRICE",
+                            "value": None,
+                            "importance": "LOW",
+                            "confidence": 0.2,
+                        },
+                        {
+                            "relation_kind": "ADD_SOFT_FEWER_STOPS_PREFERENCE",
+                            "evidence_ids": ["ev-ca04-patch-2"],
+                            "target": "FEWER_STOPS",
+                            "value": None,
+                            "importance": "HIGH",
+                            "confidence": 0.2,
+                        },
+                    ]
+                }
+            )
+        ),
+    )
+
+    assert resolver_result is not None
+    assert resolver_result.failure is None
+    assert tuple(operation.action for operation in proposal.operations) == (
+        PatchProposalAction.REPLACE_PREFERENCE,
+        PatchProposalAction.REPLACE_PREFERENCE,
+    )
+    assert {operation.target_id for operation in proposal.operations} == {
+        PreferenceId("price"),
+        PreferenceId("fewer_stops"),
+    }
+
+
 def test_u6h_c_t3_parser_resolver_returns_through_builder_and_m3_without_inventing_values() -> None:
     resolver = FakeResolver(
         schema_payload(
@@ -1707,6 +2058,45 @@ def ca04_request(
     )
 
 
+def ca04_patch_ir(evidence_text: str) -> PatchSemanticIR:
+    evidence_parts = tuple(part for part in evidence_text.split("，") if part)
+    return PatchSemanticIR(
+        disposition=ResolutionDisposition.SEMANTIC_RESOLVER_REQUIRED,
+        ambiguities=(SemanticAmbiguity("SEMANTIC_RESOLVER_REQUIRED", "Resolve CA04 patch relation"),),
+        evidence=tuple(
+            SemanticEvidence(
+                f"ev-ca04-patch-{index}",
+                SemanticEvidenceKind.MODALITY_TEXT,
+                part,
+                part,
+            )
+            for index, part in enumerate(evidence_parts or (evidence_text,), start=1)
+        ),
+    )
+
+
+def ca04_patch_request(evidence_text: str) -> SemanticResolverRequest:
+    return SemanticResolverRequest(
+        request_id="ca04-u3-request",
+        contract_version=SEMANTIC_RESOLVER_CONTRACT_VERSION,
+        task_kind=SemanticResolverTaskKind.PATCH,
+        evidence=(SemanticResolverEvidence("ev-ca04-patch-1", "MODALITY_TEXT", evidence_text, evidence_text),),
+        unresolved_question="Resolve CA04 patch preference removal",
+        allowed_output_vocabulary=("REMOVE_SOFT_PREFERENCE",),
+    )
+
+
+def remove_relation(scope: PreferenceScope, evidence_text: str) -> dict[str, Any]:
+    return {
+        "relation_kind": "REMOVE_SOFT_PREFERENCE",
+        "evidence_ids": ["ev-ca04-patch-1"],
+        "target": scope.value,
+        "value": None,
+        "importance": None,
+        "confidence": 0.2,
+    }
+
+
 def minimal_request() -> SemanticResolverRequest:
     return SemanticResolverRequest(
         request_id="u6h-c-minimal",
@@ -1770,11 +2160,15 @@ def requirement_context(current: RequirementState) -> RequirementInterpretationC
     )
 
 
-def requirement_with(*constraints: HardConstraint) -> RequirementState:
+def requirement_with(
+    *constraints: HardConstraint,
+    preferences: tuple[SoftPreference, ...] = (),
+) -> RequirementState:
     return RequirementState.initial(
         requirement_id=RequirementId("requirement-1"),
         recorded_at=instant(1),
         constraints=constraints,
+        preferences=preferences,
     )
 
 
@@ -1793,6 +2187,18 @@ def max_stops_constraint(value: int) -> HardConstraint:
         ConstraintScope.MAX_STOPS,
         ConstraintOperator.AT_OR_BEFORE,
         StopCount(value),
+    )
+
+
+def soft_preference(
+    scope: PreferenceScope,
+    importance: PreferenceImportance,
+    raw_id: str | None = None,
+) -> SoftPreference:
+    return SoftPreference(
+        PreferenceId(raw_id or scope.value.lower()),
+        scope,
+        importance,
     )
 
 
