@@ -52,6 +52,7 @@ from flight_agent.ports.semantic_resolver import (
     SemanticResolverEvidence,
     SemanticResolverFailure,
     SemanticResolverFailureKind,
+    SemanticResolverPreferenceImportance,
     SemanticResolverRelation,
     SemanticResolverRequest,
     SemanticResolverResponse,
@@ -106,10 +107,13 @@ _STRICT_RESPONSE_FIELDS = frozenset(
     {"request_id", "status", "relations", "unresolved_items", "diagnostics", "model_metadata"}
 )
 _STRICT_RELATION_FIELDS = frozenset(
-    {"relation_kind", "evidence_ids", "target", "value", "confidence"}
+    {"relation_kind", "evidence_ids", "target", "value", "importance", "confidence"}
 )
 _STRICT_UNRESOLVED_FIELDS = frozenset({"code", "message", "evidence_ids"})
 _STRICT_METADATA_FIELDS = frozenset({"key", "value"})
+_CA04_IMPORTANCE_RELATION_KINDS = frozenset(
+    {"ADD_SOFT_PRICE_PREFERENCE", "ADD_SOFT_FEWER_STOPS_PREFERENCE"}
+)
 
 
 class SemanticResolverPatchHybridInterpreter:
@@ -434,6 +438,10 @@ def _relations_from_payload(
             return _contract_failure("INVALID_RELATION_EVIDENCE", "relation evidence_ids must be strings")
         target = raw.get("target")
         value = raw.get("value")
+        importance_result = _importance_from_payload(raw.get("importance"))
+        if isinstance(importance_result, SemanticResolverFailure):
+            return SemanticResolverResult.failed(importance_result)
+        importance = importance_result
         confidence_result = _confidence_from_payload(raw.get("confidence"))
         if isinstance(confidence_result, SemanticResolverFailure):
             return SemanticResolverResult.failed(confidence_result)
@@ -453,6 +461,7 @@ def _relations_from_payload(
                     tuple(evidence_ids),
                     target=target,
                     value=value,
+                    importance=importance,
                     confidence=confidence,
                 )
             )
@@ -796,7 +805,15 @@ def _validate_parser_relation_payload(
     request_evidence: tuple[SemanticResolverEvidence, ...],
     known_text: frozenset[str],
 ) -> SemanticResolverResult | None:
+    if relation.importance is not None and relation.relation_kind not in _CA04_IMPORTANCE_RELATION_KINDS:
+        return _contract_failure(
+            "UNAUTHORIZED_IMPORTANCE_FIELD",
+            "Preference importance is authorized only for CA04 soft preference relations",
+        )
     if relation.relation_kind == "ADD_SOFT_FEWER_STOPS_PREFERENCE":
+        importance_failure = _validate_soft_preference_importance(relation, evidence)
+        if importance_failure is not None:
+            return importance_failure
         if relation.target not in {None, ParserSemanticTarget.FEWER_STOPS.value} or relation.value is not None:
             return _evidence_failure(
                 "UNAUTHORIZED_SOFT_PREFERENCE_PAYLOAD",
@@ -808,6 +825,9 @@ def _validate_parser_relation_payload(
                 "Soft FEWER_STOPS parser relation requires explicit fewer-stops preference evidence",
             )
     if relation.relation_kind == "ADD_SOFT_PRICE_PREFERENCE":
+        importance_failure = _validate_soft_preference_importance(relation, evidence)
+        if importance_failure is not None:
+            return importance_failure
         if relation.target not in {None, ParserSemanticTarget.PRICE.value} or relation.value is not None:
             return _evidence_failure(
                 "UNAUTHORIZED_SOFT_PRICE_PAYLOAD",
@@ -819,6 +839,8 @@ def _validate_parser_relation_payload(
                 "Soft PRICE parser relation requires explicit price preference evidence",
             )
     if relation.relation_kind == "ADD_HARD_MAX_PRICE_CONSTRAINT":
+        if relation.importance is not None:
+            return _contract_failure("UNAUTHORIZED_IMPORTANCE_FIELD", "Hard MAX_PRICE relation must not carry preference importance")
         if relation.target not in {None, ParserSemanticTarget.MAX_PRICE.value}:
             return _evidence_failure("UNAUTHORIZED_MAX_PRICE_TARGET", "Hard MAX_PRICE parser relation target is not authorized")
         if relation.value is None or not re.fullmatch(r"\d+(?:\.\d+)?", relation.value):
@@ -828,6 +850,8 @@ def _validate_parser_relation_payload(
         if not _supports_hard_max_price_relation(evidence):
             return _evidence_failure("INSUFFICIENT_MAX_PRICE_EVIDENCE", "Hard MAX_PRICE parser relation requires explicit ceiling evidence")
     if relation.relation_kind == "ADD_HARD_MAX_STOPS_CONSTRAINT":
+        if relation.importance is not None:
+            return _contract_failure("UNAUTHORIZED_IMPORTANCE_FIELD", "Hard MAX_STOPS relation must not carry preference importance")
         if relation.target not in {None, ParserSemanticTarget.MAX_STOPS.value}:
             return _evidence_failure("UNAUTHORIZED_MAX_STOPS_TARGET", "Hard MAX_STOPS parser relation target is not authorized")
         if relation.value is None or not re.fullmatch(r"\d+", relation.value):
@@ -835,6 +859,34 @@ def _validate_parser_relation_payload(
         if not _supports_hard_max_stops_relation(evidence, request_evidence, relation.value):
             return _evidence_failure("INSUFFICIENT_MAX_STOPS_EVIDENCE", "Hard MAX_STOPS parser relation requires explicit hard stop evidence")
     return None
+
+
+def _validate_soft_preference_importance(
+    relation: SemanticResolverRelation,
+    evidence: tuple[SemanticResolverEvidence, ...],
+) -> SemanticResolverResult | None:
+    if relation.importance is None:
+        return None
+    if not _supports_preference_importance(relation.importance, evidence):
+        return _evidence_failure(
+            "INSUFFICIENT_IMPORTANCE_EVIDENCE",
+            "Explicit preference importance requires deterministic evidence support",
+        )
+    return None
+
+
+def _supports_preference_importance(
+    importance: SemanticResolverPreferenceImportance,
+    evidence: tuple[SemanticResolverEvidence, ...],
+) -> bool:
+    compact = _compact_evidence_text(evidence)
+    if importance is SemanticResolverPreferenceImportance.HIGH:
+        return any(token in compact for token in ("最重要", "最看重", "核心考虑", "特别重要", "非常重要", "更重要", "主要"))
+    if importance is SemanticResolverPreferenceImportance.MEDIUM:
+        return any(token in compact for token in ("其次", "第二考虑", "次要", "一般重要", "也重要", "比较重要"))
+    if importance is SemanticResolverPreferenceImportance.LOW:
+        return any(token in compact for token in ("稍微考虑", "有更好", "不太重要", "不那么重要", "只稍微"))
+    return False
 
 
 def _value_is_authorized_by_relation(relation: SemanticResolverRelation) -> bool:
@@ -911,6 +963,25 @@ def _confidence_from_payload(value: object) -> float | None | SemanticResolverFa
         except ValueError:
             return _failure(SemanticResolverFailureKind.MODEL_CONTRACT, "INVALID_CONFIDENCE", "relation confidence must be numeric")
     return _failure(SemanticResolverFailureKind.MODEL_CONTRACT, "INVALID_CONFIDENCE", "relation confidence must be numeric")
+
+
+def _importance_from_payload(value: object) -> SemanticResolverPreferenceImportance | None | SemanticResolverFailure:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        return _failure(
+            SemanticResolverFailureKind.MODEL_CONTRACT,
+            "INVALID_IMPORTANCE",
+            "relation importance must be LOW, MEDIUM, HIGH, or null",
+        )
+    try:
+        return SemanticResolverPreferenceImportance(value)
+    except ValueError:
+        return _failure(
+            SemanticResolverFailureKind.MODEL_CONTRACT,
+            "INVALID_IMPORTANCE",
+            "relation importance must be LOW, MEDIUM, HIGH, or null",
+        )
 
 
 def _supports_soft_fewer_stops_relation(evidence: tuple[SemanticResolverEvidence, ...]) -> bool:

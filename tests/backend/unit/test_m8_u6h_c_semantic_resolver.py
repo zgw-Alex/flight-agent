@@ -74,6 +74,7 @@ from flight_agent.ports.semantic_resolver import (
     SEMANTIC_RESOLVER_PROMPT_VERSION_V2,
     SemanticResolverEvidence,
     SemanticResolverFailureKind,
+    SemanticResolverPreferenceImportance,
     SemanticResolverRequest,
     SemanticResolverResult,
     SemanticResolverStatus,
@@ -364,7 +365,7 @@ def test_u6h_c_t1_c04_c07_to_c10_c15_strict_schema_and_evidence_closure() -> Non
     assert unknown_soft_preference_target.failure is not None
     assert unknown_soft_preference_target.failure.code == "UNAUTHORIZED_SOFT_PREFERENCE_PAYLOAD"
 
-    arbitrary_importance = parse_semantic_resolver_response(
+    arbitrary_importance_without_evidence = parse_semantic_resolver_response(
         schema_payload(
             {
                 "request_id": request.request_id,
@@ -382,8 +383,275 @@ def test_u6h_c_t1_c04_c07_to_c10_c15_strict_schema_and_evidence_closure() -> Non
         ),
         request,
     )
-    assert arbitrary_importance.failure is not None
-    assert arbitrary_importance.failure.code == "UNKNOWN_RELATION_FIELD"
+    assert arbitrary_importance_without_evidence.failure is not None
+    assert arbitrary_importance_without_evidence.failure.code == "INSUFFICIENT_IMPORTANCE_EVIDENCE"
+
+
+@pytest.mark.parametrize("importance", tuple(SemanticResolverPreferenceImportance))
+def test_ca04_u1_soft_price_relation_accepts_evidence_supported_importance(
+    importance: SemanticResolverPreferenceImportance,
+) -> None:
+    request = ca04_request(
+        "价格越便宜越好，价格最重要"
+        if importance is SemanticResolverPreferenceImportance.HIGH
+        else "价格越便宜越好，价格其次"
+        if importance is SemanticResolverPreferenceImportance.MEDIUM
+        else "价格越便宜越好，价格只稍微考虑",
+        "ADD_SOFT_PRICE_PREFERENCE",
+    )
+
+    result = parse_semantic_resolver_response(
+        schema_payload(
+            {
+                "request_id": request.request_id,
+                "relations": [
+                    {
+                        "relation_kind": "ADD_SOFT_PRICE_PREFERENCE",
+                        "evidence_ids": ["ev-ca04-1"],
+                        "target": None,
+                        "value": None,
+                        "importance": importance.value,
+                        "confidence": 0.1,
+                    }
+                ],
+            }
+        ),
+        request,
+    )
+
+    assert result.failure is None
+    assert result.response is not None
+    assert result.response.relations[0].importance is importance
+    assert result.response.relations[0].confidence == 0.1
+
+
+@pytest.mark.parametrize("importance", tuple(SemanticResolverPreferenceImportance))
+def test_ca04_u1_soft_fewer_stops_relation_accepts_evidence_supported_importance(
+    importance: SemanticResolverPreferenceImportance,
+) -> None:
+    request = ca04_request(
+        "优先直飞，直飞最重要"
+        if importance is SemanticResolverPreferenceImportance.HIGH
+        else "优先直飞，直飞其次"
+        if importance is SemanticResolverPreferenceImportance.MEDIUM
+        else "优先直飞，直飞只稍微考虑",
+        "ADD_SOFT_FEWER_STOPS_PREFERENCE",
+    )
+
+    result = parse_semantic_resolver_response(
+        schema_payload(
+            {
+                "request_id": request.request_id,
+                "relations": [
+                    {
+                        "relation_kind": "ADD_SOFT_FEWER_STOPS_PREFERENCE",
+                        "evidence_ids": ["ev-ca04-1"],
+                        "target": None,
+                        "value": None,
+                        "importance": importance.value,
+                        "confidence": 0.99,
+                    }
+                ],
+            }
+        ),
+        request,
+    )
+
+    assert result.failure is None
+    assert result.response is not None
+    assert result.response.relations[0].importance is importance
+
+
+def test_ca04_u1_soft_relation_accepts_null_and_omitted_importance_for_legacy_compatibility() -> None:
+    request = ca04_request("价格越便宜越好", "ADD_SOFT_PRICE_PREFERENCE")
+
+    null_importance = parse_semantic_resolver_response(
+        schema_payload(
+            {
+                "request_id": request.request_id,
+                "relations": [
+                    {
+                        "relation_kind": "ADD_SOFT_PRICE_PREFERENCE",
+                        "evidence_ids": ["ev-ca04-1"],
+                        "target": None,
+                        "value": None,
+                        "importance": None,
+                        "confidence": 0.8,
+                    }
+                ],
+            }
+        ),
+        request,
+    )
+    omitted_importance = parse_semantic_resolver_response(
+        schema_payload(
+            {
+                "request_id": request.request_id,
+                "relations": [
+                    {
+                        "relation_kind": "ADD_SOFT_PRICE_PREFERENCE",
+                        "evidence_ids": ["ev-ca04-1"],
+                        "target": None,
+                        "value": None,
+                        "confidence": 0.8,
+                    }
+                ],
+            }
+        ),
+        request,
+    )
+
+    assert null_importance.response is not None
+    assert null_importance.response.relations[0].importance is None
+    assert omitted_importance.response is not None
+    assert omitted_importance.response.relations[0].importance is None
+
+
+def test_ca04_u1_invalid_and_unauthorized_importance_are_rejected() -> None:
+    soft_request = ca04_request("价格最重要", "ADD_SOFT_PRICE_PREFERENCE")
+    hard_request = ca04_request("预算1500以内", "ADD_HARD_MAX_PRICE_CONSTRAINT", evidence_id="ev-unsupported-1")
+
+    invalid_token = parse_semantic_resolver_response(
+        schema_payload(
+            {
+                "request_id": soft_request.request_id,
+                "relations": [
+                    {
+                        "relation_kind": "ADD_SOFT_PRICE_PREFERENCE",
+                        "evidence_ids": ["ev-ca04-1"],
+                        "target": None,
+                        "value": None,
+                        "importance": "CRITICAL",
+                        "confidence": 0.8,
+                    }
+                ],
+            }
+        ),
+        soft_request,
+    )
+    hard_with_importance = parse_semantic_resolver_response(
+        schema_payload(
+            {
+                "request_id": hard_request.request_id,
+                "relations": [
+                    {
+                        "relation_kind": "ADD_HARD_MAX_PRICE_CONSTRAINT",
+                        "evidence_ids": ["ev-ca04-1", "ev-unsupported-1"],
+                        "target": "MAX_PRICE",
+                        "value": "1500",
+                        "importance": "HIGH",
+                        "confidence": 0.8,
+                    }
+                ],
+            }
+        ),
+        hard_request,
+    )
+    patch_request = minimal_request()
+    patch_relation_with_importance = parse_semantic_resolver_response(
+        schema_payload(
+            {
+                "request_id": patch_request.request_id,
+                "relations": [
+                    {
+                        "relation_kind": "NO_AUTHORITATIVE_MUTATION",
+                        "evidence_ids": ["ev-1"],
+                        "target": None,
+                        "value": None,
+                        "importance": "HIGH",
+                        "confidence": 0.8,
+                    }
+                ],
+            }
+        ),
+        patch_request,
+    )
+
+    assert invalid_token.failure is not None
+    assert invalid_token.failure.code == "INVALID_IMPORTANCE"
+    assert hard_with_importance.failure is not None
+    assert hard_with_importance.failure.code == "UNAUTHORIZED_IMPORTANCE_FIELD"
+    assert patch_relation_with_importance.failure is not None
+    assert patch_relation_with_importance.failure.code == "UNAUTHORIZED_IMPORTANCE_FIELD"
+
+
+def test_ca04_u1_explicit_importance_requires_evidence_and_confidence_does_not_infer_it() -> None:
+    request = ca04_request("价格越便宜越好", "ADD_SOFT_PRICE_PREFERENCE")
+
+    invented_importance = parse_semantic_resolver_response(
+        schema_payload(
+            {
+                "request_id": request.request_id,
+                "relations": [
+                    {
+                        "relation_kind": "ADD_SOFT_PRICE_PREFERENCE",
+                        "evidence_ids": ["ev-ca04-1"],
+                        "target": None,
+                        "value": None,
+                        "importance": "HIGH",
+                        "confidence": 1.0,
+                    }
+                ],
+            }
+        ),
+        request,
+    )
+    confidence_only = parse_semantic_resolver_response(
+        schema_payload(
+            {
+                "request_id": request.request_id,
+                "relations": [
+                    {
+                        "relation_kind": "ADD_SOFT_PRICE_PREFERENCE",
+                        "evidence_ids": ["ev-ca04-1"],
+                        "target": None,
+                        "value": None,
+                        "confidence": 1.0,
+                    }
+                ],
+            }
+        ),
+        request,
+    )
+
+    assert invented_importance.failure is not None
+    assert invented_importance.failure.code == "INSUFFICIENT_IMPORTANCE_EVIDENCE"
+    assert confidence_only.response is not None
+    assert confidence_only.response.relations[0].importance is None
+
+
+def test_ca04_u1_non_resolved_response_still_cannot_carry_relations() -> None:
+    request = ca04_request("价格最重要", "ADD_SOFT_PRICE_PREFERENCE")
+
+    result = parse_semantic_resolver_response(
+        schema_payload(
+            {
+                "request_id": request.request_id,
+                "status": "INSUFFICIENT_EVIDENCE",
+                "relations": [
+                    {
+                        "relation_kind": "ADD_SOFT_PRICE_PREFERENCE",
+                        "evidence_ids": ["ev-ca04-1"],
+                        "target": None,
+                        "value": None,
+                        "importance": "HIGH",
+                        "confidence": 0.8,
+                    }
+                ],
+                "unresolved_items": [
+                    {
+                        "code": "INSUFFICIENT_EVIDENCE",
+                        "message": "Need deterministic evidence",
+                        "evidence_ids": ["ev-ca04-1"],
+                    }
+                ],
+            }
+        ),
+        request,
+    )
+
+    assert result.failure is not None
+    assert result.failure.code == "INVALID_RESPONSE_SHAPE"
 
 
 def test_u6h_c_t2_c05_c14_patch_resolver_returns_through_builder_and_m3() -> None:
@@ -1157,6 +1425,28 @@ def schema_payload_json(overrides: dict[str, Any]) -> str:
     import json
 
     return json.dumps(schema_payload(overrides))
+
+
+def ca04_request(
+    evidence_text: str,
+    relation_kind: str,
+    *,
+    evidence_id: str = "ev-ca04-1",
+) -> SemanticResolverRequest:
+    evidence = (SemanticResolverEvidence(evidence_id, "UNSUPPORTED_TEXT", evidence_text, evidence_text),)
+    if relation_kind == "ADD_HARD_MAX_PRICE_CONSTRAINT":
+        evidence = (
+            SemanticResolverEvidence("ev-ca04-1", "VALUE", "1500", "1500"),
+            SemanticResolverEvidence(evidence_id, "UNSUPPORTED_TEXT", evidence_text, evidence_text),
+        )
+    return SemanticResolverRequest(
+        request_id="ca04-u1-request",
+        contract_version=SEMANTIC_RESOLVER_CONTRACT_VERSION,
+        task_kind=SemanticResolverTaskKind.PARSER,
+        evidence=evidence,
+        unresolved_question="Resolve CA04 preference importance metadata",
+        allowed_output_vocabulary=(relation_kind,),
+    )
 
 
 def minimal_request() -> SemanticResolverRequest:
