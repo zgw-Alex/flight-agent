@@ -1,13 +1,24 @@
 from __future__ import annotations
 
-from dataclasses import FrozenInstanceError
-from datetime import date
+from dataclasses import FrozenInstanceError, fields
+from datetime import UTC, date, datetime
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
 
 from flight_agent.adapters.flight_providers.mock import MockFlightProvider, MockProviderMapper
-from flight_agent.domain.flights import CandidateSnapshot, ItineraryId, OfferId, SegmentId
+from flight_agent.domain.flights import (
+    CandidateSnapshot,
+    CandidateSnapshotId,
+    Coverage,
+    CoverageStatus,
+    ItineraryId,
+    Money,
+    OfferId,
+    PriceSemantics,
+    SegmentId,
+)
 from flight_agent.domain.requirements import AirportCode, LocalDate, RequirementId
 from flight_agent.domain.search import (
     DepartureDateScope,
@@ -17,7 +28,15 @@ from flight_agent.domain.search import (
     SearchPlan,
     SearchPlanId,
 )
-from flight_agent.domain.shared import DomainValue, RequirementVersion, ValueState
+from flight_agent.domain.shared import (
+    DomainInstant,
+    DomainValue,
+    FreshnessState,
+    RequirementVersion,
+    SnapshotVersion,
+    StructuralFreshness,
+    ValueState,
+)
 from flight_agent.ports import (
     CandidateMerger,
     CommonNormalizer,
@@ -129,6 +148,7 @@ def mapped_offer(
     provider: str = "provider-a",
     acquisition: str = "acquisition-a",
     amount: int = 1000,
+    price_semantics: PriceSemantics = PriceSemantics.EXACT,
 ) -> MappedOffer:
     return MappedOffer(
         mapped_offer_ref=MappedOfferRef(f"mapped-offer:{source}"),
@@ -139,6 +159,7 @@ def mapped_offer(
         refundable=DomainValue.not_provided(),
         booking_reference=DomainValue.not_applicable(),
         provenance=provenance(source, provider=provider, acquisition=acquisition),
+        price_semantics=price_semantics,
     )
 
 
@@ -189,6 +210,18 @@ def valid_normalized_result() -> NormalizationResult:
     )
 
 
+def test_mapped_offer_defaults_to_exact_price_semantics_for_legacy_construction() -> None:
+    assert mapped_offer("offer-a", "itin-a").price_semantics is PriceSemantics.EXACT
+
+
+def test_mapped_offer_accepts_explicit_price_semantics() -> None:
+    exact = mapped_offer("offer-exact", "itin-a", price_semantics=PriceSemantics.EXACT)
+    lower_bound = mapped_offer("offer-lower", "itin-a", price_semantics=PriceSemantics.LOWER_BOUND)
+
+    assert exact.price_semantics is PriceSemantics.EXACT
+    assert lower_bound.price_semantics is PriceSemantics.LOWER_BOUND
+
+
 def test_normalizer_constructs_legal_canonical_graph_without_snapshot() -> None:
     result = valid_normalized_result()
 
@@ -201,6 +234,31 @@ def test_normalizer_constructs_legal_canonical_graph_without_snapshot() -> None:
     assert not isinstance(result, CandidateSnapshot)
     with pytest.raises(FrozenInstanceError):
         result.segments = ()  # type: ignore[misc]
+
+
+def test_normalizer_preserves_exact_price_semantics_explicitly() -> None:
+    result = normalize(
+        mapping_result(
+            segments=(mapped_segment("seg-a"),),
+            itineraries=(mapped_itinerary("itin-a", ("seg-a",)),),
+            offers=(mapped_offer("offer-a", "itin-a", price_semantics=PriceSemantics.EXACT),),
+        )
+    )
+
+    assert result.offers[0].price_semantics is PriceSemantics.EXACT
+
+
+def test_normalizer_preserves_lower_bound_price_semantics_without_default_upgrade() -> None:
+    result = normalize(
+        mapping_result(
+            segments=(mapped_segment("seg-a"),),
+            itineraries=(mapped_itinerary("itin-a", ("seg-a",)),),
+            offers=(mapped_offer("offer-a", "itin-a", price_semantics=PriceSemantics.LOWER_BOUND),),
+        )
+    )
+
+    assert result.offers[0].price_semantics is PriceSemantics.LOWER_BOUND
+    assert result.offers[0].price_semantics is not PriceSemantics.EXACT
 
 
 def test_normalizer_preserves_optional_missing_and_does_not_invent_reference_facts() -> None:
@@ -251,6 +309,36 @@ def test_offer_only_normalization_failure_preserves_segment_and_itinerary() -> N
         issue.category is NormalizationIssueCategory.CANONICAL_INVARIANT_VIOLATION
         for issue in result.issues
     )
+
+
+def test_missing_offer_price_behavior_remains_identity_critical_missing() -> None:
+    result = normalize(
+        mapping_result(
+            segments=(mapped_segment("seg-a"),),
+            itineraries=(mapped_itinerary("itin-a", ("seg-a",)),),
+            offers=(
+                MappedOffer(
+                    mapped_offer_ref=MappedOfferRef("mapped-offer:missing-price"),
+                    provider_offer_id="missing-price",
+                    itinerary_ref=MappedItineraryRef("mapped-itinerary:itin-a"),
+                    total_amount=DomainValue.not_provided(),
+                    currency=DomainValue.known("CNY"),
+                    refundable=DomainValue.not_provided(),
+                    booking_reference=DomainValue.not_applicable(),
+                    provenance=provenance("missing-price"),
+                    price_semantics=PriceSemantics.LOWER_BOUND,
+                ),
+            ),
+        )
+    )
+
+    assert result.offers == ()
+    assert result.statistics.dropped_offer_count == 1
+    assert any(
+        issue.category is NormalizationIssueCategory.IDENTITY_CRITICAL_MISSING
+        for issue in result.issues
+    )
+    assert Money(Decimal("1000"), "cny") == Money(Decimal("1000"), "CNY")
 
 
 def test_normalizer_consumes_mapped_data_from_u3_without_provider_schema_branching() -> None:
@@ -396,6 +484,69 @@ def test_same_provider_exact_duplicate_offer_can_collapse_with_source_identity()
 
     assert len(graph.offers) == 1
     assert len(graph.offers[0].provenance) == 1
+
+
+def test_same_provider_offer_with_different_price_semantics_is_distinct() -> None:
+    left = normalize(
+        mapping_result(
+            segments=(mapped_segment("seg-a"),),
+            itineraries=(mapped_itinerary("itin-a", ("seg-a",)),),
+            offers=(mapped_offer("offer-same", "itin-a", price_semantics=PriceSemantics.EXACT),),
+        )
+    )
+    right = normalize(
+        mapping_result(
+            segments=(mapped_segment("seg-a"),),
+            itineraries=(mapped_itinerary("itin-a", ("seg-a",)),),
+            offers=(mapped_offer("offer-same", "itin-a", price_semantics=PriceSemantics.LOWER_BOUND),),
+        )
+    )
+    merger = CandidateMerger(MergerVersion("candidate-merger-v1"))
+
+    assert merger.offer_equivalence(left.offers[0], right.offers[0]) is EquivalenceDecision.DISTINCT
+    graph = merger.merge((right, left))
+    assert len(graph.offers) == 2
+    assert {offer.price_semantics for offer in graph.offers} == {
+        PriceSemantics.EXACT,
+        PriceSemantics.LOWER_BOUND,
+    }
+
+
+def test_lower_bound_offer_can_exist_in_candidate_snapshot_without_schema_change() -> None:
+    result = normalize(
+        mapping_result(
+            segments=(mapped_segment("seg-a"),),
+            itineraries=(mapped_itinerary("itin-a", ("seg-a",)),),
+            offers=(mapped_offer("offer-a", "itin-a", price_semantics=PriceSemantics.LOWER_BOUND),),
+        )
+    )
+    snapshot = CandidateSnapshot(
+        snapshot_id=CandidateSnapshotId("snapshot-lower-bound"),
+        version=SnapshotVersion(1),
+        created_at=DomainInstant(datetime(2026, 9, 1, 1, 0, tzinfo=UTC)),
+        created_from_requirement_version=RequirementVersion(5),
+        structural_freshness=StructuralFreshness(FreshnessState.FRESH),
+        coverage=Coverage("PVG-LAX", "PVG-LAX", CoverageStatus.COMPLETE),
+        segments=result.segments,
+        itineraries=result.itineraries,
+        offers=result.offers,
+    )
+
+    assert snapshot.offers[0].price_semantics is PriceSemantics.LOWER_BOUND
+    assert [field.name for field in fields(CandidateSnapshot)] == [
+        "snapshot_id",
+        "version",
+        "created_at",
+        "created_from_requirement_version",
+        "structural_freshness",
+        "coverage",
+        "segments",
+        "itineraries",
+        "offers",
+        "parent_snapshot_id",
+        "parent_snapshot_version",
+        "provenance",
+    ]
 
 
 def test_optional_known_conflict_is_evidence_not_silent_overwrite() -> None:

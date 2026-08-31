@@ -289,9 +289,10 @@ class CandidateMerger:
             and left_sources == right_sources
             and left.total_price == right.total_price
             and left.booking_reference == right.booking_reference
+            and left.price_semantics == right.price_semantics
         ):
             return EquivalenceDecision.EQUIVALENT
-        if left.total_price == right.total_price:
+        if left.total_price == right.total_price and left.price_semantics == right.price_semantics:
             return EquivalenceDecision.INSUFFICIENT_EVIDENCE
         return EquivalenceDecision.DISTINCT
 
@@ -420,6 +421,7 @@ class CandidateMerger:
                 offer_freshness=offer.offer_freshness,
                 booking_reference=offer.booking_reference,
                 provenance=offer.provenance,
+                price_semantics=offer.price_semantics,
             )
             match = next(
                 (
@@ -451,6 +453,7 @@ class CandidateMerger:
                     offer_freshness=match.offer_freshness,
                     booking_reference=match.booking_reference,
                     provenance=_union_provenance(match.provenance, rewired.provenance),
+                    price_semantics=match.price_semantics,
                 )
                 canonical[canonical.index(match)] = merged
         return canonical
@@ -567,6 +570,7 @@ def _normalize_offer(
             offer_freshness=OfferFreshness(FreshnessState.FRESH),
             booking_reference=mapped.booking_reference,
             provenance=(_provenance_ref(mapped.provenance),),
+            price_semantics=mapped.price_semantics,
         )
     except DomainInvariantViolation as exc:
         issues.append(
@@ -739,6 +743,7 @@ def _with_offer_id(offer: Offer, offer_id: OfferId) -> Offer:
         offer_freshness=offer.offer_freshness,
         booking_reference=offer.booking_reference,
         provenance=offer.provenance,
+        price_semantics=offer.price_semantics,
     )
 
 

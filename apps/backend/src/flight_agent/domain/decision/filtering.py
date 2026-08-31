@@ -46,6 +46,7 @@ from flight_agent.domain.flights import (
     Money,
     Offer,
     OfferId,
+    PriceSemantics,
 )
 from flight_agent.domain.requirements import (
     ConstraintId,
@@ -243,6 +244,7 @@ class ConstraintEvaluator(Protocol):
         *,
         constraint: HardConstraint,
         candidate: OfferBackedItineraryCandidate,
+        offer: Offer,
         feature_set: DerivedFeatureSet,
         lineage: ConstraintEvaluationLineage,
         evaluation_id: ConstraintEvaluationId,
@@ -288,10 +290,12 @@ class DepartureDateConstraintEvaluator:
         *,
         constraint: HardConstraint,
         candidate: OfferBackedItineraryCandidate,
+        offer: Offer,
         feature_set: DerivedFeatureSet,
         lineage: ConstraintEvaluationLineage,
         evaluation_id: ConstraintEvaluationId,
     ) -> ConstraintEvaluation:
+        del offer
         if constraint.operator is not ConstraintOperator.EQUALS or not isinstance(
             constraint.value,
             LocalDate,
@@ -328,6 +332,7 @@ class MaxPriceConstraintEvaluator:
         *,
         constraint: HardConstraint,
         candidate: OfferBackedItineraryCandidate,
+        offer: Offer,
         feature_set: DerivedFeatureSet,
         lineage: ConstraintEvaluationLineage,
         evaluation_id: ConstraintEvaluationId,
@@ -340,7 +345,7 @@ class MaxPriceConstraintEvaluator:
         feature_value = feature_set.value_for(candidate, TOTAL_PRICE)
         _validate_feature_value(feature_value, FeatureValueType.MONEY)
         actual = _actual_total_price(feature_value)
-        status = _status_from_money_threshold(feature_value, constraint.value)
+        status = _status_from_money_threshold(feature_value, constraint.value, offer.price_semantics)
         return _constraint_evaluation(
             evaluation_id=evaluation_id,
             constraint_id=constraint.constraint_id,
@@ -374,10 +379,12 @@ class MaxStopsConstraintEvaluator:
         *,
         constraint: HardConstraint,
         candidate: OfferBackedItineraryCandidate,
+        offer: Offer,
         feature_set: DerivedFeatureSet,
         lineage: ConstraintEvaluationLineage,
         evaluation_id: ConstraintEvaluationId,
     ) -> ConstraintEvaluation:
+        del offer
         if constraint.operator is not ConstraintOperator.AT_OR_BEFORE or not isinstance(
             constraint.value,
             StopCount,
@@ -425,6 +432,7 @@ class CompleteFilteringEngine:
     ) -> tuple[FilterRun, CompleteFilterResult]:
         _validate_feature_set_lineage(feature_set, requirement, snapshot)
         candidates = _candidates_from_snapshot(snapshot)
+        offers_by_candidate = {_candidate_for_offer(offer): offer for offer in snapshot.offers}
         constraints = tuple(sorted(requirement.constraints, key=lambda item: item.constraint_id.value))
         run = FilterRun(
             run_id=filter_run_id,
@@ -443,6 +451,7 @@ class CompleteFilteringEngine:
                 self.evaluator_registry.evaluator_for(constraint).evaluate(
                     constraint=constraint,
                     candidate=candidate,
+                    offer=offers_by_candidate[candidate],
                     feature_set=feature_set,
                     lineage=ConstraintEvaluationLineage(
                         requirement_id=requirement.requirement_id,
@@ -586,6 +595,7 @@ def _actual_departure_date_match(feature_value: FeatureValue) -> DomainValue[obj
 def _status_from_money_threshold(
     feature_value: FeatureValue,
     max_price: Money,
+    price_semantics: PriceSemantics,
 ) -> ConstraintEvaluationStatus:
     if feature_value.value_status is not ValueState.KNOWN:
         return ConstraintEvaluationStatus.UNKNOWN
@@ -593,6 +603,10 @@ def _status_from_money_threshold(
     if not isinstance(actual, Money):
         raise DomainInvariantViolation("Money feature produced a non-Money value")
     if actual.currency != max_price.currency:
+        return ConstraintEvaluationStatus.UNKNOWN
+    if price_semantics is PriceSemantics.LOWER_BOUND:
+        if actual.amount > max_price.amount:
+            return ConstraintEvaluationStatus.FAIL
         return ConstraintEvaluationStatus.UNKNOWN
     if actual.amount <= max_price.amount:
         return ConstraintEvaluationStatus.PASS
@@ -655,6 +669,10 @@ def _candidates_from_snapshot(snapshot: CandidateSnapshot) -> tuple[OfferBackedI
             OfferBackedItineraryCandidate(offer_id=offer.offer_id, itinerary_id=offer.itinerary_id)
         )
     return tuple(sorted(candidates, key=lambda candidate: candidate.offer_id.value))
+
+
+def _candidate_for_offer(offer: Offer) -> OfferBackedItineraryCandidate:
+    return OfferBackedItineraryCandidate(offer_id=offer.offer_id, itinerary_id=offer.itinerary_id)
 
 
 def _direction_from_candidate_pool(direction: CandidatePoolDirection) -> FilterResultDirection:

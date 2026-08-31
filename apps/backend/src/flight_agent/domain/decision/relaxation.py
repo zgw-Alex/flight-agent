@@ -30,7 +30,7 @@ from flight_agent.domain.decision.identity import (
     RelaxationRunId,
 )
 from flight_agent.domain.decision.policy import DecisionPolicyVersion
-from flight_agent.domain.flights import CandidateSnapshot, CandidateSnapshotId, Money
+from flight_agent.domain.flights import CandidateSnapshot, CandidateSnapshotId, Money, Offer
 from flight_agent.domain.requirements import (
     ConstraintId,
     ConstraintOperator,
@@ -358,7 +358,6 @@ def _max_price_single_proposals(
     evaluator_registry: FilterEvaluatorRegistry,
     relaxation_run_id: RelaxationRunId,
 ) -> tuple[RelaxationProposal, ...]:
-    del snapshot
     if ConstraintScope.MAX_PRICE not in relaxation_policy.enabled_constraint_scopes:
         return ()
     proposals: list[RelaxationProposal] = []
@@ -371,6 +370,7 @@ def _max_price_single_proposals(
             proposed = Money(boundary.amount, boundary.currency)
             recovered, counterfactual_ids = _counterfactual_recovered_candidates(
                 requirement=requirement,
+                snapshot=snapshot,
                 feature_set=feature_set,
                 filter_result=filter_result,
                 evaluator_registry=evaluator_registry,
@@ -425,7 +425,6 @@ def _max_stops_single_proposals(
     evaluator_registry: FilterEvaluatorRegistry,
     relaxation_run_id: RelaxationRunId,
 ) -> tuple[RelaxationProposal, ...]:
-    del snapshot
     if ConstraintScope.MAX_STOPS not in relaxation_policy.enabled_constraint_scopes:
         return ()
     proposals: list[RelaxationProposal] = []
@@ -436,6 +435,7 @@ def _max_stops_single_proposals(
         for boundary in _failing_max_stops_boundaries(constraint, feature_set, filter_result):
             recovered, counterfactual_ids = _counterfactual_recovered_candidates(
                 requirement=requirement,
+                snapshot=snapshot,
                 feature_set=feature_set,
                 filter_result=filter_result,
                 evaluator_registry=evaluator_registry,
@@ -480,6 +480,7 @@ def _max_stops_single_proposals(
 def _counterfactual_recovered_candidates(
     *,
     requirement: RequirementState,
+    snapshot: CandidateSnapshot,
     feature_set: DerivedFeatureSet,
     filter_result: CompleteFilterResult,
     evaluator_registry: FilterEvaluatorRegistry,
@@ -496,10 +497,12 @@ def _counterfactual_recovered_candidates(
         for constraint in sorted(requirement.constraints, key=lambda item: item.constraint_id.value)
     )
     for candidate in filter_result.rejected_candidates:
+        offer = _offer_for_candidate(snapshot, candidate)
         evaluations = tuple(
             evaluator_registry.evaluator_for(constraint).evaluate(
                 constraint=constraint,
                 candidate=candidate,
+                offer=offer,
                 feature_set=feature_set,
                 lineage=ConstraintEvaluationLineage(
                     requirement_id=requirement.requirement_id,
@@ -520,6 +523,17 @@ def _counterfactual_recovered_candidates(
             recovered.append(candidate)
             counterfactual_ids.extend(evaluation.evaluation_id for evaluation in evaluations)
     return tuple(sorted(recovered, key=_candidate_key)), tuple(sorted(counterfactual_ids, key=lambda item: item.value))
+
+
+def _offer_for_candidate(snapshot: CandidateSnapshot, candidate: OfferBackedItineraryCandidate) -> Offer:
+    matches = tuple(
+        offer
+        for offer in snapshot.offers
+        if offer.offer_id == candidate.offer_id and offer.itinerary_id == candidate.itinerary_id
+    )
+    if len(matches) != 1:
+        raise DomainInvariantViolation("Counterfactual evaluation requires one canonical Offer per candidate")
+    return matches[0]
 
 
 def _failing_max_price_boundaries(

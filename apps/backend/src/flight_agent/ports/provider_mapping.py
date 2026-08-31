@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Protocol
 
+from flight_agent.domain.flights import PriceSemantics
 from flight_agent.domain.search import SearchPlanId
 from flight_agent.domain.shared import DomainId, DomainInvariantViolation, DomainValue
 from flight_agent.ports.flight_providers import (
@@ -129,6 +130,11 @@ class MappedOffer:
     refundable: DomainValue[bool]
     booking_reference: DomainValue[str]
     provenance: MappedProvenance
+    price_semantics: PriceSemantics = PriceSemantics.EXACT
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.price_semantics, PriceSemantics):
+            raise DomainInvariantViolation("MappedOffer price_semantics must be a PriceSemantics")
 
 
 @dataclass(frozen=True)
