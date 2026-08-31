@@ -895,7 +895,7 @@ def _validate_patch_relation_payload(
                 "UNAUTHORIZED_SOFT_PREFERENCE_PAYLOAD",
                 "Soft FEWER_STOPS patch relation must not carry model-controlled value",
             )
-        if not _supports_soft_fewer_stops_relation(evidence):
+        if not _supports_soft_fewer_stops_relation(evidence) and not _supports_fewer_stops_importance_target(evidence):
             return _evidence_failure(
                 "INSUFFICIENT_SOFT_PREFERENCE_EVIDENCE",
                 "Soft FEWER_STOPS patch relation requires explicit fewer-stops preference evidence",
@@ -942,7 +942,7 @@ def _validate_parser_relation_payload(
                 "UNAUTHORIZED_SOFT_PREFERENCE_PAYLOAD",
                 "Soft FEWER_STOPS parser relation must not carry model-controlled value",
             )
-        if not _supports_soft_fewer_stops_relation(evidence):
+        if not _supports_soft_fewer_stops_relation(evidence) and not _supports_fewer_stops_importance_target(evidence):
             return _evidence_failure(
                 "INSUFFICIENT_SOFT_PREFERENCE_EVIDENCE",
                 "Soft FEWER_STOPS parser relation requires explicit fewer-stops preference evidence",
@@ -956,7 +956,7 @@ def _validate_parser_relation_payload(
                 "UNAUTHORIZED_SOFT_PRICE_PAYLOAD",
                 "Soft PRICE parser relation must not carry model-controlled value",
             )
-        if not _supports_soft_price_relation(evidence, request_evidence):
+        if not _supports_soft_price_relation(evidence, request_evidence) and not _supports_price_importance_target(evidence):
             return _evidence_failure(
                 "INSUFFICIENT_SOFT_PRICE_EVIDENCE",
                 "Soft PRICE parser relation requires explicit price preference evidence",
@@ -1004,7 +1004,23 @@ def _supports_preference_importance(
 ) -> bool:
     compact = _compact_evidence_text(evidence)
     if importance is SemanticResolverPreferenceImportance.HIGH:
-        return any(token in compact for token in ("最重要", "最看重", "核心考虑", "特别重要", "非常重要", "更重要", "主要"))
+        return any(
+            token in compact
+            for token in (
+                "最重要",
+                "第一优先",
+                "最看重",
+                "核心考虑",
+                "特别重要",
+                "非常重要",
+                "很重要",
+                "更重要",
+                "主要考虑",
+                "重点考虑",
+                "非常看重",
+                "主要",
+            )
+        )
     if importance is SemanticResolverPreferenceImportance.MEDIUM:
         return any(token in compact for token in ("其次", "第二考虑", "次要", "一般重要", "也重要", "比较重要"))
     if importance is SemanticResolverPreferenceImportance.LOW:
@@ -1039,7 +1055,46 @@ def _supports_price_importance_target(evidence: tuple[SemanticResolverEvidence, 
             "核心考虑",
             "特别重要",
             "非常重要",
+            "很重要",
             "更重要",
+            "第一优先",
+            "主要考虑",
+            "重点考虑",
+            "非常看重",
+            "主要",
+            "其次",
+            "第二考虑",
+            "次要",
+            "一般重要",
+            "也重要",
+            "比较重要",
+            "稍微考虑",
+            "有更好",
+            "不太重要",
+            "不那么重要",
+            "只稍微",
+        )
+    )
+
+
+def _supports_fewer_stops_importance_target(evidence: tuple[SemanticResolverEvidence, ...]) -> bool:
+    compact = _compact_evidence_text(evidence)
+    if not any(token in compact for token in ("直飞", "转机", "中转", "少转", "转不转")):
+        return False
+    return any(
+        token in compact
+        for token in (
+            "最重要",
+            "第一优先",
+            "最看重",
+            "核心考虑",
+            "特别重要",
+            "非常重要",
+            "很重要",
+            "更重要",
+            "主要考虑",
+            "重点考虑",
+            "非常看重",
             "主要",
             "其次",
             "第二考虑",
