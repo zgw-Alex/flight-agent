@@ -8,7 +8,7 @@ from flight_agent.adapters.flight_providers.mock import (
     MockFlightProvider,
     MockProviderMapper,
 )
-from flight_agent.domain.flights import CandidateSnapshot, ItineraryId, OfferId, SegmentId
+from flight_agent.domain.flights import CandidateSnapshot, ItineraryId, OfferId, PriceSemantics, SegmentId
 from flight_agent.domain.requirements import AirportCode, LocalDate, RequirementId
 from flight_agent.domain.search import (
     DepartureDateScope,
@@ -86,6 +86,7 @@ def test_valid_provider_graph_maps_to_immutable_mapped_intermediates() -> None:
     assert not isinstance(segment.mapped_segment_ref, SegmentId)
     assert not isinstance(itinerary.mapped_itinerary_ref, ItineraryId)
     assert not isinstance(offer.mapped_offer_ref, OfferId)
+    assert offer.price_semantics is PriceSemantics.EXACT
     assert not isinstance(result, CandidateSnapshot)
 
 
