@@ -43,6 +43,7 @@ from flight_agent.domain.flights import (
     Money,
     Offer,
     OfferId,
+    PriceSemantics,
     SegmentId,
 )
 from flight_agent.domain.requirements import (
@@ -59,6 +60,7 @@ from flight_agent.domain.requirements import (
     RequirementState,
     SoftPreference,
 )
+from flight_agent.domain.search import SearchPlanId
 from flight_agent.domain.shared import (
     DomainInstant,
     DomainInvariantViolation,
@@ -71,6 +73,26 @@ from flight_agent.domain.shared import (
     StructuralFreshness,
 )
 from flight_agent.domain.workflow import EvidenceRef, EvidenceSource
+from flight_agent.ports import (
+    CommonNormalizer,
+    MappedItinerary,
+    MappedItineraryRef,
+    MappedOffer,
+    MappedOfferRef,
+    MappedProvenance,
+    MappedSegment,
+    MappedSegmentRef,
+    MapperVersion,
+    NormalizationContext,
+    NormalizerVersion,
+    ProviderAcquisitionId,
+    ProviderDataStatus,
+    ProviderId,
+    ProviderMappingResult,
+    ReferenceData,
+    ReferenceDataVersion,
+)
+from flight_agent.ports.provider_mapping import MappingStatistics
 
 
 def test_departure_date_filter_pass_fail_and_unknown_are_three_valued() -> None:
@@ -142,6 +164,114 @@ def test_max_price_evaluator_pass_boundary_fail_and_currency_unknown() -> None:
         for evaluation in mismatch.evaluations
     )
     assert mismatch.direction is FilterResultDirection.QUALIFICATION_UNRESOLVED
+
+
+def test_max_price_evaluator_is_evidence_aware_for_price_semantics_truth_table() -> None:
+    snapshot = snapshot_from_specs(
+        (
+            ("exact-cheap", date(2026, 9, 1), Decimal(791), PriceSemantics.EXACT),
+            ("exact-expensive", date(2026, 9, 1), Decimal(850), PriceSemantics.EXACT),
+            ("lower-cheap", date(2026, 9, 1), Decimal(791), PriceSemantics.LOWER_BOUND),
+            ("lower-expensive", date(2026, 9, 1), Decimal(850), PriceSemantics.LOWER_BOUND),
+        )
+    )
+    requirement = max_price_requirement(Decimal(800))
+
+    result = filter_result(
+        snapshot=snapshot,
+        requirement=requirement,
+        feature_set=feature_set_for_price(snapshot, requirement),
+    )
+
+    assert statuses_by_offer(result) == {
+        OfferId("offer-exact-cheap"): ConstraintEvaluationStatus.PASS,
+        OfferId("offer-exact-expensive"): ConstraintEvaluationStatus.FAIL,
+        OfferId("offer-lower-cheap"): ConstraintEvaluationStatus.UNKNOWN,
+        OfferId("offer-lower-expensive"): ConstraintEvaluationStatus.FAIL,
+    }
+    assert candidate("offer-lower-cheap", "itinerary-lower-cheap") in result.uncertain_candidates
+    assert candidate("offer-lower-expensive", "itinerary-lower-expensive") in result.rejected_candidates
+
+
+def test_max_price_evaluator_preserves_exact_boundary_and_keeps_lower_bound_boundary_unknown() -> None:
+    snapshot = snapshot_from_specs(
+        (
+            ("exact-boundary", date(2026, 9, 1), Decimal(800), PriceSemantics.EXACT),
+            ("lower-boundary", date(2026, 9, 1), Decimal(800), PriceSemantics.LOWER_BOUND),
+        )
+    )
+    requirement = max_price_requirement(Decimal(800))
+
+    result = filter_result(
+        snapshot=snapshot,
+        requirement=requirement,
+        feature_set=feature_set_for_price(snapshot, requirement),
+    )
+
+    assert statuses_by_offer(result)[OfferId("offer-exact-boundary")] is ConstraintEvaluationStatus.PASS
+    assert statuses_by_offer(result)[OfferId("offer-lower-boundary")] is ConstraintEvaluationStatus.UNKNOWN
+    assert evaluations_by_offer(result)[OfferId("offer-lower-boundary")].reason_code is (
+        ConstraintReasonCode.MAX_PRICE_INSUFFICIENT_EVIDENCE
+    )
+
+
+def test_m4_lower_bound_normalized_offer_reaches_m6_max_price_without_semantic_loss() -> None:
+    normalized = CommonNormalizer().normalize(
+        ProviderMappingResult(
+            provider_id=ProviderId("provider-a"),
+            acquisition_id=ProviderAcquisitionId("acquisition-a"),
+            search_plan_id=SearchPlanId("search-plan-a"),
+            mapper_version=MapperVersion("mapper-v1"),
+            data_status=ProviderDataStatus.COMPLETE,
+            segments=(mapped_segment("seg-a"),),
+            itineraries=(mapped_itinerary("itin-a", ("seg-a",)),),
+            offers=(mapped_offer("offer-a", "itin-a", price_semantics=PriceSemantics.LOWER_BOUND),),
+            issues=(),
+            statistics=MappingStatistics(
+                raw_segment_count=1,
+                mapped_segment_count=1,
+                dropped_segment_count=0,
+                raw_itinerary_count=1,
+                mapped_itinerary_count=1,
+                dropped_itinerary_count=0,
+                raw_offer_count=1,
+                mapped_offer_count=1,
+                dropped_offer_count=0,
+                issue_count=0,
+            ),
+        ),
+        NormalizationContext(
+            normalizer_version=NormalizerVersion("normalizer-v1"),
+            reference_data=ReferenceData(
+                ReferenceDataVersion("reference-data-v1"),
+                frozenset({"PEK", "SHA"}),
+                frozenset({"MU"}),
+            ),
+        ),
+    )
+    snapshot = CandidateSnapshot(
+        snapshot_id=CandidateSnapshotId("snapshot-1"),
+        version=SnapshotVersion(1),
+        created_at=instant(2026, 8, 26, 8, 0),
+        created_from_requirement_version=RequirementVersion(1),
+        structural_freshness=StructuralFreshness(FreshnessState.FRESH),
+        coverage=Coverage("requested", "actual", CoverageStatus.COMPLETE),
+        segments=normalized.segments,
+        itineraries=normalized.itineraries,
+        offers=normalized.offers,
+    )
+    requirement = max_price_requirement(Decimal(800))
+
+    result = filter_result(
+        snapshot=snapshot,
+        requirement=requirement,
+        feature_set=feature_set_for_price(snapshot, requirement),
+    )
+
+    assert normalized.offers[0].price_semantics is PriceSemantics.LOWER_BOUND
+    assert statuses_by_offer(result)[OfferId("normalized-offer:mapped-offer:offer-a")] is (
+        ConstraintEvaluationStatus.UNKNOWN
+    )
 
 
 def test_max_price_unknown_feature_is_uncertain_not_filter_empty() -> None:
@@ -660,11 +790,15 @@ def empty_snapshot() -> CandidateSnapshot:
     )
 
 
-def snapshot_from_specs(specs: tuple[tuple[str, date, Decimal], ...]) -> CandidateSnapshot:
+def snapshot_from_specs(
+    specs: tuple[tuple[str, date, Decimal] | tuple[str, date, Decimal, PriceSemantics], ...],
+) -> CandidateSnapshot:
     segments = []
     itineraries = []
     offers = []
-    for suffix, departure_date, price in specs:
+    for spec in specs:
+        suffix, departure_date, price = spec[:3]
+        price_semantics = spec[3] if len(spec) == 4 else PriceSemantics.EXACT
         first = FlightSegment(
             segment_id=SegmentId(f"segment-{suffix}-1"),
             marketing_carrier="MU",
@@ -701,6 +835,7 @@ def snapshot_from_specs(specs: tuple[tuple[str, date, Decimal], ...]) -> Candida
             offer_freshness=OfferFreshness(FreshnessState.FRESH),
             booking_reference=DomainValue.known(f"BOOK-{suffix}"),
             provenance=(ProvenanceRef("canonical", f"offer-{suffix}"),),
+            price_semantics=price_semantics,
         )
         segments.extend((first, second))
         itineraries.append(itinerary)
@@ -723,6 +858,62 @@ def candidate(offer_suffix: str, itinerary_suffix: str) -> OfferBackedItineraryC
     return OfferBackedItineraryCandidate(
         offer_id=OfferId(offer_suffix),
         itinerary_id=ItineraryId(itinerary_suffix),
+    )
+
+
+def mapped_provenance(source: str) -> MappedProvenance:
+    return MappedProvenance(
+        provider_id=ProviderId("provider-a"),
+        acquisition_id=ProviderAcquisitionId("acquisition-a"),
+        raw_evidence_refs=(f"{source}-response",),
+        raw_record_ref=source,
+        provider_source_id=source,
+    )
+
+
+def mapped_segment(source: str) -> MappedSegment:
+    return MappedSegment(
+        mapped_segment_ref=MappedSegmentRef(f"mapped-segment:{source}"),
+        provider_segment_id=source,
+        marketing_carrier="MU",
+        flight_number="MU583",
+        departure_airport="PEK",
+        arrival_airport="SHA",
+        departure_local="2026-09-01T08:00:00+00:00",
+        arrival_local="2026-09-01T10:00:00+00:00",
+        operating_carrier=DomainValue.known("MU"),
+        aircraft_type=DomainValue.not_provided(),
+        checked_baggage_pieces=DomainValue.not_provided(),
+        overnight=DomainValue.not_provided(),
+        provenance=mapped_provenance(source),
+    )
+
+
+def mapped_itinerary(source: str, segment_sources: tuple[str, ...]) -> MappedItinerary:
+    return MappedItinerary(
+        mapped_itinerary_ref=MappedItineraryRef(f"mapped-itinerary:{source}"),
+        provider_itinerary_id=source,
+        segment_refs=tuple(MappedSegmentRef(f"mapped-segment:{item}") for item in segment_sources),
+        provenance=mapped_provenance(source),
+    )
+
+
+def mapped_offer(
+    source: str,
+    itinerary_source: str,
+    *,
+    price_semantics: PriceSemantics,
+) -> MappedOffer:
+    return MappedOffer(
+        mapped_offer_ref=MappedOfferRef(f"mapped-offer:{source}"),
+        provider_offer_id=source,
+        itinerary_ref=MappedItineraryRef(f"mapped-itinerary:{itinerary_source}"),
+        total_amount=DomainValue.known(791),
+        currency=DomainValue.known("CNY"),
+        refundable=DomainValue.not_provided(),
+        booking_reference=DomainValue.not_applicable(),
+        provenance=mapped_provenance(source),
+        price_semantics=price_semantics,
     )
 
 
