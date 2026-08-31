@@ -208,6 +208,57 @@ class ResultContextCandidate:
 
 
 @dataclass(frozen=True)
+class ControlReadiness:
+    count: int
+    visible: bool
+    enabled: bool
+    editable: bool
+
+    def is_text_input_ready(self) -> bool:
+        return self.count > 0 and self.visible and self.enabled and self.editable
+
+    def is_button_ready(self) -> bool:
+        return self.count > 0 and self.visible and self.enabled
+
+    def to_dict(self) -> dict[str, bool | int]:
+        return {
+            "count": self.count,
+            "visible": self.visible,
+            "enabled": self.enabled,
+            "editable": self.editable,
+        }
+
+
+@dataclass(frozen=True)
+class SearchFormReadiness:
+    origin: ControlReadiness
+    destination: ControlReadiness
+    date: ControlReadiness
+    search_button: ControlReadiness
+    iframe_count: int
+    overlay_evidence: tuple[str, ...]
+
+    def is_ready(self) -> bool:
+        return (
+            self.origin.is_text_input_ready()
+            and self.destination.is_text_input_ready()
+            and self.date.is_text_input_ready()
+            and self.search_button.is_button_ready()
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "origin": self.origin.to_dict(),
+            "destination": self.destination.to_dict(),
+            "date": self.date.to_dict(),
+            "search_button": self.search_button.to_dict(),
+            "iframe_count": self.iframe_count,
+            "overlay_evidence": list(self.overlay_evidence),
+            "form_ready": self.is_ready(),
+        }
+
+
+@dataclass(frozen=True)
 class FliggyFlightEvidence:
     evidence_index: int
     raw_displayed_flight_identity: FieldEvidence
@@ -544,6 +595,9 @@ async def run_fliggy_browser_probe(probe_input: ProbeInput) -> ProbeRunResult:
         "search_interaction_failed": False,
         "search_submission_attempted": False,
         "visible_public_form_used": False,
+        "search_form_readiness": None,
+        "search_form_ready_ms": None,
+        "submit_sequence": None,
         "result_context_handoff": {
             "page_count_before_submit": None,
             "page_count_after_submit": None,
@@ -609,29 +663,40 @@ async def run_fliggy_browser_probe(probe_input: ProbeInput) -> ProbeRunResult:
                 await context.close()
                 await browser.close()
             else:
-                recorder.mark(BrowserProbeStage.SEARCH_INPUT_READY, "public flight-search controls detected")
-                page_count_before_submit = len(context.pages)
-                diagnostics["result_context_handoff"]["page_count_before_submit"] = page_count_before_submit
-                await _submit_public_flight_search(page, probe_input)
-                diagnostics["clicked"] = True
-                diagnostics["search_submission_attempted"] = True
-                diagnostics["visible_public_form_used"] = True
-                recorder.mark(BrowserProbeStage.SEARCH_SUBMITTED, "search submitted through public visible flight form")
-                page, handoff_diagnostics = await _select_result_context_page(
-                    context=context,
-                    current_page=page,
-                    probe_input=probe_input,
-                    page_error_type=PlaywrightError,
-                    page_count_before_submit=page_count_before_submit,
-                    wait_ms=min(5000, max(500, _remaining_ms(started, probe_input.overall_deadline_seconds) - 500)),
-                )
-                diagnostics["result_context_handoff"] = handoff_diagnostics
-                if handoff_diagnostics["selected_page_index"] is None:
+                form_readiness = await _capture_search_form_readiness(page)
+                diagnostics["search_form_readiness"] = form_readiness.to_dict()
+                if not form_readiness.is_ready():
                     diagnostics["search_interaction_failed"] = True
+                    outcome = BrowserProbeOutcome.EVIDENCE_INSUFFICIENT
+                    await context.close()
+                    await browser.close()
+                    should_wait_for_result_state = False
                 else:
-                    diagnostics["final_sanitized_url"] = handoff_diagnostics["selected_page_url"]
-                    diagnostics["page_identity"] = handoff_diagnostics["selected_page_identity"]
-                should_wait_for_result_state = True
+                    diagnostics["search_form_ready_ms"] = int((time.monotonic() - started) * 1000)
+                    recorder.mark(BrowserProbeStage.SEARCH_INPUT_READY, "public flight-search controls detected")
+                    page_count_before_submit = len(context.pages)
+                    diagnostics["result_context_handoff"]["page_count_before_submit"] = page_count_before_submit
+                    diagnostics["submit_sequence"] = "origin_enter,date_force_fill_enter,destination_enter,submit_fallback_if_needed"
+                    await _submit_public_flight_search(context, page, probe_input)
+                    diagnostics["clicked"] = True
+                    diagnostics["search_submission_attempted"] = True
+                    diagnostics["visible_public_form_used"] = True
+                    recorder.mark(BrowserProbeStage.SEARCH_SUBMITTED, "search submitted through public visible flight form")
+                    page, handoff_diagnostics = await _select_result_context_page(
+                        context=context,
+                        current_page=page,
+                        probe_input=probe_input,
+                        page_error_type=PlaywrightError,
+                        page_count_before_submit=page_count_before_submit,
+                        wait_ms=min(5000, max(500, _remaining_ms(started, probe_input.overall_deadline_seconds) - 500)),
+                    )
+                    diagnostics["result_context_handoff"] = handoff_diagnostics
+                    if handoff_diagnostics["selected_page_index"] is None:
+                        diagnostics["search_interaction_failed"] = True
+                    else:
+                        diagnostics["final_sanitized_url"] = handoff_diagnostics["selected_page_url"]
+                        diagnostics["page_identity"] = handoff_diagnostics["selected_page_identity"]
+                    should_wait_for_result_state = True
             if should_wait_for_result_state:
                 recorder.mark(BrowserProbeStage.RESULT_STATE_WAIT, "waiting for terminal/result state")
                 await page.wait_for_load_state("networkidle", timeout=_remaining_ms(started, probe_input.overall_deadline_seconds))
@@ -974,19 +1039,66 @@ def _sanitize_source_ref(url: str) -> str:
     return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(allowed_query), ""))
 
 
-async def _submit_public_flight_search(page: Any, probe_input: ProbeInput) -> None:
-    async def fill_input(selector: str, value: str) -> None:
+async def _submit_public_flight_search(context: Any, page: Any, probe_input: ProbeInput) -> None:
+    page_count_before_submit = len(context.pages)
+
+    async def fill_input(selector: str, value: str, *, force: bool = False, press_enter: bool = True) -> None:
         field = page.locator(selector).nth(0)
-        await field.click()
-        await field.fill(value)
-        await page.keyboard.press("Enter")
+        if force:
+            await field.fill(value, force=True)
+        else:
+            await field.click()
+            await field.fill(value)
+        if press_enter:
+            await page.keyboard.press("Enter")
         await page.wait_for_timeout(300)
 
     await page.wait_for_selector(".rc-flight-searchbar input#form_depCity")
     await fill_input(".rc-flight-searchbar input#form_depCity", probe_input.origin_text)
+    await fill_input(".rc-flight-searchbar input#form_depDate", probe_input.departure_date.isoformat(), force=True)
     await fill_input(".rc-flight-searchbar input#form_arrCity", probe_input.destination_text)
-    await fill_input(".rc-flight-searchbar input#form_depDate", probe_input.departure_date.isoformat())
-    await page.locator(".rc-flight-searchbar button.search-button").nth(0).click()
+    if len(context.pages) == page_count_before_submit:
+        await page.locator(".rc-flight-searchbar button.search-button").nth(0).click()
+
+
+async def _capture_search_form_readiness(page: Any) -> SearchFormReadiness:
+    return SearchFormReadiness(
+        origin=await _capture_control_readiness(page, ".rc-flight-searchbar input#form_depCity"),
+        destination=await _capture_control_readiness(page, ".rc-flight-searchbar input#form_arrCity"),
+        date=await _capture_control_readiness(page, ".rc-flight-searchbar input#form_depDate"),
+        search_button=await _capture_control_readiness(page, ".rc-flight-searchbar button.search-button"),
+        iframe_count=max(0, len(page.frames) - 1),
+        overlay_evidence=await _overlay_evidence(page),
+    )
+
+
+async def _capture_control_readiness(page: Any, selector: str) -> ControlReadiness:
+    locator = page.locator(selector)
+    count = await locator.count()
+    if count == 0:
+        return ControlReadiness(count=0, visible=False, enabled=False, editable=False)
+    first = locator.nth(0)
+    return ControlReadiness(
+        count=count,
+        visible=await first.is_visible(),
+        enabled=await first.is_enabled(),
+        editable=await first.is_editable(),
+    )
+
+
+async def _overlay_evidence(page: Any) -> tuple[str, ...]:
+    evidence: list[str] = []
+    for name, selector in (
+        ("dialog", "[role='dialog']"),
+        ("modal", "[class*='modal']"),
+        ("mask", "[class*='mask']"),
+        ("popup", "[class*='popup']"),
+        ("overlay", "[class*='overlay']"),
+    ):
+        count = await page.locator(selector).count()
+        if count:
+            evidence.append(f"{name}:{count}")
+    return tuple(evidence)
 
 
 async def _select_result_context_page(

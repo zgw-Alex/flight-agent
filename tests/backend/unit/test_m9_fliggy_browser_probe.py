@@ -8,6 +8,7 @@ from flight_agent.adapters.flight_providers.fliggy.browser_probe import (
     BrowserAcquisitionMode,
     BrowserProbeOutcome,
     BrowserProbeStage,
+    ControlReadiness,
     DomTraversalAssessment,
     ExperimentDiagnosis,
     FliggyPageIdentity,
@@ -15,6 +16,7 @@ from flight_agent.adapters.flight_providers.fliggy.browser_probe import (
     ProbeInput,
     ProbeRunResult,
     ResultContextCandidate,
+    SearchFormReadiness,
     StageDiagnostic,
     assess_dom_coverage,
     choose_result_context_candidate,
@@ -357,6 +359,113 @@ def test_wrong_target_diagnostic_marks_search_interaction_failure_without_new_ou
 
     assert result.outcome is BrowserProbeOutcome.EVIDENCE_INSUFFICIENT
     assert classify_experiment_diagnosis((result,)) is ExperimentDiagnosis.SEARCH_INTERACTION_FAILURE
+
+
+def test_search_form_readiness_serializes_and_requires_all_controls() -> None:
+    ready_control = ControlReadiness(count=1, visible=True, enabled=True, editable=True)
+    button = ControlReadiness(count=1, visible=True, enabled=True, editable=False)
+    readiness = SearchFormReadiness(
+        origin=ready_control,
+        destination=ready_control,
+        date=ready_control,
+        search_button=button,
+        iframe_count=0,
+        overlay_evidence=(),
+    )
+
+    assert readiness.is_ready() is True
+    assert readiness.to_dict() == {
+        "origin": {"count": 1, "visible": True, "enabled": True, "editable": True},
+        "destination": {"count": 1, "visible": True, "enabled": True, "editable": True},
+        "date": {"count": 1, "visible": True, "enabled": True, "editable": True},
+        "search_button": {"count": 1, "visible": True, "enabled": True, "editable": False},
+        "iframe_count": 0,
+        "overlay_evidence": [],
+        "form_ready": True,
+    }
+
+
+def test_search_form_not_ready_when_destination_or_date_missing() -> None:
+    ready_control = ControlReadiness(count=1, visible=True, enabled=True, editable=True)
+    missing = ControlReadiness(count=0, visible=False, enabled=False, editable=False)
+    button = ControlReadiness(count=1, visible=True, enabled=True, editable=False)
+
+    assert (
+        SearchFormReadiness(
+            origin=ready_control,
+            destination=missing,
+            date=ready_control,
+            search_button=button,
+            iframe_count=0,
+            overlay_evidence=(),
+        ).is_ready()
+        is False
+    )
+    assert (
+        SearchFormReadiness(
+            origin=ready_control,
+            destination=ready_control,
+            date=missing,
+            search_button=button,
+            iframe_count=0,
+            overlay_evidence=(),
+        ).is_ready()
+        is False
+    )
+
+
+def test_search_form_not_ready_when_controls_disabled_or_invisible() -> None:
+    ready_control = ControlReadiness(count=1, visible=True, enabled=True, editable=True)
+    disabled = ControlReadiness(count=1, visible=True, enabled=False, editable=True)
+    invisible = ControlReadiness(count=1, visible=False, enabled=True, editable=True)
+    button = ControlReadiness(count=1, visible=True, enabled=True, editable=False)
+
+    assert (
+        SearchFormReadiness(
+            origin=ready_control,
+            destination=disabled,
+            date=ready_control,
+            search_button=button,
+            iframe_count=0,
+            overlay_evidence=(),
+        ).is_ready()
+        is False
+    )
+    assert (
+        SearchFormReadiness(
+            origin=ready_control,
+            destination=ready_control,
+            date=invisible,
+            search_button=button,
+            iframe_count=0,
+            overlay_evidence=(),
+        ).is_ready()
+        is False
+    )
+
+
+def test_overlay_evidence_is_reported_without_becoming_access_challenge() -> None:
+    ready_control = ControlReadiness(count=1, visible=True, enabled=True, editable=True)
+    readiness = SearchFormReadiness(
+        origin=ready_control,
+        destination=ready_control,
+        date=ready_control,
+        search_button=ControlReadiness(count=1, visible=True, enabled=True, editable=False),
+        iframe_count=0,
+        overlay_evidence=("modal:1",),
+    )
+
+    assert readiness.is_ready() is True
+    assert readiness.to_dict()["overlay_evidence"] == ["modal:1"]
+    assert classify_result_state("<div class='modal'>旅行提醒</div>") is BrowserProbeOutcome.EVIDENCE_INSUFFICIENT
+
+
+def test_run_diagnostics_record_headed_and_headless_mode() -> None:
+    headed = _result(BrowserProbeOutcome.TIMEOUT, headless=False).to_dict()
+    headless = _result(BrowserProbeOutcome.TIMEOUT, headless=True).to_dict()
+
+    assert headed["diagnostics"]["headless"] is False
+    assert headless["diagnostics"]["headless"] is True
 
 
 def test_classifier_distinguishes_explicit_states_and_zero_rows() -> None:
