@@ -72,8 +72,13 @@ Scope。历史 Reference 仅用于追溯，不得覆盖正式收口结论。
         -   M9-BP6-CA01 的正式 Implementation Planning / Unit Specification Authority。
         -   冻结 CA01-U1 → CA01-U2 → CA01-U3 → CA01-U4 → CA01-U5 → CA01-U6 的实施分解和依赖顺序。
         -   Unit 范围：U1 Canonical Price Semantics Foundation；U2 M4 Mapped Preservation & Normalization；U3 M6 MAX_PRICE Evidence-Aware Filtering；U4 M6 Lower-Bound Ranking Safety；U5 Public Projection & Frontend Price Semantics；U6 Integrated Contract Regression & CA01 Closure Evidence。
-        -   CA01-U1～U6 当前状态：PLANNED / NOT IMPLEMENTED，直到对应 Unit 被明确授权、实现并验证。
-        -   本 Specification 与已批准 CA01 Proposal 共同生效；不替代 CA01 Proposal，不替代既有 M2/M4/M6/M7 非 CA01 范围 authority，不表示 CA01 已实现，也不一次性授权全部 Unit 同时实施。
+        -   CA01-U1～U5 状态：IMPLEMENTED / VERIFIED；CA01-U6 状态：VERIFIED / CLOSED。
+        -   本 Specification 与已批准 CA01 Proposal 及 Formal Closure V1.0 共同生效；不替代 CA01 Proposal，不替代既有 M2/M4/M6/M7 非 CA01 范围 authority，也不表示 M9 已收口。
+    -   `03_implementation-roadmap/milestones/M9/机票筛选Agent_M9-BP6-CA01_Lower-Bound_Offer_Price_Semantics_Formal_Closure_V1.0.docx`
+        -   M9-BP6-CA01 Lower-Bound Offer Price Semantics 的正式 Closure Evidence。
+        -   Closure Decision：`CA01_CLOSURE_READY`；CA01 status：IMPLEMENTED / VERIFIED / CLOSED。
+        -   记录 U1～U6 全部完成并验证；CA01-I1～CA01-I10、mapped→canonical→filter/ranking→public projection→frontend rendering 集成链路、legacy EXACT compatibility、provider-neutrality、collaboration boundary 与 deterministic regression 全部 PASS。
+        -   CA01 closure 不关闭 M9；M9 status 仍为 OPEN / IN PROGRESS。CTRIP Browser Acquisition collaborator branch 未并入 CA01 closure。
     -   `03_implementation-roadmap/milestones/M9/机票筛选Agent_M9_Browser_Acquisition_Provider_Exploration_and_Collaboration_Playbook_V1.0.docx`
         -   M9 Track B 多 Provider Browser acquisition 的 supporting methodology / collaboration governance。
         -   用于统一 Hard Gate、Evidence Grade、Outcome、Coverage、安全边界与多人 Git 同步语言；不得提升为稳定 Domain/Provider Contract。

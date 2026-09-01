@@ -99,9 +99,16 @@ from flight_agent.ports.provider_mapping import MappingStatistics
 def test_qualified_ranking_excludes_uncertain_and_rejected_candidates() -> None:
     result = ranking_result(RankingViewKind.QUALIFIED)
 
-    assert candidate_order(result) == ("offer-cheap|itinerary-cheap", "offer-direct|itinerary-direct")
-    assert all(entry.candidate not in filter_result().uncertain_candidates for entry in result.entries)
-    assert all(entry.candidate not in filter_result().rejected_candidates for entry in result.entries)
+    assert candidate_order(result) == (
+        "offer-cheap|itinerary-cheap",
+        "offer-direct|itinerary-direct",
+    )
+    assert all(
+        entry.candidate not in filter_result().uncertain_candidates for entry in result.entries
+    )
+    assert all(
+        entry.candidate not in filter_result().rejected_candidates for entry in result.entries
+    )
 
 
 def test_uncertain_ranking_is_separate_and_never_contains_rejected_candidates() -> None:
@@ -122,7 +129,10 @@ def test_rejected_candidate_with_best_price_cannot_resurrect_into_ranking() -> N
 def test_normalization_weight_contribution_and_aggregate_score_are_traceable() -> None:
     result = ranking_result(RankingViewKind.QUALIFIED)
     cheap = result.entries[0]
-    by_scope = {contribution.preference_scope: contribution for contribution in cheap.preference_contributions}
+    by_scope = {
+        contribution.preference_scope: contribution
+        for contribution in cheap.preference_contributions
+    }
 
     price = by_scope[PreferenceScope.PRICE]
     stops = by_scope[PreferenceScope.FEWER_STOPS]
@@ -141,7 +151,9 @@ def test_missing_feature_uses_available_weight_renormalization_and_records_cover
     full = ranking_result(RankingViewKind.QUALIFIED)
     missing_stop = feature_set_without(candidate("offer-cheap", "itinerary-cheap"), STOP_COUNT)
     result = ranking_result(RankingViewKind.QUALIFIED, feature_set=missing_stop)
-    cheap = next(entry for entry in result.entries if entry.candidate.offer_id == OfferId("offer-cheap"))
+    cheap = next(
+        entry for entry in result.entries if entry.candidate.offer_id == OfferId("offer-cheap")
+    )
 
     assert cheap.aggregate_score == Decimal(1)
     assert full.entries[0].aggregate_score != cheap.aggregate_score
@@ -165,12 +177,17 @@ def test_score_tie_breaks_by_coverage_before_canonical_identity() -> None:
     result = ranking_result(
         RankingViewKind.QUALIFIED,
         snapshot=tie_snapshot(),
-        feature_set=feature_set_without(candidate("offer-b", "itinerary-b"), STOP_COUNT, snapshot=tie_snapshot()),
+        feature_set=feature_set_without(
+            candidate("offer-b", "itinerary-b"), STOP_COUNT, snapshot=tie_snapshot()
+        ),
     )
 
     assert candidate_order(result) == ("offer-a|itinerary-a", "offer-b|itinerary-b")
     assert result.entries[0].aggregate_score == result.entries[1].aggregate_score
-    assert result.entries[0].coverage.evaluated_preference_coverage > result.entries[1].coverage.evaluated_preference_coverage
+    assert (
+        result.entries[0].coverage.evaluated_preference_coverage
+        > result.entries[1].coverage.evaluated_preference_coverage
+    )
 
 
 def test_score_and_coverage_tie_breaks_by_canonical_candidate_identity_not_input_order() -> None:
@@ -188,7 +205,9 @@ def test_no_soft_preferences_still_orders_by_stable_canonical_identity() -> None
         "offer-direct|itinerary-direct",
     )
     assert all(entry.aggregate_score == Decimal(0) for entry in result.entries)
-    assert all(entry.coverage.evaluated_preference_coverage == Decimal(1) for entry in result.entries)
+    assert all(
+        entry.coverage.evaluated_preference_coverage == Decimal(1) for entry in result.entries
+    )
 
 
 def test_max_price_hard_constraint_does_not_enter_soft_ranking_contributions() -> None:
@@ -293,7 +312,10 @@ def test_lower_bound_prices_do_not_prove_actual_price_ordering() -> None:
         feature_set=feature_set_for(snapshot=snapshot, requirement=requirement),
     )
 
-    assert candidate_order(result) == ("offer-lower-a|itinerary-lower-a", "offer-lower-b|itinerary-lower-b")
+    assert candidate_order(result) == (
+        "offer-lower-a|itinerary-lower-a",
+        "offer-lower-b|itinerary-lower-b",
+    )
     assert result.pool_relative_normalization[0].known_value_count == 0
     assert all(
         contribution.status is PreferenceContributionStatus.MISSING_EVIDENCE
@@ -377,7 +399,10 @@ def test_degenerate_pool_has_deterministic_normalization_without_division_by_zer
 
     assert [entry.aggregate_score for entry in result.entries] == [Decimal(1), Decimal(1)]
     assert candidate_order(result) == ("offer-a|itinerary-a", "offer-b|itinerary-b")
-    assert result.pool_relative_normalization[0].min_value == result.pool_relative_normalization[0].max_value
+    assert (
+        result.pool_relative_normalization[0].min_value
+        == result.pool_relative_normalization[0].max_value
+    )
 
 
 def test_ranking_run_result_lineage_and_immutability() -> None:
@@ -566,7 +591,9 @@ def feature_set_without(
         values=tuple(
             value
             for value in feature_set.values
-            if not (value.candidate == removed_candidate and value.feature_key == removed_feature_key)
+            if not (
+                value.candidate == removed_candidate and value.feature_key == removed_feature_key
+            )
         ),
     )
 
@@ -596,7 +623,8 @@ def feature_set_with_unknown_departure(feature_set: DerivedFeatureSet) -> Derive
         reference_data_versions=feature_set.reference_data_versions,
         values=tuple(
             replacement
-            if value.candidate == replacement.candidate and value.feature_key == replacement.feature_key
+            if value.candidate == replacement.candidate
+            and value.feature_key == replacement.feature_key
             else value
             for value in feature_set.values
         ),
@@ -671,7 +699,9 @@ def reversed_equal_snapshot() -> CandidateSnapshot:
 
 
 def snapshot_from_specs(
-    specs: tuple[tuple[str, date, Decimal, int] | tuple[str, date, Decimal, int, PriceSemantics], ...],
+    specs: tuple[
+        tuple[str, date, Decimal, int] | tuple[str, date, Decimal, int, PriceSemantics], ...
+    ],
     *,
     unknown_departure: bool = False,
 ) -> CandidateSnapshot:
@@ -682,7 +712,9 @@ def snapshot_from_specs(
         suffix, departure_date, price, stop_count = spec[:4]
         price_semantics = spec[4] if len(spec) == 5 else PriceSemantics.EXACT
         segment_ids: list[SegmentId] = []
-        departure = departure_date if suffix != "uncertain" or not unknown_departure else date(2026, 9, 1)
+        departure = (
+            departure_date if suffix != "uncertain" or not unknown_departure else date(2026, 9, 1)
+        )
         for index in range(stop_count + 1):
             segment = FlightSegment(
                 segment_id=SegmentId(f"segment-{suffix}-{index + 1}"),
@@ -690,8 +722,12 @@ def snapshot_from_specs(
                 flight_number=f"51{len(segments) + 1:02d}",
                 departure_airport="PEK" if index == 0 else "NKG",
                 arrival_airport="SHA" if index == stop_count else "NKG",
-                departure_at=instant(departure.year, departure.month, departure.day, 8 + index * 3, 30),
-                arrival_at=instant(departure.year, departure.month, departure.day, 10 + index * 3, 30),
+                departure_at=instant(
+                    departure.year, departure.month, departure.day, 8 + index * 3, 30
+                ),
+                arrival_at=instant(
+                    departure.year, departure.month, departure.day, 10 + index * 3, 30
+                ),
                 operating_carrier=DomainValue.known("MU"),
                 aircraft_type=DomainValue.not_provided(),
                 provenance=(ProvenanceRef("canonical", f"segment-{suffix}-{index + 1}"),),

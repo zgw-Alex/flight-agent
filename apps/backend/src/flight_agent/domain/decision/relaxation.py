@@ -103,11 +103,15 @@ class RelaxationPolicy:
             raise DomainInvariantViolation("RelaxationPolicy enabled scopes must be unique")
         supported = {ConstraintScope.MAX_PRICE, ConstraintScope.MAX_STOPS}
         if any(scope not in supported for scope in scopes):
-            raise DomainInvariantViolation("RelaxationPolicy only supports MAX_PRICE and MAX_STOPS in M6")
+            raise DomainInvariantViolation(
+                "RelaxationPolicy only supports MAX_PRICE and MAX_STOPS in M6"
+            )
         if max_single_proposals < 0 or max_pairwise_proposals < 0 or max_total_proposals < 0:
             raise DomainInvariantViolation("RelaxationPolicy proposal bounds must not be negative")
         object.__setattr__(self, "policy_version", policy_version)
-        object.__setattr__(self, "enabled_constraint_scopes", tuple(sorted(scopes, key=lambda scope: scope.value)))
+        object.__setattr__(
+            self, "enabled_constraint_scopes", tuple(sorted(scopes, key=lambda scope: scope.value))
+        )
         object.__setattr__(self, "max_single_proposals", max_single_proposals)
         object.__setattr__(self, "max_pairwise_proposals", max_pairwise_proposals)
         object.__setattr__(self, "max_total_proposals", max_total_proposals)
@@ -187,7 +191,9 @@ class RelaxationProposal:
         object.__setattr__(self, "native_magnitude", native_magnitude)
         object.__setattr__(self, "recovered_candidates", recovered)
         object.__setattr__(self, "source_evaluation_ids", tuple(source_evaluation_ids))
-        object.__setattr__(self, "counterfactual_evaluation_ids", tuple(counterfactual_evaluation_ids))
+        object.__setattr__(
+            self, "counterfactual_evaluation_ids", tuple(counterfactual_evaluation_ids)
+        )
         object.__setattr__(self, "reason_code", reason_code)
         object.__setattr__(self, "evidence", evidence_tuple)
         object.__setattr__(self, "relaxation_policy_version", relaxation_policy_version)
@@ -228,8 +234,13 @@ class RelaxationResult:
         proposals_tuple = tuple(proposals)
         if direction is RelaxationResultDirection.PROPOSALS_AVAILABLE and len(proposals_tuple) == 0:
             raise DomainInvariantViolation("PROPOSALS_AVAILABLE requires proposals")
-        if direction is not RelaxationResultDirection.PROPOSALS_AVAILABLE and len(proposals_tuple) > 0:
-            raise DomainInvariantViolation("Non-triggered relaxation result must not carry proposals")
+        if (
+            direction is not RelaxationResultDirection.PROPOSALS_AVAILABLE
+            and len(proposals_tuple) > 0
+        ):
+            raise DomainInvariantViolation(
+                "Non-triggered relaxation result must not carry proposals"
+            )
         object.__setattr__(self, "relaxation_result_id", relaxation_result_id)
         object.__setattr__(self, "run_id", run_id)
         object.__setattr__(self, "requirement_id", requirement_id)
@@ -320,7 +331,9 @@ class DeterministicRelaxationEngine:
                 RelaxationReasonCode.NO_FAIL_ONLY_RELAXATION_AVAILABLE,
                 (),
             )
-        ordered = tuple(_with_order(proposal, index) for index, proposal in enumerate(proposals, start=1))
+        ordered = tuple(
+            _with_order(proposal, index) for index, proposal in enumerate(proposals, start=1)
+        )
         return run, _result(
             relaxation_result_id,
             relaxation_run_id,
@@ -397,9 +410,13 @@ def _max_price_single_proposals(
                     constraint_scope=constraint.scope,
                     current_value=current_value,
                     proposed_value=proposed,
-                    native_magnitude=Money(proposed.amount - current_value.amount, proposed.currency),
+                    native_magnitude=Money(
+                        proposed.amount - current_value.amount, proposed.currency
+                    ),
                     recovered_candidates=recovered,
-                    source_evaluation_ids=tuple(evaluation.evaluation_id for evaluation in source_evaluations),
+                    source_evaluation_ids=tuple(
+                        evaluation.evaluation_id for evaluation in source_evaluations
+                    ),
                     counterfactual_evaluation_ids=counterfactual_ids,
                     reason_code=RelaxationReasonCode.FILTER_EMPTY_MAX_PRICE_RELAXATION,
                     evidence=(
@@ -461,7 +478,9 @@ def _max_stops_single_proposals(
                     proposed_value=boundary,
                     native_magnitude=boundary - current_value.value,
                     recovered_candidates=recovered,
-                    source_evaluation_ids=tuple(evaluation.evaluation_id for evaluation in source_evaluations),
+                    source_evaluation_ids=tuple(
+                        evaluation.evaluation_id for evaluation in source_evaluations
+                    ),
                     counterfactual_evaluation_ids=counterfactual_ids,
                     reason_code=RelaxationReasonCode.FILTER_EMPTY_MAX_STOPS_RELAXATION,
                     evidence=(
@@ -519,20 +538,29 @@ def _counterfactual_recovered_candidates(
             )
             for constraint in constraints
         )
-        if aggregate_candidate_eligibility(candidate, evaluations).status is CandidateEligibilityStatus.ELIGIBLE:
+        if (
+            aggregate_candidate_eligibility(candidate, evaluations).status
+            is CandidateEligibilityStatus.ELIGIBLE
+        ):
             recovered.append(candidate)
             counterfactual_ids.extend(evaluation.evaluation_id for evaluation in evaluations)
-    return tuple(sorted(recovered, key=_candidate_key)), tuple(sorted(counterfactual_ids, key=lambda item: item.value))
+    return tuple(sorted(recovered, key=_candidate_key)), tuple(
+        sorted(counterfactual_ids, key=lambda item: item.value)
+    )
 
 
-def _offer_for_candidate(snapshot: CandidateSnapshot, candidate: OfferBackedItineraryCandidate) -> Offer:
+def _offer_for_candidate(
+    snapshot: CandidateSnapshot, candidate: OfferBackedItineraryCandidate
+) -> Offer:
     matches = tuple(
         offer
         for offer in snapshot.offers
         if offer.offer_id == candidate.offer_id and offer.itinerary_id == candidate.itinerary_id
     )
     if len(matches) != 1:
-        raise DomainInvariantViolation("Counterfactual evaluation requires one canonical Offer per candidate")
+        raise DomainInvariantViolation(
+            "Counterfactual evaluation requires one canonical Offer per candidate"
+        )
     return matches[0]
 
 
@@ -545,12 +573,16 @@ def _failing_max_price_boundaries(
     if not isinstance(current, Money):
         raise DomainInvariantViolation("MAX_PRICE relaxation requires Money value")
     values: list[Money] = []
-    for evaluation in _source_fail_evaluations(filter_result, constraint.constraint_id, filter_result.rejected_candidates):
+    for evaluation in _source_fail_evaluations(
+        filter_result, constraint.constraint_id, filter_result.rejected_candidates
+    ):
         if evaluation.status is not ConstraintEvaluationStatus.FAIL:
             continue
         feature_value = feature_set.value_for(evaluation.candidate, TOTAL_PRICE)
         if feature_value.value_type is not FeatureValueType.MONEY:
-            raise DomainInvariantViolation("MAX_PRICE relaxation requires TOTAL_PRICE Money feature")
+            raise DomainInvariantViolation(
+                "MAX_PRICE relaxation requires TOTAL_PRICE Money feature"
+            )
         if feature_value.value.state is not ValueState.KNOWN:
             continue
         actual = feature_value.value.value
@@ -559,8 +591,7 @@ def _failing_max_price_boundaries(
         if actual.currency == current.currency and actual.amount > current.amount:
             values.append(actual)
     return tuple(
-        Money(amount, current.currency)
-        for amount in sorted({value.amount for value in values})
+        Money(amount, current.currency) for amount in sorted({value.amount for value in values})
     )
 
 
@@ -573,12 +604,16 @@ def _failing_max_stops_boundaries(
     if not isinstance(current, StopCount):
         raise DomainInvariantViolation("MAX_STOPS relaxation requires StopCount value")
     values: list[int] = []
-    for evaluation in _source_fail_evaluations(filter_result, constraint.constraint_id, filter_result.rejected_candidates):
+    for evaluation in _source_fail_evaluations(
+        filter_result, constraint.constraint_id, filter_result.rejected_candidates
+    ):
         if evaluation.status is not ConstraintEvaluationStatus.FAIL:
             continue
         feature_value = feature_set.value_for(evaluation.candidate, STOP_COUNT)
         if feature_value.value_type is not FeatureValueType.INTEGER:
-            raise DomainInvariantViolation("MAX_STOPS relaxation requires STOP_COUNT integer feature")
+            raise DomainInvariantViolation(
+                "MAX_STOPS relaxation requires STOP_COUNT integer feature"
+            )
         if feature_value.value.state is not ValueState.KNOWN:
             continue
         actual = feature_value.value.value
@@ -627,9 +662,17 @@ def _bounded_ordered_proposals(
             ),
         )
     )
-    singles = [proposal for proposal in ordered if proposal.proposal_kind is RelaxationProposalKind.SINGLE]
-    pairwise = [proposal for proposal in ordered if proposal.proposal_kind is RelaxationProposalKind.PAIRWISE]
-    bounded = tuple(singles[: policy.max_single_proposals] + pairwise[: policy.max_pairwise_proposals])
+    singles = [
+        proposal for proposal in ordered if proposal.proposal_kind is RelaxationProposalKind.SINGLE
+    ]
+    pairwise = [
+        proposal
+        for proposal in ordered
+        if proposal.proposal_kind is RelaxationProposalKind.PAIRWISE
+    ]
+    bounded = tuple(
+        singles[: policy.max_single_proposals] + pairwise[: policy.max_pairwise_proposals]
+    )
     return bounded[: policy.max_total_proposals]
 
 
@@ -641,10 +684,13 @@ def _prune_dominated(proposals: tuple[RelaxationProposal, ...]) -> tuple[Relaxat
             other is not proposal
             and other.source_constraint_id == proposal.source_constraint_id
             and frozenset(other.recovered_candidates) == proposal_candidates
-            and _threshold_amount(other.native_magnitude) <= _threshold_amount(proposal.native_magnitude)
+            and _threshold_amount(other.native_magnitude)
+            <= _threshold_amount(proposal.native_magnitude)
             and (
-                _threshold_amount(other.native_magnitude) < _threshold_amount(proposal.native_magnitude)
-                or _threshold_amount(other.proposed_value) < _threshold_amount(proposal.proposed_value)
+                _threshold_amount(other.native_magnitude)
+                < _threshold_amount(proposal.native_magnitude)
+                or _threshold_amount(other.proposed_value)
+                < _threshold_amount(proposal.proposed_value)
             )
             for other in proposals
         ):
@@ -660,8 +706,12 @@ def _relaxable_max_price_constraints(requirement: RequirementState) -> tuple[Har
         if constraint.scope is ConstraintScope.MAX_PRICE
     )
     for constraint in constraints:
-        if constraint.operator is not ConstraintOperator.AT_OR_BEFORE or not isinstance(constraint.value, Money):
-            raise DomainInvariantViolation("MAX_PRICE relaxation requires AT_OR_BEFORE Money constraint")
+        if constraint.operator is not ConstraintOperator.AT_OR_BEFORE or not isinstance(
+            constraint.value, Money
+        ):
+            raise DomainInvariantViolation(
+                "MAX_PRICE relaxation requires AT_OR_BEFORE Money constraint"
+            )
     return tuple(sorted(constraints, key=lambda constraint: constraint.constraint_id.value))
 
 
@@ -672,8 +722,12 @@ def _relaxable_max_stops_constraints(requirement: RequirementState) -> tuple[Har
         if constraint.scope is ConstraintScope.MAX_STOPS
     )
     for constraint in constraints:
-        if constraint.operator is not ConstraintOperator.AT_OR_BEFORE or not isinstance(constraint.value, StopCount):
-            raise DomainInvariantViolation("MAX_STOPS relaxation requires AT_OR_BEFORE StopCount constraint")
+        if constraint.operator is not ConstraintOperator.AT_OR_BEFORE or not isinstance(
+            constraint.value, StopCount
+        ):
+            raise DomainInvariantViolation(
+                "MAX_STOPS relaxation requires AT_OR_BEFORE StopCount constraint"
+            )
     return tuple(sorted(constraints, key=lambda constraint: constraint.constraint_id.value))
 
 
@@ -751,9 +805,15 @@ def _validate_lineage(
         raise DomainInvariantViolation("Relaxation feature set snapshot lineage mismatch")
     if feature_set.input_lineage.snapshot_version != snapshot.version:
         raise DomainInvariantViolation("Relaxation feature set snapshot version mismatch")
-    if filter_result.requirement_id != requirement.requirement_id or filter_result.requirement_version != requirement.version:
+    if (
+        filter_result.requirement_id != requirement.requirement_id
+        or filter_result.requirement_version != requirement.version
+    ):
         raise DomainInvariantViolation("Relaxation FilterResult requirement lineage mismatch")
-    if filter_result.snapshot_id != snapshot.snapshot_id or filter_result.snapshot_version != snapshot.version:
+    if (
+        filter_result.snapshot_id != snapshot.snapshot_id
+        or filter_result.snapshot_version != snapshot.version
+    ):
         raise DomainInvariantViolation("Relaxation FilterResult snapshot lineage mismatch")
     if filter_result.derived_feature_set_id != feature_set.feature_set_id.value:
         raise DomainInvariantViolation("Relaxation FilterResult feature lineage mismatch")
@@ -789,9 +849,16 @@ def _validate_threshold_delta(
     native_magnitude: RelaxationThreshold,
 ) -> None:
     if constraint_scope is ConstraintScope.MAX_PRICE:
-        if not isinstance(current_value, Money) or not isinstance(proposed_value, Money) or not isinstance(native_magnitude, Money):
+        if (
+            not isinstance(current_value, Money)
+            or not isinstance(proposed_value, Money)
+            or not isinstance(native_magnitude, Money)
+        ):
             raise DomainInvariantViolation("MAX_PRICE relaxation values must be Money")
-        if proposed_value.currency != current_value.currency or native_magnitude.currency != current_value.currency:
+        if (
+            proposed_value.currency != current_value.currency
+            or native_magnitude.currency != current_value.currency
+        ):
             raise DomainInvariantViolation("MAX_PRICE relaxation values must use one currency")
         if proposed_value.amount <= current_value.amount:
             raise DomainInvariantViolation("MAX_PRICE relaxation must increase the threshold")
