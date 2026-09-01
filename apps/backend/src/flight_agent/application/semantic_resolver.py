@@ -259,13 +259,32 @@ def evaluate_parser_resolver_routing(ir: ParserSemanticIR) -> ParserResolverRout
             "no_downstream_proposal_value",
         )
     candidate_semantic_space = _parser_candidate_semantic_space(unsupported_evidence)
+    full_evidence_text = _compact_parser_evidence_text(ir.evidence)
+    if (
+        _has_negated_price_preference_context(full_evidence_text)
+        and candidate_semantic_space == ("ADD_SOFT_PRICE_PREFERENCE",)
+    ):
+        return ParserResolverRoutingDecision(
+            ParserResolverRoutingOutcome.NON_BLOCKING_UNSUPPORTED,
+            "unsupported_family",
+        )
     if candidate_semantic_space:
         return ParserResolverRoutingDecision(
             ParserResolverRoutingOutcome.RESOLVER_ELIGIBLE,
             "bounded_supported_relation",
             candidate_semantic_space,
         )
+    if _has_unsupported_preference_ordering(candidate_semantic_space, unsupported_evidence):
+        return ParserResolverRoutingDecision(
+            ParserResolverRoutingOutcome.HARD_UNRESOLVED_BLOCKING,
+            "unsupported_scope",
+        )
     if any(not _parser_residue_is_non_blocking(item.source_text) for item in unsupported_evidence):
+        if _has_unsupported_preference_ordering(candidate_semantic_space, unsupported_evidence):
+            return ParserResolverRoutingDecision(
+                ParserResolverRoutingOutcome.HARD_UNRESOLVED_BLOCKING,
+                "unsupported_scope",
+            )
         return ParserResolverRoutingDecision(
             ParserResolverRoutingOutcome.HARD_UNRESOLVED_BLOCKING,
             "explicit_hard_unresolved",
@@ -410,6 +429,19 @@ def resolve_parser_semantics(
         if routing.should_progress_without_resolver:
             resolved_ir = _resolved_parser_ir_from_existing_bindings(ir)
             return resolved_ir, builder.build(resolved_ir, source_input), None
+        if routing.reason == "unsupported_scope":
+            unresolved_ir = replace(
+                ir,
+                interpretation_status=ParserInterpretationStatus.CLARIFICATION_REQUIRED,
+                issues=(
+                    *ir.issues,
+                    _parser_issue(
+                        "UNSUPPORTED_SCOPE",
+                        "Unsupported preference ordering remains outside CA04 authority",
+                    ),
+                ),
+            )
+            return unresolved_ir, builder.build(unresolved_ir, source_input), None
         return ir, builder.build(ir, source_input), None
     request = build_parser_resolver_request(ir, source_input)
     result = resolver.resolve(request)
@@ -750,6 +782,8 @@ def _parser_residue_is_non_blocking(source_text: str) -> bool:
     compact = re.sub(r"[\s，,。；;、.!?！？]+", "", source_text)
     if not compact:
         return True
+    if _looks_like_unsupported_preference_ordering(compact):
+        return False
     if any(token in compact for token in ("必须", "只能", "只接受", "不能", "别高于", "不超过", "最多", "上限", "预算")):
         return False
     return not any(token in compact for token in ("如果", "但如果", "再从", "或者", "都可以"))
@@ -787,7 +821,7 @@ def _supports_parser_soft_fewer_stops_candidate(compact: str) -> bool:
         marker in compact for marker in ("更喜欢直飞", "优先直飞", "直飞优先", "最好直飞", "最好不要转机")
     ):
         return False
-    return any(
+    return _has_ca04_fewer_stops_importance_candidate(compact) or any(
         token in compact
         for token in (
             "更喜欢直飞",
@@ -801,7 +835,9 @@ def _supports_parser_soft_fewer_stops_candidate(compact: str) -> bool:
 
 
 def _supports_parser_soft_price_candidate(compact: str) -> bool:
-    return not _has_negated_price_preference_context(compact) and _has_explicit_soft_price_phrase(compact)
+    return not _has_negated_price_preference_context(compact) and (
+        _has_explicit_soft_price_phrase(compact) or _has_ca04_price_importance_candidate(compact)
+    )
 
 
 def _supports_parser_hard_price_candidate(compact: str) -> bool:
@@ -816,6 +852,65 @@ def _supports_parser_complex_ack_candidate(compact: str) -> bool:
     if "别太早" in compact and any(token in compact for token in ("越便宜越好", "价格越低越好", "便宜")):
         return True
     return "如果" in compact and any(token in compact for token in ("直飞", "便宜", "转一次"))
+
+
+def _has_ca04_price_importance_candidate(compact: str) -> bool:
+    if any(token in compact for token in ("预算", "封顶", "别超过", "不超过", "别高于", "上限", "以内")):
+        return False
+    return any(token in compact for token in ("价格", "票价", "便宜")) and _has_ca04_importance_marker(compact)
+
+
+def _has_ca04_fewer_stops_importance_candidate(compact: str) -> bool:
+    return any(token in compact for token in ("直飞", "转机", "中转", "少转", "转不转")) and _has_ca04_importance_marker(
+        compact
+    )
+
+
+def _has_ca04_importance_marker(compact: str) -> bool:
+    return any(
+        token in compact
+        for token in (
+            "最重要",
+            "第一优先",
+            "最看重",
+            "核心考虑",
+            "主要考虑",
+            "重点考虑",
+            "非常看重",
+            "非常重要",
+            "很重要",
+            "更重要",
+            "其次",
+            "第二考虑",
+            "次要考虑",
+            "次要",
+            "一般重要",
+            "比较重要",
+            "稍微考虑",
+            "有更好",
+            "不太重要",
+            "不那么重要",
+            "只稍微",
+        )
+    )
+
+
+def _has_unsupported_preference_ordering(
+    candidate_semantic_space: tuple[str, ...],
+    evidence: tuple[ParserSemanticEvidence, ...],
+) -> bool:
+    if candidate_semantic_space:
+        return False
+    return _looks_like_unsupported_preference_ordering(_compact_parser_evidence_text(evidence))
+
+
+def _looks_like_unsupported_preference_ordering(compact: str) -> bool:
+    return (
+        any(token in compact for token in ("按这个顺序", "按此顺序", "排序", "优先级"))
+        and any(token in compact for token in ("价格", "票价", "便宜"))
+        and any(token in compact for token in ("直飞", "转机", "中转", "少转"))
+        and any(token in compact for token in ("出发时间", "起飞时间", "时间"))
+    )
 
 
 def _looks_like_invented_atomic_fact(value: str, known_text: frozenset[str]) -> bool:
@@ -1022,7 +1117,9 @@ def _supports_preference_importance(
             )
         )
     if importance is SemanticResolverPreferenceImportance.MEDIUM:
-        return any(token in compact for token in ("其次", "第二考虑", "次要", "一般重要", "也重要", "比较重要"))
+        return any(token in compact for token in ("其次", "第二考虑", "次要", "一般重要", "也重要", "比较重要")) or (
+            "比" in compact and "更重要" in compact
+        )
     if importance is SemanticResolverPreferenceImportance.LOW:
         return any(token in compact for token in ("稍微考虑", "有更好", "不太重要", "不那么重要", "只稍微"))
     return False

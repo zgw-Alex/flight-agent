@@ -167,7 +167,17 @@ class PatchEvidenceExtractor:
                     )
                 )
         for index, token in enumerate(
-            ("价格无所谓", "票价无所谓", "不看价格", "价格不在意", "直飞无所谓", "转机无所谓", "中转无所谓", "转不转机都可以"),
+            (
+                "价格无所谓",
+                "票价无所谓",
+                "不看价格",
+                "价格不在意",
+                "直飞无所谓",
+                "转机无所谓",
+                "中转无所谓",
+                "转不转机都可以",
+                "价格我不在意",
+            ),
             start=1,
         ):
             start = message.find(token)
@@ -429,7 +439,20 @@ def build_deterministic_patch_proposal(
 
 
 def _semantic_resolver_reason(message: str) -> str | None:
-    if any(token in message for token in ("价格无所谓", "票价无所谓", "不看价格", "价格不在意", "直飞无所谓", "转机无所谓", "中转无所谓", "转不转机都可以")):
+    if any(
+        token in message
+        for token in (
+            "价格无所谓",
+            "票价无所谓",
+            "不看价格",
+            "价格不在意",
+            "价格我不在意",
+            "直飞无所谓",
+            "转机无所谓",
+            "中转无所谓",
+            "转不转机都可以",
+        )
+    ):
         return "Explicit no-preference/removal semantics require semantic resolver"
     if "如果" in message or "便宜很多" in message:
         return "Conditional or comparative direct-flight semantics require semantic resolver"
