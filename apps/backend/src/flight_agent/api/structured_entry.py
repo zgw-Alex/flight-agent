@@ -54,6 +54,7 @@ class PublicPublishedRecommendationResponse(BaseModel):
     departure_date: str
     selected_price_amount: str
     selected_price_currency: str
+    selected_price_semantics: str
     role: str
     reason: str
     evidence: list[str]
@@ -96,10 +97,7 @@ def create_structured_entry_router(
         request: StructuredRequirementRequest,
     ) -> StructuredRequirementResponse:
         result = use_case.start(structured_request_to_command(request))
-        if (
-            publication_repository is not None
-            and result.status is StructuredEntryStatus.NOT_READY
-        ):
+        if publication_repository is not None and result.status is StructuredEntryStatus.NOT_READY:
             publication_repository.record_outcome(
                 conversation_id=result.conversation_id,
                 outcome=PublicWorkflowOutcome.NOT_READY,
@@ -115,10 +113,14 @@ def create_structured_entry_router(
     )
     def read_conversation(conversation_id: str) -> ConversationReadResponse:
         if publication_repository is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation read model unavailable")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Conversation read model unavailable"
+            )
         state = publication_repository.get_conversation(conversation_id)
         if state is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found"
+            )
         return conversation_state_to_response(state)
 
     return router
@@ -173,10 +175,10 @@ def _published_to_response(
         departure_date=record.departure_date.isoformat(),
         selected_price_amount=str(record.selected_price_amount),
         selected_price_currency=record.selected_price_currency,
+        selected_price_semantics=record.selected_price_semantics.value,
         role=record.role.value,
         reason=record.reason,
         evidence=[
-            f"{evidence.source.value}:{evidence.identity.value}"
-            for evidence in record.evidence
+            f"{evidence.source.value}:{evidence.identity.value}" for evidence in record.evidence
         ],
     )

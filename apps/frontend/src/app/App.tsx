@@ -1,7 +1,11 @@
 import { useState } from "react";
 import type { FormEvent } from "react";
 
-import type { ConversationReadResponse, StructuredRequirementRequest } from "./api";
+import type {
+  ConversationReadResponse,
+  PublicPublishedRecommendation,
+  StructuredRequirementRequest,
+} from "./api";
 import { startConversation } from "./api";
 import "./App.css";
 
@@ -175,9 +179,7 @@ function OutcomeView({ conversation }: { conversation: ConversationReadResponse 
           </div>
           <div>
             <dt>Selected price</dt>
-            <dd>
-              {published.selected_price_currency} {published.selected_price_amount}
-            </dd>
+            <dd>{formatSelectedPrice(published)}</dd>
           </div>
           <div>
             <dt>Role</dt>
@@ -234,6 +236,11 @@ const outcomeCopy: Record<ConversationReadResponse["outcome"], string> = {
   PROVIDER_ERROR: "The flight provider did not return a usable search result.",
   NOT_READY: "The requirement is not search-ready yet.",
 };
+
+function formatSelectedPrice(published: PublicPublishedRecommendation): string {
+  const basePrice = `${published.selected_price_currency} ${published.selected_price_amount}`;
+  return published.selected_price_semantics === "LOWER_BOUND" ? `${basePrice} 起` : basePrice;
+}
 
 function toRequest(form: FormState): StructuredRequirementRequest {
   return {

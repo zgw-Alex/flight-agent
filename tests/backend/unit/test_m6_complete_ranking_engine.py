@@ -46,6 +46,7 @@ from flight_agent.domain.flights import (
     Money,
     Offer,
     OfferId,
+    PriceSemantics,
     SegmentId,
 )
 from flight_agent.domain.requirements import (
@@ -61,6 +62,7 @@ from flight_agent.domain.requirements import (
     RequirementState,
     SoftPreference,
 )
+from flight_agent.domain.search import SearchPlanId
 from flight_agent.domain.shared import (
     DomainInstant,
     DomainInvariantViolation,
@@ -72,14 +74,41 @@ from flight_agent.domain.shared import (
     SnapshotVersion,
     StructuralFreshness,
 )
+from flight_agent.ports import (
+    CommonNormalizer,
+    MappedItinerary,
+    MappedItineraryRef,
+    MappedOffer,
+    MappedOfferRef,
+    MappedProvenance,
+    MappedSegment,
+    MappedSegmentRef,
+    MapperVersion,
+    NormalizationContext,
+    NormalizerVersion,
+    ProviderAcquisitionId,
+    ProviderDataStatus,
+    ProviderId,
+    ProviderMappingResult,
+    ReferenceData,
+    ReferenceDataVersion,
+)
+from flight_agent.ports.provider_mapping import MappingStatistics
 
 
 def test_qualified_ranking_excludes_uncertain_and_rejected_candidates() -> None:
     result = ranking_result(RankingViewKind.QUALIFIED)
 
-    assert candidate_order(result) == ("offer-cheap|itinerary-cheap", "offer-direct|itinerary-direct")
-    assert all(entry.candidate not in filter_result().uncertain_candidates for entry in result.entries)
-    assert all(entry.candidate not in filter_result().rejected_candidates for entry in result.entries)
+    assert candidate_order(result) == (
+        "offer-cheap|itinerary-cheap",
+        "offer-direct|itinerary-direct",
+    )
+    assert all(
+        entry.candidate not in filter_result().uncertain_candidates for entry in result.entries
+    )
+    assert all(
+        entry.candidate not in filter_result().rejected_candidates for entry in result.entries
+    )
 
 
 def test_uncertain_ranking_is_separate_and_never_contains_rejected_candidates() -> None:
@@ -100,7 +129,10 @@ def test_rejected_candidate_with_best_price_cannot_resurrect_into_ranking() -> N
 def test_normalization_weight_contribution_and_aggregate_score_are_traceable() -> None:
     result = ranking_result(RankingViewKind.QUALIFIED)
     cheap = result.entries[0]
-    by_scope = {contribution.preference_scope: contribution for contribution in cheap.preference_contributions}
+    by_scope = {
+        contribution.preference_scope: contribution
+        for contribution in cheap.preference_contributions
+    }
 
     price = by_scope[PreferenceScope.PRICE]
     stops = by_scope[PreferenceScope.FEWER_STOPS]
@@ -119,7 +151,9 @@ def test_missing_feature_uses_available_weight_renormalization_and_records_cover
     full = ranking_result(RankingViewKind.QUALIFIED)
     missing_stop = feature_set_without(candidate("offer-cheap", "itinerary-cheap"), STOP_COUNT)
     result = ranking_result(RankingViewKind.QUALIFIED, feature_set=missing_stop)
-    cheap = next(entry for entry in result.entries if entry.candidate.offer_id == OfferId("offer-cheap"))
+    cheap = next(
+        entry for entry in result.entries if entry.candidate.offer_id == OfferId("offer-cheap")
+    )
 
     assert cheap.aggregate_score == Decimal(1)
     assert full.entries[0].aggregate_score != cheap.aggregate_score
@@ -143,12 +177,17 @@ def test_score_tie_breaks_by_coverage_before_canonical_identity() -> None:
     result = ranking_result(
         RankingViewKind.QUALIFIED,
         snapshot=tie_snapshot(),
-        feature_set=feature_set_without(candidate("offer-b", "itinerary-b"), STOP_COUNT, snapshot=tie_snapshot()),
+        feature_set=feature_set_without(
+            candidate("offer-b", "itinerary-b"), STOP_COUNT, snapshot=tie_snapshot()
+        ),
     )
 
     assert candidate_order(result) == ("offer-a|itinerary-a", "offer-b|itinerary-b")
     assert result.entries[0].aggregate_score == result.entries[1].aggregate_score
-    assert result.entries[0].coverage.evaluated_preference_coverage > result.entries[1].coverage.evaluated_preference_coverage
+    assert (
+        result.entries[0].coverage.evaluated_preference_coverage
+        > result.entries[1].coverage.evaluated_preference_coverage
+    )
 
 
 def test_score_and_coverage_tie_breaks_by_canonical_candidate_identity_not_input_order() -> None:
@@ -166,7 +205,9 @@ def test_no_soft_preferences_still_orders_by_stable_canonical_identity() -> None
         "offer-direct|itinerary-direct",
     )
     assert all(entry.aggregate_score == Decimal(0) for entry in result.entries)
-    assert all(entry.coverage.evaluated_preference_coverage == Decimal(1) for entry in result.entries)
+    assert all(
+        entry.coverage.evaluated_preference_coverage == Decimal(1) for entry in result.entries
+    )
 
 
 def test_max_price_hard_constraint_does_not_enter_soft_ranking_contributions() -> None:
@@ -214,12 +255,154 @@ def test_max_price_hard_constraint_does_not_enter_soft_ranking_contributions() -
     )
 
 
+def test_lower_bound_price_is_not_final_exact_price_ranking_evidence() -> None:
+    snapshot = snapshot_from_specs(
+        (
+            ("exact", date(2026, 9, 1), Decimal(800), 0, PriceSemantics.EXACT),
+            ("lower", date(2026, 9, 1), Decimal(700), 0, PriceSemantics.LOWER_BOUND),
+        )
+    )
+    requirement = requirement_with_preferences(
+        (
+            SoftPreference(
+                preference_id=PreferenceId("prefer-price"),
+                scope=PreferenceScope.PRICE,
+                importance=PreferenceImportance.HIGH,
+            ),
+        )
+    )
+    feature_set = feature_set_for(snapshot=snapshot, requirement=requirement)
+    result = ranking_result(
+        RankingViewKind.QUALIFIED,
+        requirement=requirement,
+        snapshot=snapshot,
+        feature_set=feature_set,
+        filtered=filter_result(snapshot=snapshot, requirement=requirement, feature_set=feature_set),
+    )
+
+    assert candidate_order(result) == ("offer-exact|itinerary-exact", "offer-lower|itinerary-lower")
+    lower_price = price_contribution(result, OfferId("offer-lower"))
+    assert lower_price.status is PreferenceContributionStatus.MISSING_EVIDENCE
+    assert lower_price.raw_feature_value is not None
+    assert lower_price.raw_feature_value.value.value == Money(Decimal(700), "CNY")
+    assert lower_price.missing_reason == "total price is not exact evidence"
+
+
+def test_lower_bound_prices_do_not_prove_actual_price_ordering() -> None:
+    snapshot = snapshot_from_specs(
+        (
+            ("lower-a", date(2026, 9, 1), Decimal(700), 0, PriceSemantics.LOWER_BOUND),
+            ("lower-b", date(2026, 9, 1), Decimal(750), 0, PriceSemantics.LOWER_BOUND),
+        )
+    )
+    requirement = requirement_with_preferences(
+        (
+            SoftPreference(
+                preference_id=PreferenceId("prefer-price"),
+                scope=PreferenceScope.PRICE,
+                importance=PreferenceImportance.HIGH,
+            ),
+        )
+    )
+
+    result = ranking_result(
+        RankingViewKind.QUALIFIED,
+        requirement=requirement,
+        snapshot=snapshot,
+        feature_set=feature_set_for(snapshot=snapshot, requirement=requirement),
+    )
+
+    assert candidate_order(result) == (
+        "offer-lower-a|itinerary-lower-a",
+        "offer-lower-b|itinerary-lower-b",
+    )
+    assert result.pool_relative_normalization[0].known_value_count == 0
+    assert all(
+        contribution.status is PreferenceContributionStatus.MISSING_EVIDENCE
+        for entry in result.entries
+        for contribution in entry.preference_contributions
+    )
+    assert all(entry.aggregate_score == Decimal(0) for entry in result.entries)
+
+
+def test_m4_normalized_lower_bound_reaches_m6_ranking_as_non_exact_price_evidence() -> None:
+    normalized = CommonNormalizer().normalize(
+        ProviderMappingResult(
+            provider_id=ProviderId("provider-a"),
+            acquisition_id=ProviderAcquisitionId("acquisition-a"),
+            search_plan_id=SearchPlanId("search-plan-a"),
+            mapper_version=MapperVersion("mapper-v1"),
+            data_status=ProviderDataStatus.COMPLETE,
+            segments=(mapped_segment("seg-a"),),
+            itineraries=(mapped_itinerary("itin-a", ("seg-a",)),),
+            offers=(mapped_offer("offer-a", "itin-a", price_semantics=PriceSemantics.LOWER_BOUND),),
+            issues=(),
+            statistics=MappingStatistics(
+                raw_segment_count=1,
+                mapped_segment_count=1,
+                dropped_segment_count=0,
+                raw_itinerary_count=1,
+                mapped_itinerary_count=1,
+                dropped_itinerary_count=0,
+                raw_offer_count=1,
+                mapped_offer_count=1,
+                dropped_offer_count=0,
+                issue_count=0,
+            ),
+        ),
+        NormalizationContext(
+            normalizer_version=NormalizerVersion("normalizer-v1"),
+            reference_data=ReferenceData(
+                ReferenceDataVersion("reference-data-v1"),
+                frozenset({"PEK", "SHA"}),
+                frozenset({"MU"}),
+            ),
+        ),
+    )
+    snapshot = CandidateSnapshot(
+        snapshot_id=CandidateSnapshotId("snapshot-1"),
+        version=SnapshotVersion(1),
+        created_at=instant(2026, 8, 26, 8, 0),
+        created_from_requirement_version=RequirementVersion(1),
+        structural_freshness=StructuralFreshness(FreshnessState.FRESH),
+        coverage=Coverage("requested", "actual", CoverageStatus.COMPLETE),
+        segments=normalized.segments,
+        itineraries=normalized.itineraries,
+        offers=normalized.offers,
+    )
+    requirement = requirement_with_preferences(
+        (
+            SoftPreference(
+                preference_id=PreferenceId("prefer-price"),
+                scope=PreferenceScope.PRICE,
+                importance=PreferenceImportance.HIGH,
+            ),
+        )
+    )
+
+    result = ranking_result(
+        RankingViewKind.QUALIFIED,
+        requirement=requirement,
+        snapshot=snapshot,
+        feature_set=feature_set_for(snapshot=snapshot, requirement=requirement),
+    )
+
+    assert normalized.offers[0].price_semantics is PriceSemantics.LOWER_BOUND
+    contribution = price_contribution(result, OfferId("normalized-offer:mapped-offer:offer-a"))
+    assert contribution.status is PreferenceContributionStatus.MISSING_EVIDENCE
+    assert contribution.raw_feature_value is not None
+    assert contribution.raw_feature_value.value.value == Money(Decimal(791), "CNY")
+
+
 def test_degenerate_pool_has_deterministic_normalization_without_division_by_zero() -> None:
     result = ranking_result(RankingViewKind.QUALIFIED, snapshot=equal_snapshot())
 
     assert [entry.aggregate_score for entry in result.entries] == [Decimal(1), Decimal(1)]
     assert candidate_order(result) == ("offer-a|itinerary-a", "offer-b|itinerary-b")
-    assert result.pool_relative_normalization[0].min_value == result.pool_relative_normalization[0].max_value
+    assert (
+        result.pool_relative_normalization[0].min_value
+        == result.pool_relative_normalization[0].max_value
+    )
 
 
 def test_ranking_run_result_lineage_and_immutability() -> None:
@@ -408,7 +591,9 @@ def feature_set_without(
         values=tuple(
             value
             for value in feature_set.values
-            if not (value.candidate == removed_candidate and value.feature_key == removed_feature_key)
+            if not (
+                value.candidate == removed_candidate and value.feature_key == removed_feature_key
+            )
         ),
     )
 
@@ -438,7 +623,8 @@ def feature_set_with_unknown_departure(feature_set: DerivedFeatureSet) -> Derive
         reference_data_versions=feature_set.reference_data_versions,
         values=tuple(
             replacement
-            if value.candidate == replacement.candidate and value.feature_key == replacement.feature_key
+            if value.candidate == replacement.candidate
+            and value.feature_key == replacement.feature_key
             else value
             for value in feature_set.values
         ),
@@ -513,16 +699,22 @@ def reversed_equal_snapshot() -> CandidateSnapshot:
 
 
 def snapshot_from_specs(
-    specs: tuple[tuple[str, date, Decimal, int], ...],
+    specs: tuple[
+        tuple[str, date, Decimal, int] | tuple[str, date, Decimal, int, PriceSemantics], ...
+    ],
     *,
     unknown_departure: bool = False,
 ) -> CandidateSnapshot:
     segments: list[FlightSegment] = []
     itineraries: list[Itinerary] = []
     offers: list[Offer] = []
-    for suffix, departure_date, price, stop_count in specs:
+    for spec in specs:
+        suffix, departure_date, price, stop_count = spec[:4]
+        price_semantics = spec[4] if len(spec) == 5 else PriceSemantics.EXACT
         segment_ids: list[SegmentId] = []
-        departure = departure_date if suffix != "uncertain" or not unknown_departure else date(2026, 9, 1)
+        departure = (
+            departure_date if suffix != "uncertain" or not unknown_departure else date(2026, 9, 1)
+        )
         for index in range(stop_count + 1):
             segment = FlightSegment(
                 segment_id=SegmentId(f"segment-{suffix}-{index + 1}"),
@@ -530,8 +722,12 @@ def snapshot_from_specs(
                 flight_number=f"51{len(segments) + 1:02d}",
                 departure_airport="PEK" if index == 0 else "NKG",
                 arrival_airport="SHA" if index == stop_count else "NKG",
-                departure_at=instant(departure.year, departure.month, departure.day, 8 + index * 3, 30),
-                arrival_at=instant(departure.year, departure.month, departure.day, 10 + index * 3, 30),
+                departure_at=instant(
+                    departure.year, departure.month, departure.day, 8 + index * 3, 30
+                ),
+                arrival_at=instant(
+                    departure.year, departure.month, departure.day, 10 + index * 3, 30
+                ),
                 operating_carrier=DomainValue.known("MU"),
                 aircraft_type=DomainValue.not_provided(),
                 provenance=(ProvenanceRef("canonical", f"segment-{suffix}-{index + 1}"),),
@@ -550,6 +746,7 @@ def snapshot_from_specs(
             offer_freshness=OfferFreshness(FreshnessState.FRESH),
             booking_reference=DomainValue.known(f"BOOK-{suffix}"),
             provenance=(ProvenanceRef("canonical", f"offer-{suffix}"),),
+            price_semantics=price_semantics,
         )
         itineraries.append(itinerary)
         offers.append(offer)
@@ -578,6 +775,72 @@ def candidate_order(result: CompleteRankingResult) -> tuple[str, ...]:
     return tuple(
         f"{entry.candidate.offer_id.value}|{entry.candidate.itinerary_id.value}"
         for entry in result.entries
+    )
+
+
+def price_contribution(result: CompleteRankingResult, offer_id: OfferId):
+    return next(
+        contribution
+        for entry in result.entries
+        if entry.candidate.offer_id == offer_id
+        for contribution in entry.preference_contributions
+        if contribution.preference_scope is PreferenceScope.PRICE
+    )
+
+
+def mapped_provenance(source: str) -> MappedProvenance:
+    return MappedProvenance(
+        provider_id=ProviderId("provider-a"),
+        acquisition_id=ProviderAcquisitionId("acquisition-a"),
+        raw_evidence_refs=(f"{source}-response",),
+        raw_record_ref=source,
+        provider_source_id=source,
+    )
+
+
+def mapped_segment(source: str) -> MappedSegment:
+    return MappedSegment(
+        mapped_segment_ref=MappedSegmentRef(f"mapped-segment:{source}"),
+        provider_segment_id=source,
+        marketing_carrier="MU",
+        flight_number="MU583",
+        departure_airport="PEK",
+        arrival_airport="SHA",
+        departure_local="2026-09-01T08:00:00+00:00",
+        arrival_local="2026-09-01T10:00:00+00:00",
+        operating_carrier=DomainValue.known("MU"),
+        aircraft_type=DomainValue.not_provided(),
+        checked_baggage_pieces=DomainValue.not_provided(),
+        overnight=DomainValue.not_provided(),
+        provenance=mapped_provenance(source),
+    )
+
+
+def mapped_itinerary(source: str, segment_sources: tuple[str, ...]) -> MappedItinerary:
+    return MappedItinerary(
+        mapped_itinerary_ref=MappedItineraryRef(f"mapped-itinerary:{source}"),
+        provider_itinerary_id=source,
+        segment_refs=tuple(MappedSegmentRef(f"mapped-segment:{item}") for item in segment_sources),
+        provenance=mapped_provenance(source),
+    )
+
+
+def mapped_offer(
+    source: str,
+    itinerary_source: str,
+    *,
+    price_semantics: PriceSemantics,
+) -> MappedOffer:
+    return MappedOffer(
+        mapped_offer_ref=MappedOfferRef(f"mapped-offer:{source}"),
+        provider_offer_id=source,
+        itinerary_ref=MappedItineraryRef(f"mapped-itinerary:{itinerary_source}"),
+        total_amount=DomainValue.known(791),
+        currency=DomainValue.known("CNY"),
+        refundable=DomainValue.not_provided(),
+        booking_reference=DomainValue.not_applicable(),
+        provenance=mapped_provenance(source),
+        price_semantics=price_semantics,
     )
 
 

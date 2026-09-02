@@ -118,6 +118,7 @@ class ParserSemanticBinding:
     value: object | None = None
     value_signal: str = ""
     evidence_ids: tuple[str, ...] = ()
+    preference_importance: PreferenceImportance = PreferenceImportance.HIGH
 
 
 @dataclass(frozen=True)
@@ -643,9 +644,9 @@ def _proposal_item(binding: ParserSemanticBinding) -> HardConstraint | SoftPrefe
     if binding.target is ParserSemanticTarget.MAX_STOPS and isinstance(binding.value, StopCount):
         return _constraint("parser-max-stops", ConstraintScope.MAX_STOPS, ConstraintOperator.AT_OR_BEFORE, binding.value)
     if binding.target is ParserSemanticTarget.PRICE:
-        return SoftPreference(PreferenceId("parser-price"), PreferenceScope.PRICE, PreferenceImportance.HIGH)
+        return SoftPreference(PreferenceId("parser-price"), PreferenceScope.PRICE, binding.preference_importance)
     if binding.target is ParserSemanticTarget.FEWER_STOPS:
-        return SoftPreference(PreferenceId("parser-fewer-stops"), PreferenceScope.FEWER_STOPS, PreferenceImportance.HIGH)
+        return SoftPreference(PreferenceId("parser-fewer-stops"), PreferenceScope.FEWER_STOPS, binding.preference_importance)
     return None
 
 

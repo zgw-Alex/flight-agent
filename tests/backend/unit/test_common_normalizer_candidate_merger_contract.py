@@ -415,16 +415,30 @@ def test_merger_consolidates_segments_and_rewires_itinerary_with_provenance_unio
     left = normalize(
         mapping_result(
             segments=(mapped_segment("seg-left", provider="provider-a", acquisition="acq-a"),),
-            itineraries=(mapped_itinerary("itin-left", ("seg-left",), provider="provider-a", acquisition="acq-a"),),
-            offers=(mapped_offer("offer-left", "itin-left", provider="provider-a", acquisition="acq-a"),),
+            itineraries=(
+                mapped_itinerary(
+                    "itin-left", ("seg-left",), provider="provider-a", acquisition="acq-a"
+                ),
+            ),
+            offers=(
+                mapped_offer("offer-left", "itin-left", provider="provider-a", acquisition="acq-a"),
+            ),
             mapper_version=MapperVersion("mapper-left"),
         )
     )
     right = normalize(
         mapping_result(
             segments=(mapped_segment("seg-right", provider="provider-b", acquisition="acq-b"),),
-            itineraries=(mapped_itinerary("itin-right", ("seg-right",), provider="provider-b", acquisition="acq-b"),),
-            offers=(mapped_offer("offer-right", "itin-right", provider="provider-b", acquisition="acq-b"),),
+            itineraries=(
+                mapped_itinerary(
+                    "itin-right", ("seg-right",), provider="provider-b", acquisition="acq-b"
+                ),
+            ),
+            offers=(
+                mapped_offer(
+                    "offer-right", "itin-right", provider="provider-b", acquisition="acq-b"
+                ),
+            ),
             mapper_version=MapperVersion("mapper-right"),
         )
     )
@@ -443,15 +457,29 @@ def test_cross_provider_same_price_offers_remain_distinct() -> None:
     left = normalize(
         mapping_result(
             segments=(mapped_segment("seg-left", provider="provider-a", acquisition="acq-a"),),
-            itineraries=(mapped_itinerary("itin-left", ("seg-left",), provider="provider-a", acquisition="acq-a"),),
-            offers=(mapped_offer("offer-left", "itin-left", provider="provider-a", acquisition="acq-a"),),
+            itineraries=(
+                mapped_itinerary(
+                    "itin-left", ("seg-left",), provider="provider-a", acquisition="acq-a"
+                ),
+            ),
+            offers=(
+                mapped_offer("offer-left", "itin-left", provider="provider-a", acquisition="acq-a"),
+            ),
         )
     )
     right = normalize(
         mapping_result(
             segments=(mapped_segment("seg-right", provider="provider-b", acquisition="acq-b"),),
-            itineraries=(mapped_itinerary("itin-right", ("seg-right",), provider="provider-b", acquisition="acq-b"),),
-            offers=(mapped_offer("offer-right", "itin-right", provider="provider-b", acquisition="acq-b"),),
+            itineraries=(
+                mapped_itinerary(
+                    "itin-right", ("seg-right",), provider="provider-b", acquisition="acq-b"
+                ),
+            ),
+            offers=(
+                mapped_offer(
+                    "offer-right", "itin-right", provider="provider-b", acquisition="acq-b"
+                ),
+            ),
         )
     )
 
@@ -459,8 +487,7 @@ def test_cross_provider_same_price_offers_remain_distinct() -> None:
 
     assert len(graph.offers) == 2
     assert any(
-        item.category is MergeEvidenceCategory.SOURCE_IDENTITY_CONFLICT
-        for item in graph.evidence
+        item.category is MergeEvidenceCategory.SOURCE_IDENTITY_CONFLICT for item in graph.evidence
     )
 
 
@@ -498,7 +525,9 @@ def test_same_provider_offer_with_different_price_semantics_is_distinct() -> Non
         mapping_result(
             segments=(mapped_segment("seg-a"),),
             itineraries=(mapped_itinerary("itin-a", ("seg-a",)),),
-            offers=(mapped_offer("offer-same", "itin-a", price_semantics=PriceSemantics.LOWER_BOUND),),
+            offers=(
+                mapped_offer("offer-same", "itin-a", price_semantics=PriceSemantics.LOWER_BOUND),
+            ),
         )
     )
     merger = CandidateMerger(MergerVersion("candidate-merger-v1"))
@@ -568,10 +597,7 @@ def test_optional_known_conflict_is_evidence_not_silent_overwrite() -> None:
     graph = CandidateMerger(MergerVersion("candidate-merger-v1")).merge((left, right))
 
     assert len(graph.segments) == 1
-    assert any(
-        item.category is MergeEvidenceCategory.ATTRIBUTE_CONFLICT
-        for item in graph.evidence
-    )
+    assert any(item.category is MergeEvidenceCategory.ATTRIBUTE_CONFLICT for item in graph.evidence)
 
 
 def test_replay_and_input_permutation_are_semantically_deterministic() -> None:
@@ -579,7 +605,9 @@ def test_replay_and_input_permutation_are_semantically_deterministic() -> None:
     right = normalize(
         mapping_result(
             segments=(mapped_segment("seg-b", provider="provider-b", acquisition="acq-b"),),
-            itineraries=(mapped_itinerary("itin-b", ("seg-b",), provider="provider-b", acquisition="acq-b"),),
+            itineraries=(
+                mapped_itinerary("itin-b", ("seg-b",), provider="provider-b", acquisition="acq-b"),
+            ),
             offers=(mapped_offer("offer-b", "itin-b", provider="provider-b", acquisition="acq-b"),),
             mapper_version=MapperVersion("mapper-b"),
         )
@@ -628,5 +656,8 @@ def test_versions_do_not_participate_in_canonical_equivalence_identity() -> None
     merger = CandidateMerger(MergerVersion("candidate-merger-v1"))
 
     assert merger.segment_equivalence(base.segments[0], changed_version.segments[0])
-    assert merger.segment_equivalence(base.segments[0], changed_version.segments[0]) is EquivalenceDecision.EQUIVALENT
+    assert (
+        merger.segment_equivalence(base.segments[0], changed_version.segments[0])
+        is EquivalenceDecision.EQUIVALENT
+    )
     assert "common-normalizer-v2" not in changed_version.segments[0].segment_id.value

@@ -9,7 +9,8 @@ from typing import Protocol
 SEMANTIC_RESOLVER_CONTRACT_VERSION = "m8-u6h-e-v1.0"
 SEMANTIC_RESOLVER_PROMPT_VERSION_V1 = "m8-u6h-c-semantic-resolver-prompt-v1"
 SEMANTIC_RESOLVER_PROMPT_VERSION_V2 = "m8-u6h-e-semantic-resolver-prompt-v2"
-SEMANTIC_RESOLVER_PROMPT_VERSION = SEMANTIC_RESOLVER_PROMPT_VERSION_V2
+SEMANTIC_RESOLVER_PROMPT_VERSION_V3 = "m8-u6h-ca04-semantic-resolver-prompt-v3"
+SEMANTIC_RESOLVER_PROMPT_VERSION = SEMANTIC_RESOLVER_PROMPT_VERSION_V3
 
 
 class SemanticResolverTaskKind(str, Enum):
@@ -40,6 +41,12 @@ class SemanticResolverFailureKind(str, Enum):
     INSUFFICIENT_EVIDENCE = "INSUFFICIENT_EVIDENCE"
 
 
+class SemanticResolverPreferenceImportance(str, Enum):
+    LOW = "LOW"
+    MEDIUM = "MEDIUM"
+    HIGH = "HIGH"
+
+
 @dataclass(frozen=True)
 class SemanticResolverEvidence:
     evidence_id: str
@@ -63,6 +70,7 @@ class SemanticResolverRelation:
     target: str | None = None
     value: str | None = None
     confidence: float | None = None
+    importance: SemanticResolverPreferenceImportance | None = None
 
     def __post_init__(self) -> None:
         if self.relation_kind.strip() == "":
@@ -75,6 +83,8 @@ class SemanticResolverRelation:
             raise ValueError("relation target must be non-empty when provided")
         if self.value is not None and self.value.strip() == "":
             raise ValueError("relation value must be non-empty when provided")
+        if self.importance is not None and not isinstance(self.importance, SemanticResolverPreferenceImportance):
+            raise ValueError("relation importance must be LOW, MEDIUM, HIGH, or None")
         if self.confidence is not None and not 0 <= self.confidence <= 1:
             raise ValueError("relation confidence must be between 0 and 1")
 

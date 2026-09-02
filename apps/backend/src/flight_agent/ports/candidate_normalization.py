@@ -207,7 +207,9 @@ class CommonNormalizer:
             itinerary = _normalize_itinerary(mapped_itinerary, segment_by_ref, issues)
             if itinerary is not None:
                 itineraries.append(itinerary)
-                itinerary_sources.append((itinerary.itinerary_id, mapped_itinerary.mapped_itinerary_ref))
+                itinerary_sources.append(
+                    (itinerary.itinerary_id, mapped_itinerary.mapped_itinerary_ref)
+                )
                 itinerary_by_ref[mapped_itinerary.mapped_itinerary_ref] = itinerary
 
         offers: list[Offer] = []
@@ -234,9 +236,13 @@ class CommonNormalizer:
             mapper_version=mapping_result.mapper_version,
             normalizer_version=context.normalizer_version,
             reference_data_version=context.reference_data.version,
-            data_status=_normalization_data_status(mapping_result, segments, itineraries, offers, issues),
+            data_status=_normalization_data_status(
+                mapping_result, segments, itineraries, offers, issues
+            ),
             segments=tuple(sorted(segments, key=lambda segment: segment.segment_id.value)),
-            itineraries=tuple(sorted(itineraries, key=lambda itinerary: itinerary.itinerary_id.value)),
+            itineraries=tuple(
+                sorted(itineraries, key=lambda itinerary: itinerary.itinerary_id.value)
+            ),
             offers=tuple(sorted(offers, key=lambda offer: offer.offer_id.value)),
             segment_sources=tuple(sorted(segment_sources, key=lambda item: item[0].value)),
             itinerary_sources=tuple(sorted(itinerary_sources, key=lambda item: item[0].value)),
@@ -315,18 +321,26 @@ class CandidateMerger:
         )
         offers = self._merge_offers(ordered_results, itinerary_rewrites, evidence)
         return MergedCandidateGraph(
-            normalizer_versions=tuple(sorted({r.normalizer_version for r in ordered_results}, key=lambda v: v.value)),
+            normalizer_versions=tuple(
+                sorted({r.normalizer_version for r in ordered_results}, key=lambda v: v.value)
+            ),
             reference_data_versions=tuple(
                 sorted({r.reference_data_version for r in ordered_results}, key=lambda v: v.value)
             ),
-            mapper_versions=tuple(sorted({r.mapper_version for r in ordered_results}, key=lambda v: v.value)),
+            mapper_versions=tuple(
+                sorted({r.mapper_version for r in ordered_results}, key=lambda v: v.value)
+            ),
             merger_version=self.merger_version,
             data_status=_merged_data_status(ordered_results),
             segments=tuple(sorted(segments, key=lambda segment: segment.segment_id.value)),
-            itineraries=tuple(sorted(itineraries, key=lambda itinerary: itinerary.itinerary_id.value)),
+            itineraries=tuple(
+                sorted(itineraries, key=lambda itinerary: itinerary.itinerary_id.value)
+            ),
             offers=tuple(sorted(offers, key=lambda offer: offer.offer_id.value)),
             evidence=tuple(evidence),
-            normalization_issues=tuple(issue for result in ordered_results for issue in result.issues),
+            normalization_issues=tuple(
+                issue for result in ordered_results for issue in result.issues
+            ),
         )
 
     def _merge_segments(
@@ -336,7 +350,9 @@ class CandidateMerger:
     ) -> tuple[list[FlightSegment], dict[SegmentId, SegmentId]]:
         canonical: list[FlightSegment] = []
         rewrites: dict[SegmentId, SegmentId] = {}
-        for segment in sorted((s for r in results for s in r.segments), key=lambda s: s.segment_id.value):
+        for segment in sorted(
+            (s for r in results for s in r.segments), key=lambda s: s.segment_id.value
+        ):
             match = next(
                 (
                     existing
@@ -358,7 +374,9 @@ class CandidateMerger:
                                 existing.provenance + segment.provenance,
                             )
                         )
-                consolidated = _with_segment_id(segment, SegmentId(f"segment:{len(canonical) + 1:04d}"))
+                consolidated = _with_segment_id(
+                    segment, SegmentId(f"segment:{len(canonical) + 1:04d}")
+                )
                 canonical.append(consolidated)
                 rewrites[segment.segment_id] = consolidated.segment_id
             else:
@@ -376,8 +394,12 @@ class CandidateMerger:
         segments_by_id = {segment.segment_id: segment for segment in segments}
         canonical: list[Itinerary] = []
         rewrites: dict[ItineraryId, ItineraryId] = {}
-        for itinerary in sorted((i for r in results for i in r.itineraries), key=lambda i: i.itinerary_id.value):
-            rewired_ids = tuple(segment_rewrites[segment_id] for segment_id in itinerary.segment_ids)
+        for itinerary in sorted(
+            (i for r in results for i in r.itineraries), key=lambda i: i.itinerary_id.value
+        ):
+            rewired_ids = tuple(
+                segment_rewrites[segment_id] for segment_id in itinerary.segment_ids
+            )
             rewired = Itinerary(itinerary.itinerary_id, rewired_ids, itinerary.provenance)
             match = next(
                 (
@@ -444,7 +466,9 @@ class CandidateMerger:
                                 existing.provenance + rewired.provenance,
                             )
                         )
-                canonical.append(_with_offer_id(rewired, OfferId(f"offer:{len(canonical) + 1:04d}")))
+                canonical.append(
+                    _with_offer_id(rewired, OfferId(f"offer:{len(canonical) + 1:04d}"))
+                )
             else:
                 merged = Offer(
                     offer_id=match.offer_id,
@@ -478,7 +502,10 @@ def _normalize_segment(
         return None
     departure_airport = mapped.departure_airport.strip().upper()
     arrival_airport = mapped.arrival_airport.strip().upper()
-    if departure_airport not in context.reference_data.airports or arrival_airport not in context.reference_data.airports:
+    if (
+        departure_airport not in context.reference_data.airports
+        or arrival_airport not in context.reference_data.airports
+    ):
         issues.append(
             _normalization_issue(
                 mapped.provenance,
@@ -604,7 +631,9 @@ def _merged_data_status(results: list[NormalizationResult]) -> ProviderDataStatu
     statuses = {result.data_status for result in results}
     if ProviderDataStatus.COMPLETE in statuses and len(statuses) == 1:
         return ProviderDataStatus.COMPLETE
-    if any(status in statuses for status in {ProviderDataStatus.COMPLETE, ProviderDataStatus.PARTIAL}):
+    if any(
+        status in statuses for status in {ProviderDataStatus.COMPLETE, ProviderDataStatus.PARTIAL}
+    ):
         return ProviderDataStatus.PARTIAL
     if statuses == {ProviderDataStatus.EMPTY}:
         return ProviderDataStatus.EMPTY
@@ -613,7 +642,9 @@ def _merged_data_status(results: list[NormalizationResult]) -> ProviderDataStatu
     return ProviderDataStatus.UNKNOWN
 
 
-def _segment_identity_key(segment: FlightSegment) -> tuple[str, str, str, str, datetime, datetime] | None:
+def _segment_identity_key(
+    segment: FlightSegment,
+) -> tuple[str, str, str, str, datetime, datetime] | None:
     if segment.operating_carrier.state is ValueState.UNKNOWN:
         return None
     return (

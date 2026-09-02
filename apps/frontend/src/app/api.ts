@@ -17,6 +17,8 @@ export type StructuredRequirementResponse = {
   validation_issues: string[];
 };
 
+export type PriceSemantics = "EXACT" | "LOWER_BOUND";
+
 export type PublicPublishedRecommendation = {
   publication_id: string;
   recommendation_result_id: string;
@@ -31,6 +33,7 @@ export type PublicPublishedRecommendation = {
   departure_date: string;
   selected_price_amount: string;
   selected_price_currency: string;
+  selected_price_semantics: PriceSemantics;
   role: "BEST_OVERALL";
   reason: string;
   evidence: string[];

@@ -48,6 +48,7 @@ class SemanticEvidenceKind(str, Enum):
 class SemanticTarget(str, Enum):
     MAX_PRICE = "MAX_PRICE"
     MAX_STOPS = "MAX_STOPS"
+    PRICE = "PRICE"
     FEWER_STOPS = "FEWER_STOPS"
     DEPARTURE_DATE = "DEPARTURE_DATE"
     AMBIGUOUS_REFERENCE = "AMBIGUOUS_REFERENCE"
@@ -104,6 +105,8 @@ class SemanticMutation:
     value_evidence_id: str | None = None
     value: object | None = None
     importance_signal: SemanticImportanceSignal = SemanticImportanceSignal.UNSPECIFIED
+    preference_importance: PreferenceImportance | None = None
+    allow_add: bool = True
     evidence_ids: tuple[str, ...] = ()
 
 
@@ -158,6 +161,31 @@ class PatchEvidenceExtractor:
                     SemanticEvidence(
                         evidence_id=f"ev-target-{index}",
                         kind=SemanticEvidenceKind.TARGET_TEXT,
+                        source_text=token,
+                        normalized_text=token,
+                        source_location=SourceLocation(start, start + len(token)),
+                    )
+                )
+        for index, token in enumerate(
+            (
+                "价格无所谓",
+                "票价无所谓",
+                "不看价格",
+                "价格不在意",
+                "直飞无所谓",
+                "转机无所谓",
+                "中转无所谓",
+                "转不转机都可以",
+                "价格我不在意",
+            ),
+            start=1,
+        ):
+            start = message.find(token)
+            if start >= 0:
+                evidence.append(
+                    SemanticEvidence(
+                        evidence_id=f"ev-removal-{index}",
+                        kind=SemanticEvidenceKind.MODALITY_TEXT,
                         source_text=token,
                         normalized_text=token,
                         source_location=SourceLocation(start, start + len(token)),
@@ -272,7 +300,7 @@ class MutationConsolidator:
             ).append(mutation)
         consolidated: list[SemanticMutation] = []
         for mutations in grouped.values():
-            distinct_values = {repr(mutation.value) for mutation in mutations}
+            distinct_values = {repr((mutation.value, mutation.preference_importance)) for mutation in mutations}
             if len(distinct_values) == 1 or corrections:
                 consolidated.append(mutations[-1])
             else:
@@ -411,6 +439,21 @@ def build_deterministic_patch_proposal(
 
 
 def _semantic_resolver_reason(message: str) -> str | None:
+    if any(
+        token in message
+        for token in (
+            "价格无所谓",
+            "票价无所谓",
+            "不看价格",
+            "价格不在意",
+            "价格我不在意",
+            "直飞无所谓",
+            "转机无所谓",
+            "中转无所谓",
+            "转不转机都可以",
+        )
+    ):
+        return "Explicit no-preference/removal semantics require semantic resolver"
     if "如果" in message or "便宜很多" in message:
         return "Conditional or comparative direct-flight semantics require semantic resolver"
     if "别卡那么死" in message or "更重要" in message:
@@ -591,8 +634,10 @@ def _operation_for_mutation(
         return _max_price_operation(mutation, current)
     if mutation.target is SemanticTarget.MAX_STOPS:
         return _max_stops_operation(mutation, current)
+    if mutation.target is SemanticTarget.PRICE:
+        return _soft_preference_operation(mutation, current, PreferenceScope.PRICE, PreferenceId("hybrid-price"))
     if mutation.target is SemanticTarget.FEWER_STOPS:
-        return _soft_direct_operation(mutation, current)
+        return _soft_preference_operation(mutation, current, PreferenceScope.FEWER_STOPS, PreferenceId("hybrid-fewer-stops"))
     return f"Unsupported semantic target: {mutation.target.value}"
 
 
@@ -660,21 +705,30 @@ def _max_stops_operation(
     return "MAX_STOPS target is ambiguous"
 
 
-def _soft_direct_operation(
+def _soft_preference_operation(
     mutation: SemanticMutation,
     current: RequirementState,
+    scope: PreferenceScope,
+    preference_id: PreferenceId,
 ) -> tuple[PatchProposalOperation, ...] | str:
     if mutation.operation is SemanticOperation.CLEAR:
         return (PatchProposalOperation(PatchProposalAction.CLEAR_PREFERENCES),)
-    matches = tuple(item for item in current.preferences if item.scope is PreferenceScope.FEWER_STOPS)
+    matches = tuple(item for item in current.preferences if item.scope is scope)
+    if mutation.operation is SemanticOperation.REMOVE:
+        if len(matches) == 0:
+            return ()
+        if len(matches) == 1:
+            return (PatchProposalOperation(PatchProposalAction.REMOVE_PREFERENCE, target_id=matches[0].preference_id),)
+        return f"{scope.value} preference target is ambiguous"
     item = SoftPreference(
-        preference_id=PreferenceId("hybrid-fewer-stops"),
-        scope=PreferenceScope.FEWER_STOPS,
-        importance=PreferenceImportance.HIGH,
+        preference_id=preference_id,
+        scope=scope,
+        importance=mutation.preference_importance or PreferenceImportance.HIGH,
     )
     operations: list[PatchProposalOperation] = []
     if len(matches) == 0:
-        operations.append(PatchProposalOperation(PatchProposalAction.ADD_PREFERENCE, item=item))
+        if mutation.allow_add:
+            operations.append(PatchProposalOperation(PatchProposalAction.ADD_PREFERENCE, item=item))
     elif len(matches) == 1:
         if not _soft_preference_equivalent(matches[0], item):
             operations.append(
@@ -685,7 +739,7 @@ def _soft_direct_operation(
                 )
             )
     else:
-        return "FEWER_STOPS preference target is ambiguous"
+        return f"{scope.value} preference target is ambiguous"
     return tuple(operations)
 
 

@@ -76,7 +76,11 @@ class MappingIssue:
     detail: str
 
     def __post_init__(self) -> None:
-        if self.raw_record_ref.strip() == "" or self.raw_path.strip() == "" or self.detail.strip() == "":
+        if (
+            self.raw_record_ref.strip() == ""
+            or self.raw_path.strip() == ""
+            or self.detail.strip() == ""
+        ):
             raise DomainInvariantViolation("MappingIssue requires record, path, and detail")
 
 
@@ -163,7 +167,9 @@ class MappingStatistics:
             self.dropped_offer_count,
             self.issue_count,
         )
-        if any(not isinstance(value, int) or isinstance(value, bool) or value < 0 for value in values):
+        if any(
+            not isinstance(value, int) or isinstance(value, bool) or value < 0 for value in values
+        ):
             raise DomainInvariantViolation("MappingStatistics counts must be non-negative integers")
 
 

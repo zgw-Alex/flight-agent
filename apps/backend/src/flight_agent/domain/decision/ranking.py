@@ -26,7 +26,9 @@ from flight_agent.domain.flights import (
     CandidateSnapshotId,
     ItineraryId,
     Money,
+    Offer,
     OfferId,
+    PriceSemantics,
 )
 from flight_agent.domain.requirements import (
     PreferenceId,
@@ -66,10 +68,7 @@ class RankingResult:
 
 class LowerPriceRanking:
     def rank(self, *, snapshot: CandidateSnapshot, filter_result: FilterResult) -> RankingResult:
-        eligible = {
-            offer_id
-            for offer_id in filter_result.eligible_offer_ids
-        }
+        eligible = {offer_id for offer_id in filter_result.eligible_offer_ids}
         offers_by_rank = sorted(
             (offer for offer in snapshot.offers if offer.offer_id in eligible),
             key=lambda offer: (offer.total_price.amount, offer.offer_id.value),
@@ -161,10 +160,17 @@ class RankingPolicySet:
         scopes = tuple(policy.preference_scope for policy in policies_tuple)
         if len(frozenset(scopes)) != len(scopes):
             raise DomainInvariantViolation("RankingPolicySet requires unique preference scopes")
-        if any(weight <= Decimal(0) for weight in (low_importance_weight, medium_importance_weight, high_importance_weight)):
+        if any(
+            weight <= Decimal(0)
+            for weight in (low_importance_weight, medium_importance_weight, high_importance_weight)
+        ):
             raise DomainInvariantViolation("RankingPolicySet importance weights must be positive")
         object.__setattr__(self, "policy_version", policy_version)
-        object.__setattr__(self, "preference_policies", tuple(sorted(policies_tuple, key=lambda policy: policy.preference_scope.value)))
+        object.__setattr__(
+            self,
+            "preference_policies",
+            tuple(sorted(policies_tuple, key=lambda policy: policy.preference_scope.value)),
+        )
         object.__setattr__(self, "low_importance_weight", low_importance_weight)
         object.__setattr__(self, "medium_importance_weight", medium_importance_weight)
         object.__setattr__(self, "high_importance_weight", high_importance_weight)
@@ -177,7 +183,9 @@ class RankingPolicySet:
         for policy in self.preference_policies:
             if policy.preference_scope is preference_scope:
                 return policy
-        raise DomainInvariantViolation(f"Unsupported ranking preference scope: {preference_scope.value}")
+        raise DomainInvariantViolation(
+            f"Unsupported ranking preference scope: {preference_scope.value}"
+        )
 
     def resolve_weight(self, importance: PreferenceImportance) -> Decimal:
         if importance is PreferenceImportance.LOW:
@@ -239,7 +247,9 @@ class PreferenceCoverage:
     def evaluated_preference_coverage(self) -> Decimal:
         if self.total_applicable_preference_count == 0:
             return Decimal(1)
-        return Decimal(self.evaluated_preference_count) / Decimal(self.total_applicable_preference_count)
+        return Decimal(self.evaluated_preference_count) / Decimal(
+            self.total_applicable_preference_count
+        )
 
     @property
     def evaluated_weight_coverage(self) -> Decimal:
@@ -312,7 +322,9 @@ class CompleteRankingResult:
     ) -> None:
         entries_tuple = tuple(entries)
         if any(entry.rank_position != index for index, entry in enumerate(entries_tuple, start=1)):
-            raise DomainInvariantViolation("RankingResult entries must have contiguous rank positions")
+            raise DomainInvariantViolation(
+                "RankingResult entries must have contiguous rank positions"
+            )
         object.__setattr__(self, "ranking_result_id", ranking_result_id)
         object.__setattr__(self, "run_id", run_id)
         object.__setattr__(self, "requirement_id", requirement_id)
@@ -329,28 +341,24 @@ class CompleteRankingResult:
 
 class PreferenceNormalizer(Protocol):
     @property
-    def preference_scope(self) -> PreferenceScope:
-        ...
+    def preference_scope(self) -> PreferenceScope: ...
 
     @property
-    def feature_key(self) -> FeatureKey:
-        ...
+    def feature_key(self) -> FeatureKey: ...
 
     @property
-    def value_type(self) -> FeatureValueType:
-        ...
+    def value_type(self) -> FeatureValueType: ...
 
     @property
-    def normalizer_version(self) -> DecisionPolicyVersion:
-        ...
+    def normalizer_version(self) -> DecisionPolicyVersion: ...
 
     def build_evidence(
         self,
         *,
         candidates: tuple[OfferBackedItineraryCandidate, ...],
         feature_set: DerivedFeatureSet,
-    ) -> PoolRelativeNormalizationEvidence:
-        ...
+        unavailable_candidates: tuple[OfferBackedItineraryCandidate, ...] = (),
+    ) -> PoolRelativeNormalizationEvidence: ...
 
     def normalize(
         self,
@@ -360,8 +368,8 @@ class PreferenceNormalizer(Protocol):
         feature_set: DerivedFeatureSet,
         policy: RankingPreferencePolicy,
         evidence: PoolRelativeNormalizationEvidence,
-    ) -> PreferenceContribution:
-        ...
+        unavailable_candidates: tuple[OfferBackedItineraryCandidate, ...] = (),
+    ) -> PreferenceContribution: ...
 
 
 @dataclass(frozen=True, init=False)
@@ -378,14 +386,20 @@ class NormalizerRegistry:
         scopes = tuple(normalizer.preference_scope for normalizer in normalizers_tuple)
         if len(frozenset(scopes)) != len(scopes):
             raise DomainInvariantViolation("NormalizerRegistry requires unique preference scopes")
-        object.__setattr__(self, "normalizers", tuple(sorted(normalizers_tuple, key=lambda item: item.preference_scope.value)))
+        object.__setattr__(
+            self,
+            "normalizers",
+            tuple(sorted(normalizers_tuple, key=lambda item: item.preference_scope.value)),
+        )
         object.__setattr__(self, "registry_version", registry_version)
 
     def get(self, preference_scope: PreferenceScope) -> PreferenceNormalizer:
         for normalizer in self.normalizers:
             if normalizer.preference_scope is preference_scope:
                 return normalizer
-        raise DomainInvariantViolation(f"Unsupported ranking preference scope: {preference_scope.value}")
+        raise DomainInvariantViolation(
+            f"Unsupported ranking preference scope: {preference_scope.value}"
+        )
 
 
 @dataclass(frozen=True)
@@ -400,11 +414,16 @@ class PoolRelativeFeatureNormalizer:
         *,
         candidates: tuple[OfferBackedItineraryCandidate, ...],
         feature_set: DerivedFeatureSet,
+        unavailable_candidates: tuple[OfferBackedItineraryCandidate, ...] = (),
     ) -> PoolRelativeNormalizationEvidence:
+        unavailable = frozenset(unavailable_candidates)
         known_values = tuple(
             scalar
             for candidate in candidates
-            for scalar in (_known_decimal_feature(feature_set, candidate, self.feature_key, self.value_type),)
+            if candidate not in unavailable
+            for scalar in (
+                _known_decimal_feature(feature_set, candidate, self.feature_key, self.value_type),
+            )
             if scalar is not None
         )
         return PoolRelativeNormalizationEvidence(
@@ -426,6 +445,7 @@ class PoolRelativeFeatureNormalizer:
         feature_set: DerivedFeatureSet,
         policy: RankingPreferencePolicy,
         evidence: PoolRelativeNormalizationEvidence,
+        unavailable_candidates: tuple[OfferBackedItineraryCandidate, ...] = (),
     ) -> PreferenceContribution:
         raw_feature_value = _feature_value_for(feature_set, candidate, self.feature_key)
         normalized = NormalizedRankingValue(
@@ -439,6 +459,8 @@ class PoolRelativeFeatureNormalizer:
             normalizer_version=self.normalizer_version,
         )
         missing_reason = _missing_reason(raw_feature_value, self.value_type)
+        if candidate in frozenset(unavailable_candidates):
+            missing_reason = "total price is not exact evidence"
         if missing_reason is not None:
             return PreferenceContribution(
                 preference_id=preference.preference_id,
@@ -453,11 +475,17 @@ class PoolRelativeFeatureNormalizer:
                 missing_reason=missing_reason,
             )
         if evidence.min_value is None or evidence.max_value is None:
-            raise DomainInvariantViolation("Pool-relative normalization requires known pool evidence")
+            raise DomainInvariantViolation(
+                "Pool-relative normalization requires known pool evidence"
+            )
         if raw_feature_value is None:
-            raise DomainInvariantViolation("Known ranking contribution requires FeatureValue evidence")
+            raise DomainInvariantViolation(
+                "Known ranking contribution requires FeatureValue evidence"
+            )
         raw_decimal = _feature_scalar_to_decimal(raw_feature_value.value.value, self.value_type)
-        normalized_decimal = _normalize_decimal(raw_decimal, evidence.min_value, evidence.max_value, policy.direction)
+        normalized_decimal = _normalize_decimal(
+            raw_decimal, evidence.min_value, evidence.max_value, policy.direction
+        )
         evaluated_normalized = NormalizedRankingValue(
             preference_id=preference.preference_id,
             preference_scope=preference.scope,
@@ -499,8 +527,18 @@ class CompleteRankingEngine:
     ) -> tuple[RankingRun, CompleteRankingResult]:
         _validate_lineage(requirement, snapshot, feature_set, filter_result)
         candidates = _candidates_for_view(filter_result, ranking_view_kind)
-        preferences = _applicable_preferences(requirement.preferences, ranking_policy_set, self.normalizer_registry)
-        normalization = _normalization_evidence(candidates, preferences, feature_set, ranking_policy_set, self.normalizer_registry)
+        preferences = _applicable_preferences(
+            requirement.preferences, ranking_policy_set, self.normalizer_registry
+        )
+        unavailable_by_feature = _unavailable_ranking_evidence(snapshot)
+        normalization = _normalization_evidence(
+            candidates,
+            preferences,
+            feature_set,
+            ranking_policy_set,
+            self.normalizer_registry,
+            unavailable_by_feature,
+        )
         unranked_entries = tuple(
             _entry_for_candidate(
                 candidate=candidate,
@@ -509,6 +547,7 @@ class CompleteRankingEngine:
                 ranking_policy_set=ranking_policy_set,
                 normalizer_registry=self.normalizer_registry,
                 normalization=normalization,
+                unavailable_by_feature=unavailable_by_feature,
             )
             for candidate in candidates
         )
@@ -605,19 +644,39 @@ def _validate_lineage(
     filter_result: CompleteFilterResult,
 ) -> None:
     if feature_set.input_lineage.snapshot_id != snapshot.snapshot_id:
-        raise DomainInvariantViolation("Ranking feature set snapshot lineage does not match CandidateSnapshot")
+        raise DomainInvariantViolation(
+            "Ranking feature set snapshot lineage does not match CandidateSnapshot"
+        )
     if feature_set.input_lineage.snapshot_version != snapshot.version:
-        raise DomainInvariantViolation("Ranking feature set snapshot version does not match CandidateSnapshot")
+        raise DomainInvariantViolation(
+            "Ranking feature set snapshot version does not match CandidateSnapshot"
+        )
     if feature_set.input_lineage.requirement_id != requirement.requirement_id:
-        raise DomainInvariantViolation("Ranking feature set requirement lineage does not match RequirementState")
+        raise DomainInvariantViolation(
+            "Ranking feature set requirement lineage does not match RequirementState"
+        )
     if feature_set.input_lineage.requirement_version != requirement.version:
-        raise DomainInvariantViolation("Ranking feature set requirement version does not match RequirementState")
-    if filter_result.requirement_id != requirement.requirement_id or filter_result.requirement_version != requirement.version:
-        raise DomainInvariantViolation("Ranking FilterResult requirement lineage does not match RequirementState")
-    if filter_result.snapshot_id != snapshot.snapshot_id or filter_result.snapshot_version != snapshot.version:
-        raise DomainInvariantViolation("Ranking FilterResult snapshot lineage does not match CandidateSnapshot")
+        raise DomainInvariantViolation(
+            "Ranking feature set requirement version does not match RequirementState"
+        )
+    if (
+        filter_result.requirement_id != requirement.requirement_id
+        or filter_result.requirement_version != requirement.version
+    ):
+        raise DomainInvariantViolation(
+            "Ranking FilterResult requirement lineage does not match RequirementState"
+        )
+    if (
+        filter_result.snapshot_id != snapshot.snapshot_id
+        or filter_result.snapshot_version != snapshot.version
+    ):
+        raise DomainInvariantViolation(
+            "Ranking FilterResult snapshot lineage does not match CandidateSnapshot"
+        )
     if filter_result.derived_feature_set_id != feature_set.feature_set_id.value:
-        raise DomainInvariantViolation("Ranking FilterResult feature lineage does not match DerivedFeatureSet")
+        raise DomainInvariantViolation(
+            "Ranking FilterResult feature lineage does not match DerivedFeatureSet"
+        )
 
 
 def _candidates_for_view(
@@ -649,6 +708,7 @@ def _normalization_evidence(
     feature_set: DerivedFeatureSet,
     ranking_policy_set: RankingPolicySet,
     normalizer_registry: NormalizerRegistry,
+    unavailable_by_feature: dict[FeatureKey, tuple[OfferBackedItineraryCandidate, ...]],
 ) -> tuple[PoolRelativeNormalizationEvidence, ...]:
     evidence_by_scope: dict[PreferenceScope, PoolRelativeNormalizationEvidence] = {}
     for preference in preferences:
@@ -658,8 +718,14 @@ def _normalization_evidence(
         normalizer = normalizer_registry.get(preference.scope)
         if normalizer.feature_key != policy.feature_key:
             raise DomainInvariantViolation("Ranking policy and normalizer feature keys must match")
-        evidence_by_scope[preference.scope] = normalizer.build_evidence(candidates=candidates, feature_set=feature_set)
-    return tuple(evidence_by_scope[scope] for scope in sorted(evidence_by_scope, key=lambda item: item.value))
+        evidence_by_scope[preference.scope] = normalizer.build_evidence(
+            candidates=candidates,
+            feature_set=feature_set,
+            unavailable_candidates=unavailable_by_feature.get(policy.feature_key, ()),
+        )
+    return tuple(
+        evidence_by_scope[scope] for scope in sorted(evidence_by_scope, key=lambda item: item.value)
+    )
 
 
 def _entry_for_candidate(
@@ -670,6 +736,7 @@ def _entry_for_candidate(
     ranking_policy_set: RankingPolicySet,
     normalizer_registry: NormalizerRegistry,
     normalization: tuple[PoolRelativeNormalizationEvidence, ...],
+    unavailable_by_feature: dict[FeatureKey, tuple[OfferBackedItineraryCandidate, ...]],
 ) -> RankingEntry:
     contributions = tuple(
         _contribution_for_preference(
@@ -679,6 +746,7 @@ def _entry_for_candidate(
             ranking_policy_set=ranking_policy_set,
             normalizer_registry=normalizer_registry,
             normalization=normalization,
+            unavailable_by_feature=unavailable_by_feature,
         )
         for preference in preferences
     )
@@ -692,9 +760,16 @@ def _entry_for_candidate(
         if contribution.status is PreferenceContributionStatus.EVALUATED
         and contribution.weighted_contribution.is_known
     )
-    evaluated_weight = sum((contribution.resolved_weight for contribution in evaluated_contributions), Decimal(0))
-    weighted_sum = sum((contribution.weighted_contribution.value for contribution in evaluated_contributions), Decimal(0))
-    aggregate_score = NEUTRAL_SCORE if evaluated_weight == Decimal(0) else weighted_sum / evaluated_weight
+    evaluated_weight = sum(
+        (contribution.resolved_weight for contribution in evaluated_contributions), Decimal(0)
+    )
+    weighted_sum = sum(
+        (contribution.weighted_contribution.value for contribution in evaluated_contributions),
+        Decimal(0),
+    )
+    aggregate_score = (
+        NEUTRAL_SCORE if evaluated_weight == Decimal(0) else weighted_sum / evaluated_weight
+    )
     coverage = PreferenceCoverage(
         evaluated_preference_count=len(evaluated_contributions),
         total_applicable_preference_count=len(preferences),
@@ -728,6 +803,7 @@ def _contribution_for_preference(
     ranking_policy_set: RankingPolicySet,
     normalizer_registry: NormalizerRegistry,
     normalization: tuple[PoolRelativeNormalizationEvidence, ...],
+    unavailable_by_feature: dict[FeatureKey, tuple[OfferBackedItineraryCandidate, ...]],
 ) -> PreferenceContribution:
     policy = ranking_policy_set.policy_for(preference.scope)
     normalizer = normalizer_registry.get(preference.scope)
@@ -737,6 +813,7 @@ def _contribution_for_preference(
         feature_set=feature_set,
         policy=policy,
         evidence=_normalization_for_scope(normalization, preference.scope),
+        unavailable_candidates=unavailable_by_feature.get(policy.feature_key, ()),
     )
     if contribution.status is PreferenceContributionStatus.MISSING_EVIDENCE:
         return contribution
@@ -815,6 +892,21 @@ def _feature_scalar_to_decimal(value: FeatureScalar, value_type: FeatureValueTyp
             raise DomainInvariantViolation("INTEGER ranking feature requires int value")
         return Decimal(value)
     raise DomainInvariantViolation(f"Unsupported ranking feature value type: {value_type.value}")
+
+
+def _unavailable_ranking_evidence(
+    snapshot: CandidateSnapshot,
+) -> dict[FeatureKey, tuple[OfferBackedItineraryCandidate, ...]]:
+    lower_bound_price_candidates = tuple(
+        _candidate_for_offer(offer)
+        for offer in snapshot.offers
+        if offer.price_semantics is PriceSemantics.LOWER_BOUND
+    )
+    return {TOTAL_PRICE: lower_bound_price_candidates}
+
+
+def _candidate_for_offer(offer: Offer) -> OfferBackedItineraryCandidate:
+    return OfferBackedItineraryCandidate(offer_id=offer.offer_id, itinerary_id=offer.itinerary_id)
 
 
 def _normalize_decimal(

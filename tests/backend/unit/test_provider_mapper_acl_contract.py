@@ -8,7 +8,13 @@ from flight_agent.adapters.flight_providers.mock import (
     MockFlightProvider,
     MockProviderMapper,
 )
-from flight_agent.domain.flights import CandidateSnapshot, ItineraryId, OfferId, PriceSemantics, SegmentId
+from flight_agent.domain.flights import (
+    CandidateSnapshot,
+    ItineraryId,
+    OfferId,
+    PriceSemantics,
+    SegmentId,
+)
 from flight_agent.domain.requirements import AirportCode, LocalDate, RequirementId
 from flight_agent.domain.search import (
     DepartureDateScope,
@@ -119,7 +125,9 @@ def test_graph_integrity_drops_invalid_dependent_subgraphs_conservatively() -> N
     result = mapping_result()
 
     assert [segment.provider_segment_id for segment in result.segments] == ["mock-seg-good"]
-    assert [itinerary.provider_itinerary_id for itinerary in result.itineraries] == ["mock-itin-good"]
+    assert [itinerary.provider_itinerary_id for itinerary in result.itineraries] == [
+        "mock-itin-good"
+    ]
     assert [offer.provider_offer_id for offer in result.offers] == ["mock-offer-good"]
     assert result.statistics.raw_segment_count == 2
     assert result.statistics.dropped_segment_count == 1

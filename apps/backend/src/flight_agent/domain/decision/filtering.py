@@ -232,12 +232,10 @@ class CompleteFilterResult:
 
 class ConstraintEvaluator(Protocol):
     @property
-    def constraint_scope(self) -> ConstraintScope:
-        ...
+    def constraint_scope(self) -> ConstraintScope: ...
 
     @property
-    def required_feature_keys(self) -> tuple:
-        ...
+    def required_feature_keys(self) -> tuple: ...
 
     def evaluate(
         self,
@@ -248,8 +246,7 @@ class ConstraintEvaluator(Protocol):
         feature_set: DerivedFeatureSet,
         lineage: ConstraintEvaluationLineage,
         evaluation_id: ConstraintEvaluationId,
-    ) -> ConstraintEvaluation:
-        ...
+    ) -> ConstraintEvaluation: ...
 
 
 @dataclass(frozen=True, init=False)
@@ -265,7 +262,9 @@ class FilterEvaluatorRegistry:
         evaluators_tuple = tuple(evaluators)
         scopes = tuple(evaluator.constraint_scope for evaluator in evaluators_tuple)
         if len(frozenset(scopes)) != len(scopes):
-            raise DomainInvariantViolation("FilterEvaluatorRegistry requires unique constraint scopes")
+            raise DomainInvariantViolation(
+                "FilterEvaluatorRegistry requires unique constraint scopes"
+            )
         object.__setattr__(
             self,
             "evaluators",
@@ -277,7 +276,9 @@ class FilterEvaluatorRegistry:
         for evaluator in self.evaluators:
             if evaluator.constraint_scope is constraint.scope:
                 return evaluator
-        raise DomainInvariantViolation(f"Unsupported filter constraint scope: {constraint.scope.value}")
+        raise DomainInvariantViolation(
+            f"Unsupported filter constraint scope: {constraint.scope.value}"
+        )
 
 
 @dataclass(frozen=True)
@@ -345,7 +346,9 @@ class MaxPriceConstraintEvaluator:
         feature_value = feature_set.value_for(candidate, TOTAL_PRICE)
         _validate_feature_value(feature_value, FeatureValueType.MONEY)
         actual = _actual_total_price(feature_value)
-        status = _status_from_money_threshold(feature_value, constraint.value, offer.price_semantics)
+        status = _status_from_money_threshold(
+            feature_value, constraint.value, offer.price_semantics
+        )
         return _constraint_evaluation(
             evaluation_id=evaluation_id,
             constraint_id=constraint.constraint_id,
@@ -433,7 +436,9 @@ class CompleteFilteringEngine:
         _validate_feature_set_lineage(feature_set, requirement, snapshot)
         candidates = _candidates_from_snapshot(snapshot)
         offers_by_candidate = {_candidate_for_offer(offer): offer for offer in snapshot.offers}
-        constraints = tuple(sorted(requirement.constraints, key=lambda item: item.constraint_id.value))
+        constraints = tuple(
+            sorted(requirement.constraints, key=lambda item: item.constraint_id.value)
+        )
         run = FilterRun(
             run_id=filter_run_id,
             requirement_id=requirement.requirement_id,
@@ -539,7 +544,9 @@ def aggregate_segment_evaluations(
             return ConstraintEvaluationStatus.UNKNOWN
         return ConstraintEvaluationStatus.PASS
     if selection in {SegmentSelection.FIRST_SEGMENT, SegmentSelection.LAST_SEGMENT}:
-        return statuses_tuple[0] if selection is SegmentSelection.FIRST_SEGMENT else statuses_tuple[-1]
+        return (
+            statuses_tuple[0] if selection is SegmentSelection.FIRST_SEGMENT else statuses_tuple[-1]
+        )
     raise DomainInvariantViolation("Unsupported segment selection")
 
 
@@ -566,7 +573,8 @@ def _constraint_evaluation(
         status=status,
         expected=EvaluationValueEvidence(expected_label, expected, evidence),
         actual=EvaluationValueEvidence(actual_label, actual, evidence),
-        reason_code=reason_code or {
+        reason_code=reason_code
+        or {
             ConstraintEvaluationStatus.PASS: ConstraintReasonCode.CONSTRAINT_SATISFIED,
             ConstraintEvaluationStatus.FAIL: ConstraintReasonCode.CONSTRAINT_VIOLATED,
             ConstraintEvaluationStatus.UNKNOWN: ConstraintReasonCode.INSUFFICIENT_EVIDENCE,
@@ -650,16 +658,26 @@ def _validate_feature_set_lineage(
     snapshot: CandidateSnapshot,
 ) -> None:
     if feature_set.input_lineage.snapshot_id != snapshot.snapshot_id:
-        raise DomainInvariantViolation("DerivedFeatureSet snapshot lineage does not match filter input")
+        raise DomainInvariantViolation(
+            "DerivedFeatureSet snapshot lineage does not match filter input"
+        )
     if feature_set.input_lineage.snapshot_version != snapshot.version:
-        raise DomainInvariantViolation("DerivedFeatureSet snapshot version does not match filter input")
+        raise DomainInvariantViolation(
+            "DerivedFeatureSet snapshot version does not match filter input"
+        )
     if feature_set.input_lineage.requirement_id != requirement.requirement_id:
-        raise DomainInvariantViolation("DerivedFeatureSet requirement lineage does not match filter input")
+        raise DomainInvariantViolation(
+            "DerivedFeatureSet requirement lineage does not match filter input"
+        )
     if feature_set.input_lineage.requirement_version != requirement.version:
-        raise DomainInvariantViolation("DerivedFeatureSet requirement version does not match filter input")
+        raise DomainInvariantViolation(
+            "DerivedFeatureSet requirement version does not match filter input"
+        )
 
 
-def _candidates_from_snapshot(snapshot: CandidateSnapshot) -> tuple[OfferBackedItineraryCandidate, ...]:
+def _candidates_from_snapshot(
+    snapshot: CandidateSnapshot,
+) -> tuple[OfferBackedItineraryCandidate, ...]:
     itinerary_ids = {itinerary.itinerary_id for itinerary in snapshot.itineraries}
     candidates = []
     for offer in snapshot.offers:

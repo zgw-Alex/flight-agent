@@ -104,14 +104,27 @@ def test_departure_date_filter_pass_fail_and_unknown_are_three_valued() -> None:
     assert statuses[OfferId("offer-fail")] is ConstraintEvaluationStatus.FAIL
 
     unknown_result = filter_result(feature_set=feature_set_with_unknown_date_for("offer-pass"))
-    assert statuses_by_offer(unknown_result)[OfferId("offer-pass")] is ConstraintEvaluationStatus.UNKNOWN
-    assert statuses_by_offer(unknown_result)[OfferId("offer-pass")] is not ConstraintEvaluationStatus.FAIL
-    assert statuses_by_offer(unknown_result)[OfferId("offer-pass")] is not ConstraintEvaluationStatus.PASS
+    assert (
+        statuses_by_offer(unknown_result)[OfferId("offer-pass")]
+        is ConstraintEvaluationStatus.UNKNOWN
+    )
+    assert (
+        statuses_by_offer(unknown_result)[OfferId("offer-pass")]
+        is not ConstraintEvaluationStatus.FAIL
+    )
+    assert (
+        statuses_by_offer(unknown_result)[OfferId("offer-pass")]
+        is not ConstraintEvaluationStatus.PASS
+    )
 
 
 def test_unsupported_max_price_and_max_stops_are_explicit_failures_not_guesses() -> None:
     with pytest.raises(DomainInvariantViolation, match="Unsupported filter constraint scope"):
-        filter_result(requirement=requirement_with(ConstraintScope.PASSENGER_COUNT, passenger_count_constraint()))
+        filter_result(
+            requirement=requirement_with(
+                ConstraintScope.PASSENGER_COUNT, passenger_count_constraint()
+            )
+        )
 
     m5_price_preference = SoftPreference(
         preference_id=PreferenceId("structured-lower-price"),
@@ -127,14 +140,19 @@ def test_unsupported_max_price_and_max_stops_are_explicit_failures_not_guesses()
     result = filter_result(requirement=requirement)
 
     assert len(result.evaluations) == len(sample_snapshot().offers)
-    assert all(evaluation.constraint_id == ConstraintId("departure-date") for evaluation in result.evaluations)
+    assert all(
+        evaluation.constraint_id == ConstraintId("departure-date")
+        for evaluation in result.evaluations
+    )
 
 
 def test_max_price_evaluator_pass_boundary_fail_and_currency_unknown() -> None:
     result = filter_result(
         snapshot=max_price_snapshot(),
         requirement=max_price_requirement(Decimal(800)),
-        feature_set=feature_set_for_price(max_price_snapshot(), max_price_requirement(Decimal(800))),
+        feature_set=feature_set_for_price(
+            max_price_snapshot(), max_price_requirement(Decimal(800))
+        ),
     )
 
     by_offer = evaluations_by_offer(result)
@@ -143,7 +161,9 @@ def test_max_price_evaluator_pass_boundary_fail_and_currency_unknown() -> None:
     assert by_offer[OfferId("offer-boundary")].status is ConstraintEvaluationStatus.PASS
     assert by_offer[OfferId("offer-expensive")].status is ConstraintEvaluationStatus.FAIL
     assert by_offer[OfferId("offer-cheap")].reason_code is ConstraintReasonCode.MAX_PRICE_SATISFIED
-    assert by_offer[OfferId("offer-expensive")].reason_code is ConstraintReasonCode.MAX_PRICE_EXCEEDED
+    assert (
+        by_offer[OfferId("offer-expensive")].reason_code is ConstraintReasonCode.MAX_PRICE_EXCEEDED
+    )
     assert by_offer[OfferId("offer-boundary")].expected.value.value == Money(Decimal(800), "CNY")
     assert by_offer[OfferId("offer-boundary")].actual.value.value == Money(Decimal(800), "CNY")
     assert result.qualified_candidates == (
@@ -155,10 +175,15 @@ def test_max_price_evaluator_pass_boundary_fail_and_currency_unknown() -> None:
     mismatch = filter_result(
         snapshot=max_price_snapshot(),
         requirement=max_price_requirement(Decimal(800), "USD"),
-        feature_set=feature_set_for_price(max_price_snapshot(), max_price_requirement(Decimal(800), "USD")),
+        feature_set=feature_set_for_price(
+            max_price_snapshot(), max_price_requirement(Decimal(800), "USD")
+        ),
     )
 
-    assert all(evaluation.status is ConstraintEvaluationStatus.UNKNOWN for evaluation in mismatch.evaluations)
+    assert all(
+        evaluation.status is ConstraintEvaluationStatus.UNKNOWN
+        for evaluation in mismatch.evaluations
+    )
     assert all(
         evaluation.reason_code is ConstraintReasonCode.MAX_PRICE_INSUFFICIENT_EVIDENCE
         for evaluation in mismatch.evaluations
@@ -190,10 +215,15 @@ def test_max_price_evaluator_is_evidence_aware_for_price_semantics_truth_table()
         OfferId("offer-lower-expensive"): ConstraintEvaluationStatus.FAIL,
     }
     assert candidate("offer-lower-cheap", "itinerary-lower-cheap") in result.uncertain_candidates
-    assert candidate("offer-lower-expensive", "itinerary-lower-expensive") in result.rejected_candidates
+    assert (
+        candidate("offer-lower-expensive", "itinerary-lower-expensive")
+        in result.rejected_candidates
+    )
 
 
-def test_max_price_evaluator_preserves_exact_boundary_and_keeps_lower_bound_boundary_unknown() -> None:
+def test_max_price_evaluator_preserves_exact_boundary_and_keeps_lower_bound_boundary_unknown() -> (
+    None
+):
     snapshot = snapshot_from_specs(
         (
             ("exact-boundary", date(2026, 9, 1), Decimal(800), PriceSemantics.EXACT),
@@ -208,8 +238,14 @@ def test_max_price_evaluator_preserves_exact_boundary_and_keeps_lower_bound_boun
         feature_set=feature_set_for_price(snapshot, requirement),
     )
 
-    assert statuses_by_offer(result)[OfferId("offer-exact-boundary")] is ConstraintEvaluationStatus.PASS
-    assert statuses_by_offer(result)[OfferId("offer-lower-boundary")] is ConstraintEvaluationStatus.UNKNOWN
+    assert (
+        statuses_by_offer(result)[OfferId("offer-exact-boundary")]
+        is ConstraintEvaluationStatus.PASS
+    )
+    assert (
+        statuses_by_offer(result)[OfferId("offer-lower-boundary")]
+        is ConstraintEvaluationStatus.UNKNOWN
+    )
     assert evaluations_by_offer(result)[OfferId("offer-lower-boundary")].reason_code is (
         ConstraintReasonCode.MAX_PRICE_INSUFFICIENT_EVIDENCE
     )
@@ -284,7 +320,10 @@ def test_max_price_unknown_feature_is_uncertain_not_filter_empty() -> None:
 
     result = filter_result(snapshot=snapshot, requirement=requirement, feature_set=feature_set)
 
-    assert evaluations_by_offer(result)[OfferId("offer-expensive")].status is ConstraintEvaluationStatus.UNKNOWN
+    assert (
+        evaluations_by_offer(result)[OfferId("offer-expensive")].status
+        is ConstraintEvaluationStatus.UNKNOWN
+    )
     assert candidate("offer-expensive", "itinerary-expensive") in result.uncertain_candidates
     assert result.direction is FilterResultDirection.QUALIFIED_AVAILABLE
 
@@ -312,7 +351,9 @@ def test_max_price_definitive_filter_empty_foundation_is_real_and_snapshot_prese
         candidate("offer-b", "itinerary-b"),
     )
     assert result.direction is FilterResultDirection.FILTER_EMPTY
-    assert all(evaluation.status is ConstraintEvaluationStatus.FAIL for evaluation in result.evaluations)
+    assert all(
+        evaluation.status is ConstraintEvaluationStatus.FAIL for evaluation in result.evaluations
+    )
     assert snapshot == before_snapshot
     assert requirement == before_requirement
     assert feature_set == before_feature_set
@@ -358,7 +399,9 @@ def test_max_price_preserves_full_evaluation_with_departure_date_and_is_determin
 def test_max_price_registry_and_threshold_invariants_are_stable() -> None:
     registry = m6_default_complete_filtering_engine().evaluator_registry
 
-    assert isinstance(registry.evaluator_for(max_price_constraint(Decimal(800))), MaxPriceConstraintEvaluator)
+    assert isinstance(
+        registry.evaluator_for(max_price_constraint(Decimal(800))), MaxPriceConstraintEvaluator
+    )
 
     snapshot = max_price_snapshot()
     tight = filter_result(
@@ -392,7 +435,10 @@ def test_multiple_constraints_preserve_full_evidence_even_when_one_fails() -> No
     assert len(result.evaluations) == len(sample_snapshot().offers)
     assert all(evaluation.evidence for evaluation in result.evaluations)
     assert all(evaluation.expected.label == "departure_date" for evaluation in result.evaluations)
-    assert all(evaluation.actual.label == "departure_date_matches_requirement" for evaluation in result.evaluations)
+    assert all(
+        evaluation.actual.label == "departure_date_matches_requirement"
+        for evaluation in result.evaluations
+    )
 
 
 def test_candidate_eligibility_aggregation_and_partition_are_stable() -> None:
@@ -403,7 +449,10 @@ def test_candidate_eligibility_aggregation_and_partition_are_stable() -> None:
     assert result.rejected_candidates == (candidate("offer-fail", "itinerary-fail"),)
     assert result.uncertain_candidates == ()
 
-    statuses = {eligibility.candidate.offer_id: eligibility.status for eligibility in result.candidate_eligibilities}
+    statuses = {
+        eligibility.candidate.offer_id: eligibility.status
+        for eligibility in result.candidate_eligibilities
+    }
     assert statuses[OfferId("offer-pass")].value == "ELIGIBLE"
     assert statuses[OfferId("offer-fail")].value == "INELIGIBLE"
 
@@ -454,26 +503,38 @@ def test_duplicate_evaluator_registration_fails() -> None:
 
 
 def test_scope_any_and_all_semantics() -> None:
-    assert aggregate_segment_evaluations(
-        (
-            ConstraintEvaluationStatus.FAIL,
-            ConstraintEvaluationStatus.UNKNOWN,
-            ConstraintEvaluationStatus.PASS,
-        ),
-        SegmentSelection.ANY_SEGMENT,
-    ) is ConstraintEvaluationStatus.PASS
-    assert aggregate_segment_evaluations(
-        (ConstraintEvaluationStatus.FAIL, ConstraintEvaluationStatus.UNKNOWN),
-        SegmentSelection.ANY_SEGMENT,
-    ) is ConstraintEvaluationStatus.UNKNOWN
-    assert aggregate_segment_evaluations(
-        (ConstraintEvaluationStatus.PASS, ConstraintEvaluationStatus.UNKNOWN),
-        SegmentSelection.ALL_SEGMENTS,
-    ) is ConstraintEvaluationStatus.UNKNOWN
-    assert aggregate_segment_evaluations(
-        (ConstraintEvaluationStatus.PASS, ConstraintEvaluationStatus.FAIL),
-        SegmentSelection.ALL_SEGMENTS,
-    ) is ConstraintEvaluationStatus.FAIL
+    assert (
+        aggregate_segment_evaluations(
+            (
+                ConstraintEvaluationStatus.FAIL,
+                ConstraintEvaluationStatus.UNKNOWN,
+                ConstraintEvaluationStatus.PASS,
+            ),
+            SegmentSelection.ANY_SEGMENT,
+        )
+        is ConstraintEvaluationStatus.PASS
+    )
+    assert (
+        aggregate_segment_evaluations(
+            (ConstraintEvaluationStatus.FAIL, ConstraintEvaluationStatus.UNKNOWN),
+            SegmentSelection.ANY_SEGMENT,
+        )
+        is ConstraintEvaluationStatus.UNKNOWN
+    )
+    assert (
+        aggregate_segment_evaluations(
+            (ConstraintEvaluationStatus.PASS, ConstraintEvaluationStatus.UNKNOWN),
+            SegmentSelection.ALL_SEGMENTS,
+        )
+        is ConstraintEvaluationStatus.UNKNOWN
+    )
+    assert (
+        aggregate_segment_evaluations(
+            (ConstraintEvaluationStatus.PASS, ConstraintEvaluationStatus.FAIL),
+            SegmentSelection.ALL_SEGMENTS,
+        )
+        is ConstraintEvaluationStatus.FAIL
+    )
 
 
 def test_filter_run_result_lineage_and_immutability() -> None:
@@ -519,10 +580,14 @@ def test_wrong_feature_type_and_lineage_are_programming_failures() -> None:
         value_type=FeatureValueType.MONEY,
         evidence=(EvidenceRef(EvidenceSource.OFFER, OfferId("offer-pass")),),
         canonical_dependencies=(
-            m6_default_feature_registry().get(DEPARTURE_DATE_MATCHES_REQUIREMENT).canonical_dependencies
+            m6_default_feature_registry()
+            .get(DEPARTURE_DATE_MATCHES_REQUIREMENT)
+            .canonical_dependencies
         ),
         requirement_dependencies=(
-            m6_default_feature_registry().get(DEPARTURE_DATE_MATCHES_REQUIREMENT).requirement_dependencies
+            m6_default_feature_registry()
+            .get(DEPARTURE_DATE_MATCHES_REQUIREMENT)
+            .requirement_dependencies
         ),
         definition_version=FeatureDefinitionVersion("departure-date-match-v1"),
     )
@@ -632,7 +697,9 @@ def feature_set_with_unknown_total_price(
     return replace_feature_value(feature_set, unknown)
 
 
-def replace_feature_value(feature_set: DerivedFeatureSet, replacement: FeatureValue) -> DerivedFeatureSet:
+def replace_feature_value(
+    feature_set: DerivedFeatureSet, replacement: FeatureValue
+) -> DerivedFeatureSet:
     return DerivedFeatureSet(
         feature_set_id=feature_set.feature_set_id,
         run_id=feature_set.run_id,
@@ -641,7 +708,8 @@ def replace_feature_value(feature_set: DerivedFeatureSet, replacement: FeatureVa
         reference_data_versions=feature_set.reference_data_versions,
         values=tuple(
             replacement
-            if value.candidate == replacement.candidate and value.feature_key == replacement.feature_key
+            if value.candidate == replacement.candidate
+            and value.feature_key == replacement.feature_key
             else value
             for value in feature_set.values
         ),
@@ -658,7 +726,10 @@ def evaluations_by_offer(result: CompleteFilterResult) -> dict[OfferId, Constrai
 
 def semantic_filter_result(result: CompleteFilterResult) -> tuple:
     return (
-        tuple((evaluation.candidate, evaluation.constraint_id, evaluation.status) for evaluation in result.evaluations),
+        tuple(
+            (evaluation.candidate, evaluation.constraint_id, evaluation.status)
+            for evaluation in result.evaluations
+        ),
         result.partition,
         result.direction,
     )
@@ -723,7 +794,9 @@ def max_price_constraint(amount: Decimal, currency: str = "CNY") -> HardConstrai
     )
 
 
-def feature_set_for_price(snapshot: CandidateSnapshot, requirement: RequirementState) -> DerivedFeatureSet:
+def feature_set_for_price(
+    snapshot: CandidateSnapshot, requirement: RequirementState
+) -> DerivedFeatureSet:
     return m6_default_derived_feature_engine().compute(
         feature_set_id=DerivedFeatureSetId("feature-set-1"),
         run_id=DerivedFeatureRunId("feature-run-1"),
@@ -805,8 +878,12 @@ def snapshot_from_specs(
             flight_number=f"51{len(segments) + 1:02d}",
             departure_airport="PEK",
             arrival_airport="NKG",
-            departure_at=instant(departure_date.year, departure_date.month, departure_date.day, 8, 30),
-            arrival_at=instant(departure_date.year, departure_date.month, departure_date.day, 10, 30),
+            departure_at=instant(
+                departure_date.year, departure_date.month, departure_date.day, 8, 30
+            ),
+            arrival_at=instant(
+                departure_date.year, departure_date.month, departure_date.day, 10, 30
+            ),
             operating_carrier=DomainValue.known("MU"),
             aircraft_type=DomainValue.not_provided(),
             provenance=(ProvenanceRef("canonical", f"segment-{suffix}-1"),),
@@ -817,8 +894,12 @@ def snapshot_from_specs(
             flight_number=f"52{len(segments) + 1:02d}",
             departure_airport="NKG",
             arrival_airport="SHA",
-            departure_at=instant(departure_date.year, departure_date.month, departure_date.day, 11, 30),
-            arrival_at=instant(departure_date.year, departure_date.month, departure_date.day, 13, 30),
+            departure_at=instant(
+                departure_date.year, departure_date.month, departure_date.day, 11, 30
+            ),
+            arrival_at=instant(
+                departure_date.year, departure_date.month, departure_date.day, 13, 30
+            ),
             operating_carrier=DomainValue.known("MU"),
             aircraft_type=DomainValue.not_provided(),
             provenance=(ProvenanceRef("canonical", f"segment-{suffix}-2"),),

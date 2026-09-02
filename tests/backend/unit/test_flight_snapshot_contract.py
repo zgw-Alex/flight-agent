@@ -409,7 +409,9 @@ def test_similar_flight_objects_are_not_silently_deduplicated() -> None:
     )
     candidates = snapshot(
         segments=(first, second),
-        itineraries=(Itinerary(ItineraryId("itinerary-1"), (SegmentId("segment-a"), SegmentId("segment-b"))),),
+        itineraries=(
+            Itinerary(ItineraryId("itinerary-1"), (SegmentId("segment-a"), SegmentId("segment-b"))),
+        ),
         offers=(offer(),),
     )
 
