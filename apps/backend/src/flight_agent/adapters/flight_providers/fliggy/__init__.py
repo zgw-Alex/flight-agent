@@ -26,13 +26,22 @@ from flight_agent.adapters.flight_providers.fliggy.browser_probe import (
     sanitize_probe_payload,
     summarize_detector_state,
 )
+from flight_agent.adapters.flight_providers.fliggy.canonical_entry import (
+    DEFAULT_FLIGGY_CANONICAL_ENTRY_PROFILE,
+    FLIGGY_CANONICAL_ENTRY_PROFILE_VERSION,
+    FliggyCanonicalEntry,
+    FliggyCanonicalEntryProfile,
+    prepare_fliggy_mapping_for_canonical_entry,
+)
 from flight_agent.adapters.flight_providers.fliggy.mapper import (
     FLIGGY_PROVIDER_MAPPER_VERSION,
     FliggyEvidenceMapper,
 )
 
 __all__ = [
+    "DEFAULT_FLIGGY_CANONICAL_ENTRY_PROFILE",
     "FLIGGY_BROWSER_PROBE_VERSION",
+    "FLIGGY_CANONICAL_ENTRY_PROFILE_VERSION",
     "FLIGGY_PROVIDER_MAPPER_VERSION",
     "BrowserAcquisitionMode",
     "BrowserProbeOutcome",
@@ -41,6 +50,8 @@ __all__ = [
     "DomTraversalAssessment",
     "ExperimentDiagnosis",
     "FieldEvidence",
+    "FliggyCanonicalEntry",
+    "FliggyCanonicalEntryProfile",
     "FliggyEvidenceMapper",
     "FliggyFlightEvidence",
     "FliggyPageIdentity",
@@ -55,6 +66,7 @@ __all__ = [
     "classify_fliggy_page_identity",
     "classify_result_state",
     "extract_level1_evidence",
+    "prepare_fliggy_mapping_for_canonical_entry",
     "run_fliggy_browser_probe",
     "sanitize_probe_payload",
     "summarize_detector_state",
