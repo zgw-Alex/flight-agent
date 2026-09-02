@@ -1,5 +1,17 @@
 """Experimental CTRIP browser acquisition probe boundary."""
 
+from flight_agent.adapters.flight_providers.ctrip.assisted_capture import (
+    CTRIP_ASSISTED_ACQUISITION_STRATEGY,
+    CTRIP_ASSISTED_CAPTURE_VERSION,
+    AssistedCaptureClassification,
+    AssistedCaptureInput,
+    AssistedCaptureMode,
+    AssistedCaptureResult,
+    AssistedEvidenceLevel,
+    UnsafeAssistedEvidenceError,
+    import_ctrip_assisted_capture,
+    validate_sanitized_ctrip_evidence,
+)
 from flight_agent.adapters.flight_providers.ctrip.browser_probe import (
     CTRIP_BROWSER_PROBE_VERSION,
     CTRIP_PROVIDER_ID,
@@ -23,8 +35,15 @@ from flight_agent.adapters.flight_providers.ctrip.browser_probe import (
 )
 
 __all__ = [
+    "CTRIP_ASSISTED_ACQUISITION_STRATEGY",
+    "CTRIP_ASSISTED_CAPTURE_VERSION",
     "CTRIP_BROWSER_PROBE_VERSION",
     "CTRIP_PROVIDER_ID",
+    "AssistedCaptureClassification",
+    "AssistedCaptureInput",
+    "AssistedCaptureMode",
+    "AssistedCaptureResult",
+    "AssistedEvidenceLevel",
     "BrowserAcquisitionMode",
     "BrowserProbeOutcome",
     "BrowserProbeStage",
@@ -36,10 +55,13 @@ __all__ = [
     "FieldEvidence",
     "ProviderMarketCompleteness",
     "StageDiagnostic",
+    "UnsafeAssistedEvidenceError",
     "classify_ctrip_result_state",
     "extract_level1_evidence_from_payloads",
     "extract_level2_offer_evidence",
+    "import_ctrip_assisted_capture",
     "run_ctrip_browser_probe",
     "sanitize_probe_payload",
     "summarize_ctrip_detector_state",
+    "validate_sanitized_ctrip_evidence",
 ]
