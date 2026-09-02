@@ -13,6 +13,7 @@ from flight_agent.adapters.flight_providers.fliggy.browser_probe import (
     FliggyPageIdentity,
     ProbeInput,
     ProbeRunResult,
+    ProviderMarketCompleteness,
     ResultContextCandidate,
     SearchFormReadiness,
     StageDiagnostic,
@@ -25,9 +26,14 @@ from flight_agent.adapters.flight_providers.fliggy.browser_probe import (
     sanitize_probe_payload,
     summarize_detector_state,
 )
+from flight_agent.adapters.flight_providers.fliggy.mapper import (
+    FLIGGY_PROVIDER_MAPPER_VERSION,
+    FliggyEvidenceMapper,
+)
 
 __all__ = [
     "FLIGGY_BROWSER_PROBE_VERSION",
+    "FLIGGY_PROVIDER_MAPPER_VERSION",
     "BrowserAcquisitionMode",
     "BrowserProbeOutcome",
     "BrowserProbeStage",
@@ -35,10 +41,12 @@ __all__ = [
     "DomTraversalAssessment",
     "ExperimentDiagnosis",
     "FieldEvidence",
+    "FliggyEvidenceMapper",
     "FliggyFlightEvidence",
     "FliggyPageIdentity",
     "ProbeInput",
     "ProbeRunResult",
+    "ProviderMarketCompleteness",
     "ResultContextCandidate",
     "SearchFormReadiness",
     "StageDiagnostic",
