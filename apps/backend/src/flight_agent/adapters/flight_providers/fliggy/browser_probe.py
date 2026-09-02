@@ -50,6 +50,17 @@ class BrowserProbeOutcome(str, Enum):
     EVIDENCE_INSUFFICIENT = "EVIDENCE_INSUFFICIENT"
 
 
+class Level2ExpansionOutcome(str, Enum):
+    SUCCESS_EXPANDED = "SUCCESS_EXPANDED"
+    SUCCESS_EMPTY = "SUCCESS_EMPTY"
+    EVIDENCE_INSUFFICIENT = "EVIDENCE_INSUFFICIENT"
+    ACTION_NOT_AVAILABLE = "ACTION_NOT_AVAILABLE"
+    ACCESS_CHALLENGE = "ACCESS_CHALLENGE"
+    TIMEOUT = "TIMEOUT"
+    NETWORK_ERROR = "NETWORK_ERROR"
+    PROVIDER_ERROR = "PROVIDER_ERROR"
+
+
 class BrowserProbeStage(str, Enum):
     BROWSER_LAUNCH = "BROWSER_LAUNCH"
     ENTRY_NAVIGATION = "ENTRY_NAVIGATION"
@@ -303,6 +314,129 @@ class FliggyFlightEvidence:
 
 
 @dataclass(frozen=True)
+class Level2ExpansionTarget:
+    parent_level1_ref: str
+    level1_evidence_index: int | None = None
+    provider_row_ref: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.parent_level1_ref.strip() == "":
+            raise ValueError("Level2ExpansionTarget parent_level1_ref is required")
+        if self.level1_evidence_index is not None and self.level1_evidence_index <= 0:
+            raise ValueError("Level2ExpansionTarget level1_evidence_index must be positive")
+
+    def to_dict(self) -> dict[str, str | int | None]:
+        return {
+            "parent_level1_ref": self.parent_level1_ref,
+            "level1_evidence_index": self.level1_evidence_index,
+            "provider_row_ref": self.provider_row_ref,
+        }
+
+
+@dataclass(frozen=True)
+class Level2ExpansionBounds:
+    max_offer_rows: int = 20
+    max_wait_ms: int = 5000
+    max_retries: int = 1
+
+    def __post_init__(self) -> None:
+        if self.max_offer_rows <= 0:
+            raise ValueError("Level2ExpansionBounds max_offer_rows must be positive")
+        if self.max_wait_ms <= 0:
+            raise ValueError("Level2ExpansionBounds max_wait_ms must be positive")
+        if self.max_retries < 0:
+            raise ValueError("Level2ExpansionBounds max_retries must not be negative")
+
+    def to_dict(self) -> dict[str, int | bool]:
+        return {
+            "max_offer_rows": self.max_offer_rows,
+            "max_wait_ms": self.max_wait_ms,
+            "max_retries": self.max_retries,
+            "bounded_expansion": True,
+        }
+
+
+@dataclass(frozen=True)
+class FliggyLevel2OfferRowEvidence:
+    offer_row_ref: str
+    sequence: int
+    parent_level1_ref: str
+    raw_seller_text: FieldEvidence
+    raw_seller_marker_text: FieldEvidence
+    raw_price_text: FieldEvidence
+    price_amount: int | None
+    price_currency: str | None
+    raw_cabin_product_text: FieldEvidence
+    raw_baggage_text: FieldEvidence
+    raw_refund_change_rule_text: FieldEvidence
+    raw_availability_text: FieldEvidence
+    action_evidence: FieldEvidence
+    row_diagnostic: dict[str, str | int | bool | None]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "offer_row_ref": self.offer_row_ref,
+            "sequence": self.sequence,
+            "parent_level1_ref": self.parent_level1_ref,
+            "raw_seller_text": self.raw_seller_text.to_dict(),
+            "raw_seller_marker_text": self.raw_seller_marker_text.to_dict(),
+            "raw_price_text": self.raw_price_text.to_dict(),
+            "price_amount": self.price_amount,
+            "price_currency": self.price_currency,
+            "raw_cabin_product_text": self.raw_cabin_product_text.to_dict(),
+            "raw_baggage_text": self.raw_baggage_text.to_dict(),
+            "raw_refund_change_rule_text": self.raw_refund_change_rule_text.to_dict(),
+            "raw_availability_text": self.raw_availability_text.to_dict(),
+            "action_evidence": self.action_evidence.to_dict(),
+            "row_diagnostic": self.row_diagnostic,
+        }
+
+
+@dataclass(frozen=True)
+class Level2ExpansionResult:
+    provider_identity: str
+    acquisition_mode: BrowserAcquisitionMode
+    acquired_at: datetime
+    experiment_run_id: str | None
+    search_plan_id: str | None
+    execution_id: str | None
+    target: Level2ExpansionTarget
+    outcome: Level2ExpansionOutcome
+    observed_offer_row_count: int
+    duration_ms: int
+    sanitized_source_ref: str | None
+    parser_selector_probe_version: str
+    bounds: Level2ExpansionBounds
+    offer_rows: tuple[FliggyLevel2OfferRowEvidence, ...]
+    diagnostics: dict[str, Any]
+
+    def to_dict(self) -> dict[str, Any]:
+        return sanitize_probe_payload(
+            {
+                "provider_identity": self.provider_identity,
+                "acquisition_mode": self.acquisition_mode.value,
+                "acquired_at": self.acquired_at.isoformat(),
+                "experiment_run_id": self.experiment_run_id,
+                "search_plan_id": self.search_plan_id,
+                "execution_id": self.execution_id,
+                "target": self.target.to_dict(),
+                "parent_level1_ref": self.target.parent_level1_ref,
+                "outcome": self.outcome.value,
+                "observed_offer_row_count": self.observed_offer_row_count,
+                "duration_ms": self.duration_ms,
+                "sanitized_source_ref": self.sanitized_source_ref,
+                "parser_selector_probe_version": self.parser_selector_probe_version,
+                "bounds": self.bounds.to_dict(),
+                "offer_rows": [item.to_dict() for item in self.offer_rows],
+                "diagnostics": self.diagnostics,
+            }
+        )
+
+    def to_json(self) -> str:
+        return json.dumps(self.to_dict(), ensure_ascii=False, indent=2, sort_keys=True)
+
+
+@dataclass(frozen=True)
 class ProbeRunResult:
     provider_identity: str
     acquisition_mode: BrowserAcquisitionMode
@@ -511,6 +645,226 @@ def extract_level1_evidence(html: str) -> tuple[FliggyFlightEvidence, ...]:
             )
         )
     return tuple(evidence)
+
+
+def extract_level2_offer_evidence(
+    html: str,
+    *,
+    parent_level1_ref: str,
+    bounds: Level2ExpansionBounds | None = None,
+) -> tuple[FliggyLevel2OfferRowEvidence, ...]:
+    target_bounds = bounds or Level2ExpansionBounds()
+    root = parse_html(html)
+    evidence: list[FliggyLevel2OfferRowEvidence] = []
+    for sequence, row in enumerate(_level2_offer_rows(root)[: target_bounds.max_offer_rows], start=1):
+        raw_price_text = _first_field(
+            row,
+            (
+                "[data-testid='offer-price']",
+                ".offer-price",
+                ".J_OfferPrice",
+                ".price",
+                "[aria-label*='价格']",
+                "[aria-label*='票价']",
+            ),
+        )
+        action_selector = _first_selector(
+            row,
+            (
+                "[data-testid='select-offer-btn']",
+                "button[aria-label*='预订']",
+                "button[aria-label*='订']",
+                ".book-button",
+                "button",
+            ),
+        )
+        evidence.append(
+            FliggyLevel2OfferRowEvidence(
+                offer_row_ref=_level2_offer_row_ref(row, parent_level1_ref=parent_level1_ref, sequence=sequence),
+                sequence=sequence,
+                parent_level1_ref=parent_level1_ref,
+                raw_seller_text=_first_field(
+                    row,
+                    (
+                        "[data-testid='seller-name']",
+                        ".seller-name",
+                        ".shop-name",
+                        ".seller",
+                        "[aria-label*='供应商']",
+                        "[aria-label*='商家']",
+                    ),
+                ),
+                raw_seller_marker_text=_first_field(
+                    row,
+                    (
+                        "[data-testid='seller-marker']",
+                        ".seller-marker",
+                        ".seller-tag",
+                        ".tag",
+                        ".badge",
+                        "[aria-label*='直营']",
+                    ),
+                ),
+                raw_price_text=raw_price_text,
+                price_amount=_parse_price_amount(raw_price_text.raw_text),
+                price_currency=_parse_price_currency(raw_price_text.raw_text),
+                raw_cabin_product_text=_first_field(
+                    row,
+                    (
+                        "[data-testid='cabin-product']",
+                        ".cabin-product",
+                        ".product-name",
+                        ".cabin",
+                        "[aria-label*='舱']",
+                    ),
+                ),
+                raw_baggage_text=_first_field(
+                    row,
+                    ("[data-testid='baggage']", ".baggage", ".luggage", "[aria-label*='行李']"),
+                ),
+                raw_refund_change_rule_text=_first_field(
+                    row,
+                    (
+                        "[data-testid='fare-rule']",
+                        ".fare-rule",
+                        ".refund-change",
+                        ".rule",
+                        "[aria-label*='退改']",
+                    ),
+                ),
+                raw_availability_text=_first_field(
+                    row,
+                    (
+                        "[data-testid='availability']",
+                        ".availability",
+                        ".stock",
+                        "[aria-label*='仅剩']",
+                        "[aria-label*='余']",
+                    ),
+                ),
+                action_evidence=(
+                    FieldEvidence.observed("level2 offer action present", action_selector)
+                    if action_selector is not None
+                    else FieldEvidence.missing("no level2 offer action observed")
+                ),
+                row_diagnostic={
+                    "selector": _row_selector(row),
+                    "run_local_sequence": sequence,
+                    "text_length": len(row.text_content()),
+                    "provider_local_identity": True,
+                },
+            )
+        )
+    return tuple(evidence)
+
+
+def classify_level2_expansion_state(
+    html: str,
+    *,
+    action_available: bool = True,
+    timed_out: bool = False,
+) -> Level2ExpansionOutcome:
+    detector_state = summarize_detector_state(html)
+    if detector_state["access_challenge"] or detector_state["login_required"]:
+        return Level2ExpansionOutcome.ACCESS_CHALLENGE
+    if detector_state["provider_error"]:
+        return Level2ExpansionOutcome.PROVIDER_ERROR
+    if timed_out:
+        return Level2ExpansionOutcome.TIMEOUT
+    if not action_available:
+        return Level2ExpansionOutcome.ACTION_NOT_AVAILABLE
+    if _level2_offer_rows(parse_html(html)):
+        return Level2ExpansionOutcome.SUCCESS_EXPANDED
+    if _contains_any(html, ("暂无可订", "暂无舱位", "无可售报价", "已售罄", "no offers", "sold out")):
+        return Level2ExpansionOutcome.SUCCESS_EMPTY
+    return Level2ExpansionOutcome.EVIDENCE_INSUFFICIENT
+
+
+def build_level2_expansion_result_from_html(
+    html: str,
+    *,
+    target: Level2ExpansionTarget,
+    acquired_at: datetime,
+    experiment_run_id: str | None = None,
+    search_plan_id: str | None = None,
+    execution_id: str | None = None,
+    duration_ms: int = 0,
+    source_url: str | None = None,
+    action_available: bool = True,
+    timed_out: bool = False,
+    bounds: Level2ExpansionBounds | None = None,
+    diagnostics: dict[str, Any] | None = None,
+) -> Level2ExpansionResult:
+    target_bounds = bounds or Level2ExpansionBounds()
+    outcome = classify_level2_expansion_state(html, action_available=action_available, timed_out=timed_out)
+    offer_rows = (
+        extract_level2_offer_evidence(html, parent_level1_ref=target.parent_level1_ref, bounds=target_bounds)
+        if outcome is Level2ExpansionOutcome.SUCCESS_EXPANDED
+        else ()
+    )
+    return Level2ExpansionResult(
+        provider_identity=FLIGGY_PROVIDER_ID,
+        acquisition_mode=BrowserAcquisitionMode.BROWSER,
+        acquired_at=acquired_at,
+        experiment_run_id=experiment_run_id,
+        search_plan_id=search_plan_id,
+        execution_id=execution_id,
+        target=target,
+        outcome=outcome,
+        observed_offer_row_count=len(offer_rows),
+        duration_ms=duration_ms,
+        sanitized_source_ref=_sanitize_source_ref(source_url) if source_url is not None else None,
+        parser_selector_probe_version=FLIGGY_BROWSER_PROBE_VERSION,
+        bounds=target_bounds,
+        offer_rows=offer_rows,
+        diagnostics={
+            "read_only": True,
+            "clicked": False,
+            "parent_level1_evidence_preserved": True,
+            "level2_mapping_performed": False,
+            "bounded_expansion": target_bounds.to_dict(),
+            **(diagnostics or {}),
+        },
+    )
+
+
+def build_level2_expansion_failure_result(
+    *,
+    target: Level2ExpansionTarget,
+    outcome: Level2ExpansionOutcome,
+    acquired_at: datetime,
+    duration_ms: int = 0,
+    source_url: str | None = None,
+    bounds: Level2ExpansionBounds | None = None,
+    diagnostics: dict[str, Any] | None = None,
+) -> Level2ExpansionResult:
+    if outcome is Level2ExpansionOutcome.SUCCESS_EXPANDED:
+        raise ValueError("build_level2_expansion_failure_result cannot emit SUCCESS_EXPANDED")
+    target_bounds = bounds or Level2ExpansionBounds()
+    return Level2ExpansionResult(
+        provider_identity=FLIGGY_PROVIDER_ID,
+        acquisition_mode=BrowserAcquisitionMode.BROWSER,
+        acquired_at=acquired_at,
+        experiment_run_id=None,
+        search_plan_id=None,
+        execution_id=None,
+        target=target,
+        outcome=outcome,
+        observed_offer_row_count=0,
+        duration_ms=duration_ms,
+        sanitized_source_ref=_sanitize_source_ref(source_url) if source_url is not None else None,
+        parser_selector_probe_version=FLIGGY_BROWSER_PROBE_VERSION,
+        bounds=target_bounds,
+        offer_rows=(),
+        diagnostics={
+            "read_only": True,
+            "clicked": False,
+            "parent_level1_evidence_preserved": True,
+            "level2_mapping_performed": False,
+            "bounded_expansion": target_bounds.to_dict(),
+            **(diagnostics or {}),
+        },
+    )
 
 
 def assess_dom_coverage(
@@ -967,6 +1321,37 @@ def _result_rows(root: HtmlNode) -> list[HtmlNode]:
     return rows
 
 
+def _level2_offer_rows(root: HtmlNode) -> list[HtmlNode]:
+    selectors = (
+        "[data-testid='fliggy-offer-row']",
+        "[data-testid='offer-row']",
+        ".expanded-offer-row",
+        ".level2-offer-row",
+        ".offer-row",
+        ".seller-row",
+    )
+    rows: list[HtmlNode] = []
+    seen: set[int] = set()
+    for selector in selectors:
+        for row in root.select(selector):
+            offer_like = _contains_any(
+                row.text_content(),
+                ("¥", "￥", "元", "预订", "订票", "退改", "行李", "舱", "商家", "供应商", "直营"),
+            )
+            if id(row) not in seen and offer_like:
+                rows.append(row)
+                seen.add(id(row))
+    return rows
+
+
+def _level2_offer_row_ref(row: HtmlNode, *, parent_level1_ref: str, sequence: int) -> str:
+    for attr in ("data-offer-id", "data-offer-ref", "data-row-id", "id"):
+        value = row.attrs.get(attr)
+        if value is not None and value.strip():
+            return f"fliggy-level2-offer:{parent_level1_ref}:{_normalize_space(value)}"
+    return f"fliggy-level2-offer:{parent_level1_ref}:{sequence}"
+
+
 def _first_field(row: HtmlNode, selectors: tuple[str, ...]) -> FieldEvidence:
     for selector in selectors:
         for node in row.select(selector):
@@ -1037,6 +1422,21 @@ def _sanitize_source_ref(url: str) -> str:
     parts = urlsplit(url)
     allowed_query = tuple((key, value) for key, value in parse_qsl(parts.query) if key == "tab")
     return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(allowed_query), ""))
+
+
+def _parse_price_amount(raw_text: str | None) -> int | None:
+    if raw_text is None:
+        return None
+    digits = "".join(character for character in raw_text if character.isdigit())
+    return int(digits) if digits else None
+
+
+def _parse_price_currency(raw_text: str | None) -> str | None:
+    if raw_text is None:
+        return None
+    if _contains_any(raw_text, ("¥", "￥", "元", "cny", "rmb")):
+        return "CNY"
+    return None
 
 
 async def _submit_public_flight_search(context: Any, page: Any, probe_input: ProbeInput) -> None:
