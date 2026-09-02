@@ -833,6 +833,9 @@ def build_level2_expansion_failure_result(
     target: Level2ExpansionTarget,
     outcome: Level2ExpansionOutcome,
     acquired_at: datetime,
+    experiment_run_id: str | None = None,
+    search_plan_id: str | None = None,
+    execution_id: str | None = None,
     duration_ms: int = 0,
     source_url: str | None = None,
     bounds: Level2ExpansionBounds | None = None,
@@ -845,9 +848,9 @@ def build_level2_expansion_failure_result(
         provider_identity=FLIGGY_PROVIDER_ID,
         acquisition_mode=BrowserAcquisitionMode.BROWSER,
         acquired_at=acquired_at,
-        experiment_run_id=None,
-        search_plan_id=None,
-        execution_id=None,
+        experiment_run_id=experiment_run_id,
+        search_plan_id=search_plan_id,
+        execution_id=execution_id,
         target=target,
         outcome=outcome,
         observed_offer_row_count=0,
@@ -865,6 +868,226 @@ def build_level2_expansion_failure_result(
             **(diagnostics or {}),
         },
     )
+
+
+def build_level2_live_parent_ref(level1_evidence: FliggyFlightEvidence) -> str:
+    raw_identity = level1_evidence.raw_displayed_flight_identity.raw_text or "unknown"
+    compact_identity = "-".join(raw_identity.split()) or "unknown"
+    return f"fliggy-level1-live:{level1_evidence.evidence_index}:{compact_identity}"
+
+
+def map_level1_outcome_to_level2_failure(outcome: BrowserProbeOutcome) -> Level2ExpansionOutcome:
+    if outcome in {BrowserProbeOutcome.ACCESS_CHALLENGE, BrowserProbeOutcome.LOGIN_REQUIRED}:
+        return Level2ExpansionOutcome.ACCESS_CHALLENGE
+    if outcome is BrowserProbeOutcome.TIMEOUT:
+        return Level2ExpansionOutcome.TIMEOUT
+    if outcome is BrowserProbeOutcome.NETWORK_ERROR:
+        return Level2ExpansionOutcome.NETWORK_ERROR
+    if outcome is BrowserProbeOutcome.PROVIDER_ERROR:
+        return Level2ExpansionOutcome.PROVIDER_ERROR
+    if outcome is BrowserProbeOutcome.SUCCESS_EMPTY:
+        return Level2ExpansionOutcome.SUCCESS_EMPTY
+    return Level2ExpansionOutcome.EVIDENCE_INSUFFICIENT
+
+
+async def run_fliggy_level2_live_validation(
+    probe_input: ProbeInput,
+    *,
+    bounds: Level2ExpansionBounds | None = None,
+    max_level1_targets: int = 1,
+) -> Level2ExpansionResult:
+    """Run an opt-in bounded live validation of FLIGGY Level-2 evidence shape."""
+
+    if max_level1_targets <= 0 or max_level1_targets > 2:
+        raise ValueError("max_level1_targets must be between 1 and 2")
+    target_bounds = bounds or Level2ExpansionBounds(max_offer_rows=5, max_wait_ms=3000, max_retries=0)
+    started = time.monotonic()
+    acquired_at = datetime.now(UTC)
+    url = _build_fliggy_search_url(probe_input)
+    diagnostics: dict[str, Any] = {
+        "live_validation_unit": "M9-FLIGGY-LEVEL2-LIVE-U1",
+        "read_only": True,
+        "headless": probe_input.headless,
+        "level1_targets_attempted": 0,
+        "max_level1_targets": max_level1_targets,
+        "level2_mapping_performed": False,
+        "clicked": False,
+        "retries": 0,
+        "stop_policy": "stop_on_challenge_or_first_sufficient_evidence",
+    }
+
+    try:
+        from playwright.async_api import Error as PlaywrightError
+        from playwright.async_api import TimeoutError as PlaywrightTimeoutError
+        from playwright.async_api import async_playwright
+    except ImportError as exc:
+        raise RuntimeError("Playwright is required for the opt-in live FLIGGY Level-2 validation") from exc
+
+    target = Level2ExpansionTarget(parent_level1_ref="fliggy-level1-live:unavailable")
+    html = ""
+    try:
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch(headless=probe_input.headless)
+            context = await browser.new_context(storage_state=None)
+            page = await context.new_page()
+            page.set_default_timeout(_remaining_ms(started, probe_input.overall_deadline_seconds))
+            await page.goto(url, wait_until="domcontentloaded", timeout=_remaining_ms(started, probe_input.overall_deadline_seconds))
+            html = await page.content()
+            title = await page.title()
+            diagnostics["entry_page_identity"] = classify_fliggy_page_identity(url=page.url, title=title, html=html).value
+            diagnostics["entry_detector_state"] = summarize_detector_state(html)
+            diagnostics["final_sanitized_url"] = _sanitize_source_ref(page.url)
+            if diagnostics["entry_page_identity"] in {
+                FliggyPageIdentity.ACCESS_CHALLENGE.value,
+                FliggyPageIdentity.LOGIN_REQUIRED.value,
+            }:
+                await context.close()
+                await browser.close()
+                return build_level2_expansion_failure_result(
+                    target=target,
+                    outcome=Level2ExpansionOutcome.ACCESS_CHALLENGE,
+                    acquired_at=acquired_at,
+                    experiment_run_id=probe_input.experiment_run_id,
+                    search_plan_id=probe_input.search_plan_id,
+                    execution_id=probe_input.execution_id,
+                    duration_ms=int((time.monotonic() - started) * 1000),
+                    source_url=page.url,
+                    bounds=target_bounds,
+                    diagnostics=diagnostics,
+                )
+
+            readiness = await _capture_search_form_readiness(page)
+            diagnostics["search_form_readiness"] = readiness.to_dict()
+            if not readiness.is_ready():
+                await context.close()
+                await browser.close()
+                return build_level2_expansion_failure_result(
+                    target=target,
+                    outcome=Level2ExpansionOutcome.EVIDENCE_INSUFFICIENT,
+                    acquired_at=acquired_at,
+                    experiment_run_id=probe_input.experiment_run_id,
+                    search_plan_id=probe_input.search_plan_id,
+                    execution_id=probe_input.execution_id,
+                    duration_ms=int((time.monotonic() - started) * 1000),
+                    source_url=page.url,
+                    bounds=target_bounds,
+                    diagnostics={**diagnostics, "failure_kind": "search_form_not_ready"},
+                )
+
+            page_count_before_submit = len(context.pages)
+            await _submit_public_flight_search(context, page, probe_input)
+            diagnostics["search_submission_attempted"] = True
+            page, handoff_diagnostics = await _select_result_context_page(
+                context=context,
+                current_page=page,
+                probe_input=probe_input,
+                page_error_type=PlaywrightError,
+                page_count_before_submit=page_count_before_submit,
+                wait_ms=min(5000, max(500, _remaining_ms(started, probe_input.overall_deadline_seconds) - 500)),
+            )
+            diagnostics["result_context_handoff"] = handoff_diagnostics
+            await page.wait_for_load_state("networkidle", timeout=_remaining_ms(started, probe_input.overall_deadline_seconds))
+            html = await page.content()
+            title = await page.title()
+            diagnostics["result_page_identity"] = classify_fliggy_page_identity(url=page.url, title=title, html=html).value
+            diagnostics["result_detector_state"] = summarize_detector_state(html)
+            diagnostics["final_sanitized_url"] = _sanitize_source_ref(page.url)
+            level1_outcome = classify_result_state(html)
+            diagnostics["level1_outcome"] = level1_outcome.value
+            level1_evidence = extract_level1_evidence(html)
+            diagnostics["level1_observed_result_count"] = len(level1_evidence)
+            if not level1_evidence or level1_outcome not in {
+                BrowserProbeOutcome.SUCCESS_COMPLETE,
+                BrowserProbeOutcome.SUCCESS_PARTIAL,
+            }:
+                await context.close()
+                await browser.close()
+                return build_level2_expansion_failure_result(
+                    target=target,
+                    outcome=map_level1_outcome_to_level2_failure(level1_outcome),
+                    acquired_at=acquired_at,
+                    experiment_run_id=probe_input.experiment_run_id,
+                    search_plan_id=probe_input.search_plan_id,
+                    execution_id=probe_input.execution_id,
+                    duration_ms=int((time.monotonic() - started) * 1000),
+                    source_url=page.url,
+                    bounds=target_bounds,
+                    diagnostics=diagnostics,
+                )
+
+            selected_level1 = level1_evidence[0]
+            target = Level2ExpansionTarget(
+                parent_level1_ref=build_level2_live_parent_ref(selected_level1),
+                level1_evidence_index=selected_level1.evidence_index,
+                provider_row_ref=str(selected_level1.container_diagnostic.get("selector")),
+            )
+            diagnostics["level1_targets_attempted"] = 1
+            action_selector = selected_level1.booking_action_diagnostic.get("selector")
+            diagnostics["target_booking_action_selector"] = action_selector
+            if not isinstance(action_selector, str) or not action_selector.strip():
+                await context.close()
+                await browser.close()
+                return build_level2_expansion_failure_result(
+                    target=target,
+                    outcome=Level2ExpansionOutcome.ACTION_NOT_AVAILABLE,
+                    acquired_at=acquired_at,
+                    experiment_run_id=probe_input.experiment_run_id,
+                    search_plan_id=probe_input.search_plan_id,
+                    execution_id=probe_input.execution_id,
+                    duration_ms=int((time.monotonic() - started) * 1000),
+                    source_url=page.url,
+                    bounds=target_bounds,
+                    diagnostics=diagnostics,
+                )
+
+            row_selector = str(selected_level1.container_diagnostic.get("selector") or ".flight-item-tr")
+            action = page.locator(row_selector).nth(selected_level1.evidence_index - 1).locator(action_selector).first
+            await action.click(timeout=min(target_bounds.max_wait_ms, _remaining_ms(started, probe_input.overall_deadline_seconds)))
+            diagnostics["clicked"] = True
+            await page.wait_for_timeout(min(target_bounds.max_wait_ms, _remaining_ms(started, probe_input.overall_deadline_seconds)))
+            html = await page.content()
+            diagnostics["post_expansion_detector_state"] = summarize_detector_state(html)
+            result = build_level2_expansion_result_from_html(
+                html,
+                target=target,
+                acquired_at=acquired_at,
+                experiment_run_id=probe_input.experiment_run_id,
+                search_plan_id=probe_input.search_plan_id,
+                execution_id=probe_input.execution_id,
+                duration_ms=int((time.monotonic() - started) * 1000),
+                source_url=page.url,
+                bounds=target_bounds,
+                diagnostics=diagnostics,
+            )
+            await context.close()
+            await browser.close()
+            return result
+    except PlaywrightTimeoutError:
+        return build_level2_expansion_failure_result(
+            target=target,
+            outcome=Level2ExpansionOutcome.TIMEOUT,
+            acquired_at=acquired_at,
+            experiment_run_id=probe_input.experiment_run_id,
+            search_plan_id=probe_input.search_plan_id,
+            execution_id=probe_input.execution_id,
+            duration_ms=int((time.monotonic() - started) * 1000),
+            source_url=url,
+            bounds=target_bounds,
+            diagnostics={**diagnostics, "failure_kind": "timeout", "last_html_classification": classify_level2_expansion_state(html).value},
+        )
+    except PlaywrightError as exc:
+        return build_level2_expansion_failure_result(
+            target=target,
+            outcome=Level2ExpansionOutcome.NETWORK_ERROR,
+            acquired_at=acquired_at,
+            experiment_run_id=probe_input.experiment_run_id,
+            search_plan_id=probe_input.search_plan_id,
+            execution_id=probe_input.execution_id,
+            duration_ms=int((time.monotonic() - started) * 1000),
+            source_url=url,
+            bounds=target_bounds,
+            diagnostics={**diagnostics, "failure_kind": "playwright_error", "failure_message": str(exc)},
+        )
 
 
 def assess_dom_coverage(
@@ -1478,11 +1701,12 @@ async def _capture_control_readiness(page: Any, selector: str) -> ControlReadine
     if count == 0:
         return ControlReadiness(count=0, visible=False, enabled=False, editable=False)
     first = locator.nth(0)
+    editable = False if "button" in selector else await first.is_editable()
     return ControlReadiness(
         count=count,
         visible=await first.is_visible(),
         enabled=await first.is_enabled(),
-        editable=await first.is_editable(),
+        editable=editable,
     )
 
 

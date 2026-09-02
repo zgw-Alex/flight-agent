@@ -1,21 +1,29 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
+from pathlib import Path
 
 import pytest
 
 from flight_agent.adapters.flight_providers.fliggy.browser_probe import (
     BrowserAcquisitionMode,
+    BrowserProbeOutcome,
     Level2ExpansionBounds,
     Level2ExpansionOutcome,
     Level2ExpansionTarget,
+    ProbeInput,
     build_level2_expansion_failure_result,
     build_level2_expansion_result_from_html,
+    build_level2_live_parent_ref,
     classify_level2_expansion_state,
+    extract_level1_evidence,
     extract_level2_offer_evidence,
+    map_level1_outcome_to_level2_failure,
+    run_fliggy_level2_live_validation,
 )
 
 
+REPO_ROOT = Path(__file__).resolve().parents[3]
 PARENT_LEVEL1_REF = "fliggy-level1:MU5100:2026-09-02:1"
 
 
@@ -212,3 +220,60 @@ def test_level2_empty_and_action_not_available_are_distinct() -> None:
         classify_level2_expansion_state(EXPANDED_LEVEL2_HTML, action_available=False)
         is Level2ExpansionOutcome.ACTION_NOT_AVAILABLE
     )
+
+
+def test_live_validation_parent_ref_is_provider_local_and_traceable() -> None:
+    level1 = extract_level1_evidence(
+        """
+        <html><body>
+          <tr class="flight-item-tr">
+            <td class="flight-line"><span class="J_line J_TestFlight">MU5100</span></td>
+            <td class="flight-time"><span>07:00</span><span>09:10</span></td>
+            <td class="flight-port"><span>首都T2</span><span>虹桥T2</span></td>
+            <td class="flight-price"><span class="J_FlightListPrice">¥791起</span></td>
+            <td class="flight-operate"><button data-testid="select-flight-btn">订票</button></td>
+          </tr>
+        </body></html>
+        """
+    )[0]
+
+    assert build_level2_live_parent_ref(level1) == "fliggy-level1-live:1:MU5100"
+
+
+def test_live_validation_maps_level1_failures_to_authorized_level2_outcomes() -> None:
+    assert map_level1_outcome_to_level2_failure(BrowserProbeOutcome.ACCESS_CHALLENGE) is (
+        Level2ExpansionOutcome.ACCESS_CHALLENGE
+    )
+    assert map_level1_outcome_to_level2_failure(BrowserProbeOutcome.LOGIN_REQUIRED) is (
+        Level2ExpansionOutcome.ACCESS_CHALLENGE
+    )
+    assert map_level1_outcome_to_level2_failure(BrowserProbeOutcome.TIMEOUT) is Level2ExpansionOutcome.TIMEOUT
+    assert map_level1_outcome_to_level2_failure(BrowserProbeOutcome.NETWORK_ERROR) is (
+        Level2ExpansionOutcome.NETWORK_ERROR
+    )
+    assert map_level1_outcome_to_level2_failure(BrowserProbeOutcome.PROVIDER_ERROR) is (
+        Level2ExpansionOutcome.PROVIDER_ERROR
+    )
+    assert map_level1_outcome_to_level2_failure(BrowserProbeOutcome.SUCCESS_EMPTY) is Level2ExpansionOutcome.SUCCESS_EMPTY
+    assert map_level1_outcome_to_level2_failure(BrowserProbeOutcome.EVIDENCE_INSUFFICIENT) is (
+        Level2ExpansionOutcome.EVIDENCE_INSUFFICIENT
+    )
+
+
+@pytest.mark.asyncio
+async def test_live_validation_rejects_unbounded_level1_target_count_before_browser_launch() -> None:
+    with pytest.raises(ValueError, match="max_level1_targets"):
+        await run_fliggy_level2_live_validation(
+            ProbeInput("北京", "上海", date(2026, 9, 17)),
+            max_level1_targets=3,
+        )
+
+
+def test_level2_live_smoke_is_explicit_opt_in_and_outside_ordinary_ci() -> None:
+    smoke = REPO_ROOT / "scripts" / "smoke" / "fliggy_level2_live_validation.py"
+    backend_ci = (REPO_ROOT / "scripts" / "ci" / "backend.ps1").read_text(encoding="utf-8")
+    all_ci = (REPO_ROOT / "scripts" / "ci" / "all.ps1").read_text(encoding="utf-8")
+
+    assert smoke.exists()
+    assert "fliggy_level2_live_validation" not in backend_ci
+    assert "fliggy_level2_live_validation" not in all_ci
