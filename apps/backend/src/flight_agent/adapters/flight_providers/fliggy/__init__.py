@@ -45,6 +45,11 @@ from flight_agent.adapters.flight_providers.fliggy.canonical_entry import (
     FliggyCanonicalEntryProfile,
     prepare_fliggy_mapping_for_canonical_entry,
 )
+from flight_agent.adapters.flight_providers.fliggy.level2_mapper import (
+    FLIGGY_LEVEL2_PROVIDER_MAPPER_VERSION,
+    FliggyLevel2OfferMapper,
+    FliggyLevel2ParentContext,
+)
 from flight_agent.adapters.flight_providers.fliggy.mapper import (
     FLIGGY_PROVIDER_MAPPER_VERSION,
     FliggyEvidenceMapper,
@@ -54,6 +59,7 @@ __all__ = [
     "DEFAULT_FLIGGY_CANONICAL_ENTRY_PROFILE",
     "FLIGGY_BROWSER_PROBE_VERSION",
     "FLIGGY_CANONICAL_ENTRY_PROFILE_VERSION",
+    "FLIGGY_LEVEL2_PROVIDER_MAPPER_VERSION",
     "FLIGGY_PROVIDER_MAPPER_VERSION",
     "BrowserAcquisitionMode",
     "BrowserProbeOutcome",
@@ -66,7 +72,9 @@ __all__ = [
     "FliggyCanonicalEntryProfile",
     "FliggyEvidenceMapper",
     "FliggyFlightEvidence",
+    "FliggyLevel2OfferMapper",
     "FliggyLevel2OfferRowEvidence",
+    "FliggyLevel2ParentContext",
     "FliggyPageIdentity",
     "Level2ExpansionBounds",
     "Level2ExpansionOutcome",
