@@ -548,7 +548,7 @@ def test_m6_feature_layer_does_not_depend_on_filtering_engine() -> None:
     assert "flight_agent.domain.decision.selection" not in imports
 
 
-def test_mock_flight_provider_stays_out_of_downstream_candidate_processing() -> None:
+def test_flight_provider_adapters_stay_out_of_downstream_candidate_processing() -> None:
     violations = collect_provider_acl_downstream_violations(SOURCE_ROOT)
 
     assert violations == []
@@ -621,8 +621,8 @@ def test_snapshot_assembler_downstream_dependency_negative_control_fails(tmp_pat
 
 
 def collect_provider_acl_downstream_violations(package_root: Path) -> list[str]:
-    mock_root = package_root / "adapters" / "flight_providers" / "mock"
-    if not mock_root.exists():
+    provider_root = package_root / "adapters" / "flight_providers"
+    if not provider_root.exists():
         return []
     forbidden_imports = {
         "flight_agent.domain.workflow.recommendation",
@@ -631,13 +631,13 @@ def collect_provider_acl_downstream_violations(package_root: Path) -> list[str]:
         "requests",
     }
     violations: list[str] = []
-    for module_path in mock_root.rglob("*.py"):
+    for module_path in provider_root.rglob("*.py"):
         for imported_module in imported_modules(module_path):
             if imported_module in forbidden_imports:
                 violations.append(
-                    "mock-provider-boundary: "
+                    "provider-adapter-boundary: "
                     f"{relative(module_path)} imports {imported_module}. "
-                    "Mock provider must not depend on downstream candidate processing"
+                    "Provider adapters must not depend on downstream candidate processing"
                 )
     return violations
 

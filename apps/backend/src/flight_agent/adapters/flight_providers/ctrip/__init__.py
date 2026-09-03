@@ -33,12 +33,17 @@ from flight_agent.adapters.flight_providers.ctrip.browser_probe import (
     sanitize_probe_payload,
     summarize_ctrip_detector_state,
 )
+from flight_agent.adapters.flight_providers.ctrip.mapper import (
+    CTRIP_PROVIDER_MAPPER_VERSION,
+    CtripProviderMapper,
+)
 
 __all__ = [
     "CTRIP_ASSISTED_ACQUISITION_STRATEGY",
     "CTRIP_ASSISTED_CAPTURE_VERSION",
     "CTRIP_BROWSER_PROBE_VERSION",
     "CTRIP_PROVIDER_ID",
+    "CTRIP_PROVIDER_MAPPER_VERSION",
     "AssistedCaptureClassification",
     "AssistedCaptureInput",
     "AssistedCaptureMode",
@@ -51,6 +56,7 @@ __all__ = [
     "CtripLevel2OfferEvidence",
     "CtripProbeInput",
     "CtripProbeRunResult",
+    "CtripProviderMapper",
     "DomTraversalAssessment",
     "FieldEvidence",
     "ProviderMarketCompleteness",
