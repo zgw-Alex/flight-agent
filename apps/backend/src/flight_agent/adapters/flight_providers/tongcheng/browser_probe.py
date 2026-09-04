@@ -62,6 +62,17 @@ class BrowserProbeOutcome(str, Enum):
 class BrowserProbeStage(str, Enum):
     BROWSER_LAUNCH = "BROWSER_LAUNCH"
     ENTRY_NAVIGATION = "ENTRY_NAVIGATION"
+    HOME_READY = "HOME_READY"
+    ORIGIN_SET = "ORIGIN_SET"
+    DESTINATION_SET = "DESTINATION_SET"
+    DATE_PICKER_OPEN = "DATE_PICKER_OPEN"
+    DATE_SET = "DATE_SET"
+    SEARCH_SUBMITTED = "SEARCH_SUBMITTED"
+    RESULT_URL_REACHED = "RESULT_URL_REACHED"
+    RESULT_DOM_READY = "RESULT_DOM_READY"
+    GETFLIGHTLIST_OBSERVED = "GETFLIGHTLIST_OBSERVED"
+    LEVEL1_EVIDENCE_READY = "LEVEL1_EVIDENCE_READY"
+    DOM_CROSSCHECK_READY = "DOM_CROSSCHECK_READY"
     LEVEL1_WAIT = "LEVEL1_WAIT"
     LEVEL1_EXTRACTION = "LEVEL1_EXTRACTION"
     BOOKING_ACTION_DISCOVERY = "BOOKING_ACTION_DISCOVERY"
@@ -150,13 +161,29 @@ class StageDiagnostic:
     stage: BrowserProbeStage
     elapsed_ms: int
     detail: str
+    success: bool | None = None
+    sanitized_url: str | None = None
+    url_category: str | None = None
+    page_title: str | None = None
+    failure_reason: str | None = None
 
-    def to_dict(self) -> dict[str, str | int]:
-        return {
+    def to_dict(self) -> dict[str, str | int | bool | None]:
+        result: dict[str, str | int | bool | None] = {
             "stage": self.stage.value,
             "elapsed_ms": self.elapsed_ms,
             "detail": self.detail,
         }
+        if self.success is not None:
+            result["success"] = self.success
+        if self.sanitized_url is not None:
+            result["sanitized_url"] = self.sanitized_url
+        if self.url_category is not None:
+            result["url_category"] = self.url_category
+        if self.page_title is not None:
+            result["page_title"] = self.page_title
+        if self.failure_reason is not None:
+            result["failure_reason"] = self.failure_reason
+        return result
 
 
 @dataclass(frozen=True)
@@ -339,17 +366,38 @@ class _StageRecorder:
         self._started = started
         self.stages: list[StageDiagnostic] = []
 
-    def mark(self, stage: BrowserProbeStage, detail: str) -> None:
+    def mark(
+        self,
+        stage: BrowserProbeStage,
+        detail: str,
+        *,
+        success: bool | None = None,
+        sanitized_url: str | None = None,
+        url_category: str | None = None,
+        page_title: str | None = None,
+        failure_reason: str | None = None,
+    ) -> None:
         self.stages.append(
             StageDiagnostic(
                 stage=stage,
                 elapsed_ms=int((time.monotonic() - self._started) * 1000),
                 detail=detail,
+                success=success,
+                sanitized_url=sanitized_url,
+                url_category=url_category,
+                page_title=page_title,
+                failure_reason=failure_reason,
             )
         )
 
     def last_stage(self) -> BrowserProbeStage | None:
         return self.stages[-1].stage if self.stages else None
+
+    def last_successful_stage(self) -> BrowserProbeStage | None:
+        for stage in reversed(self.stages):
+            if stage.success is True:
+                return stage.stage
+        return None
 
 
 def classify_tongcheng_result_state(
@@ -378,22 +426,24 @@ def summarize_tongcheng_detector_state(html: str) -> dict[str, bool]:
     has_flight_identity = re.search(r"\b[a-z]{2}\s?\d{3,5}\b", text, flags=re.IGNORECASE) is not None
     has_price = re.search(r"[¥￥]\s?\d+", text) is not None
     has_selection_action = _contains_any(text, ("选择", "订票", "预订", "继续预订", "book"))
-    return {
-        "access_challenge": _contains_any(
-            text,
-            (
-                "captcha",
-                "whaleguard block",
-                "access denied",
-                "access block",
-                "验证码",
-                "滑块",
-                "安全验证",
-                "访问验证",
-                "拖动滑块",
-                "verify you are human",
-            ),
+    strong_challenge = _contains_any(
+        text,
+        (
+            "captcha",
+            "whaleguard block",
+            "access denied",
+            "access block",
+            "拖动滑块",
+            "verify you are human",
+            "human verification",
         ),
+    ) or (
+        _contains_any(text, ("安全验证", "访问验证"))
+        and _contains_any(text, ("无法访问", "访问受限", "验证通过后", "拖动", "请完成"))
+    )
+    return {
+        "access_challenge": strong_challenge,
+        "weak_challenge_marker": _contains_any(text, ("验证码", "滑块", "安全验证", "访问验证")),
         "login_required": _contains_any(
             text,
             (
@@ -593,19 +643,22 @@ async def run_tongcheng_browser_probe(probe_input: TongchengProbeInput) -> Tongc
     recorder = _StageRecorder(started)
     captured_payloads: list[CapturedPayload] = []
     level2_capture_enabled = False
-    clicked_selector: str | None = None
     html = ""
     visible_level2_text = ""
     outcome = BrowserProbeOutcome.EVIDENCE_INSUFFICIENT
     diagnostics: dict[str, Any] = {
         "read_only": True,
         "headless": probe_input.headless,
+        "diag_u2_provider_local_only": True,
         "clicked_booking_action": False,
         "booking_action_selector": None,
         "booking_action_label": None,
         "entry_url_strategy": "public_tongcheng_flight_entry_or_url",
         "stage_diagnostics": [],
         "last_stage": None,
+        "last_successful_stage": None,
+        "response_listener_registered_before_navigation": False,
+        "search_interaction": {},
         "detector_state": summarize_tongcheng_detector_state(""),
         "captured_payloads": [],
         "captured_payload_count": 0,
@@ -661,6 +714,7 @@ async def run_tongcheng_browser_probe(probe_input: TongchengProbeInput) -> Tongc
             page = await context.new_page()
             page.set_default_timeout(_remaining_ms(started, probe_input.overall_deadline_seconds))
             page.on("response", lambda response: asyncio.create_task(capture_response(response)))
+            diagnostics["response_listener_registered_before_navigation"] = True
 
             recorder.mark(BrowserProbeStage.ENTRY_NAVIGATION, "opening TONGCHENG public flight page")
             await page.goto(
@@ -668,39 +722,86 @@ async def run_tongcheng_browser_probe(probe_input: TongchengProbeInput) -> Tongc
                 wait_until="commit",
                 timeout=_remaining_ms(started, probe_input.overall_deadline_seconds),
             )
+            await _record_page_stage(
+                recorder,
+                page,
+                BrowserProbeStage.ENTRY_NAVIGATION,
+                "TONGCHENG public flight page navigation committed",
+                success=True,
+            )
+            try:
+                await page.wait_for_load_state(
+                    "domcontentloaded",
+                    timeout=min(5000, _remaining_ms(started, probe_input.overall_deadline_seconds)),
+                )
+                diagnostics["domcontentloaded_reached"] = True
+            except PlaywrightTimeoutError:
+                diagnostics["domcontentloaded_reached"] = False
             await _wait_for_network_capture(page, started, probe_input.overall_deadline_seconds)
             html = await page.content()
             diagnostics["final_sanitized_url"] = _sanitize_source_ref(page.url)
             diagnostics["detector_state"] = summarize_tongcheng_detector_state(html)
-
-            recorder.mark(BrowserProbeStage.LEVEL1_WAIT, "waiting for TONGCHENG getflightlist-like evidence")
-            await _attempt_public_search_interaction(page, probe_input)
-            await _wait_for_network_capture(page, started, probe_input.overall_deadline_seconds)
-            html = await page.content()
-
-            recorder.mark(BrowserProbeStage.LEVEL1_EXTRACTION, "extracting Level-1 raw TONGCHENG evidence")
-            diagnostics["level1_observed_before_booking_click"] = len(
-                extract_level1_evidence_from_payloads(tuple(captured_payloads))
+            await _record_page_stage(
+                recorder,
+                page,
+                BrowserProbeStage.HOME_READY,
+                "checking public flight home readiness",
+                success=bool(parse_html_text(html)),
+                failure_reason=None if parse_html_text(html) else "empty document body",
             )
 
-            recorder.mark(BrowserProbeStage.BOOKING_ACTION_DISCOVERY, "locating bounded booking action")
-            clicked_selector, clicked_label = await _click_first_booking_action(page)
-            diagnostics["booking_action_selector"] = clicked_selector
-            diagnostics["booking_action_label"] = clicked_label
-            if clicked_selector is not None:
-                level2_capture_enabled = True
-                diagnostics["clicked_booking_action"] = True
-                diagnostics["purchase_access_behavior"] = "BOOKING_ACTION_CLICKED_WITHOUT_PURCHASE"
-                recorder.mark(BrowserProbeStage.BOOKING_ACTION_CLICKED, "clicked one visible TONGCHENG booking action")
-                await _wait_for_network_capture(page, started, probe_input.overall_deadline_seconds, wait_ms=4000)
-                recorder.mark(BrowserProbeStage.LEVEL2_WAIT, "waiting for post-click Level-2 evidence")
-                await _wait_for_network_capture(page, started, probe_input.overall_deadline_seconds, wait_ms=3000)
-            else:
-                diagnostics["purchase_access_behavior"] = "NO_BOOKING_ACTION_OBSERVED"
+            recorder.mark(BrowserProbeStage.LEVEL1_WAIT, "waiting for TONGCHENG getflightlist-like evidence")
+            diagnostics["search_interaction"] = await _attempt_public_search_interaction(page, probe_input, recorder)
+            await _wait_for_network_capture(page, started, probe_input.overall_deadline_seconds)
+            html = await page.content()
+            detector_after_search = summarize_tongcheng_detector_state(html)
+            diagnostics["final_sanitized_url"] = _sanitize_source_ref(page.url)
+            diagnostics["detector_state"] = detector_after_search
+            await _record_page_stage(
+                recorder,
+                page,
+                BrowserProbeStage.RESULT_URL_REACHED,
+                "checking post-search URL state",
+                success=_url_category(page.url) == "RESULT" or bool(captured_payloads),
+                failure_reason=None
+                if _url_category(page.url) == "RESULT" or bool(captured_payloads)
+                else "result route not observed",
+            )
+            await _record_page_stage(
+                recorder,
+                page,
+                BrowserProbeStage.RESULT_DOM_READY,
+                "checking rendered result container evidence",
+                success=detector_after_search["result_container"],
+                failure_reason=None if detector_after_search["result_container"] else "result container not observed",
+            )
+
+            recorder.mark(BrowserProbeStage.LEVEL1_EXTRACTION, "extracting Level-1 raw TONGCHENG evidence")
+            level1_before_booking = extract_level1_evidence_from_payloads(tuple(captured_payloads))
+            diagnostics["level1_observed_before_booking_click"] = len(level1_before_booking)
+            await _record_page_stage(
+                recorder,
+                page,
+                BrowserProbeStage.GETFLIGHTLIST_OBSERVED,
+                "checking browser-lifecycle getflightlist capture",
+                success=any(payload.label == "getflightlist" for payload in captured_payloads),
+                failure_reason=None
+                if any(payload.label == "getflightlist" for payload in captured_payloads)
+                else "getflightlist response not captured",
+            )
+            await _record_page_stage(
+                recorder,
+                page,
+                BrowserProbeStage.LEVEL1_EVIDENCE_READY,
+                "checking structured Level-1 evidence extraction",
+                success=bool(level1_before_booking),
+                failure_reason=None if level1_before_booking else "structured Level-1 evidence not extracted",
+            )
+
+            diagnostics["purchase_access_behavior"] = "NOT_ATTEMPTED_DIAG_U2"
 
             html = await page.content()
-            visible_level2_text = await _visible_offer_panel_text(page) if clicked_selector is not None else ""
-            recorder.mark(BrowserProbeStage.LEVEL2_EXTRACTION, "extracting bounded Level-2 offer evidence")
+            visible_level2_text = ""
             await context.close()
             await browser.close()
     except PlaywrightTimeoutError:
@@ -715,6 +816,12 @@ async def run_tongcheng_browser_probe(probe_input: TongchengProbeInput) -> Tongc
     level2_payloads = tuple(payload for payload in captured_payloads if payload.stage == "LEVEL2")
     level2_evidence = extract_level2_offer_evidence(level2_payloads, visible_text=visible_level2_text)
     dom_cross_check = cross_check_structured_evidence_with_dom(level1_evidence, html)
+    recorder.mark(
+        BrowserProbeStage.DOM_CROSSCHECK_READY,
+        "checking provider-local structured evidence to DOM cross-check",
+        success=bool(dom_cross_check),
+        failure_reason=None if dom_cross_check else "DOM cross-check not available without structured Level-1 evidence",
+    )
     terminal_observed, terminal_evidence = _terminal_boundary_from_html(html)
     if outcome is BrowserProbeOutcome.EVIDENCE_INSUFFICIENT:
         outcome = classify_tongcheng_result_state(
@@ -737,6 +844,8 @@ async def run_tongcheng_browser_probe(probe_input: TongchengProbeInput) -> Tongc
         recorder.mark(BrowserProbeStage.COMPLETED, "probe result completed")
     completed_stage = recorder.last_stage()
     diagnostics["last_stage"] = completed_stage.value if completed_stage is not None else None
+    last_successful_stage = recorder.last_successful_stage()
+    diagnostics["last_successful_stage"] = last_successful_stage.value if last_successful_stage is not None else None
     diagnostics["stage_diagnostics"] = [stage.to_dict() for stage in recorder.stages]
     diagnostics["elapsed_ms"] = int((time.monotonic() - started) * 1000)
 
@@ -1086,15 +1195,71 @@ def _classify_response_url(url: str, *, level2_capture_enabled: bool) -> str | N
     return None
 
 
-async def _attempt_public_search_interaction(page: Any, probe_input: TongchengProbeInput) -> None:
+async def _record_page_stage(
+    recorder: _StageRecorder,
+    page: Any,
+    stage: BrowserProbeStage,
+    detail: str,
+    *,
+    success: bool,
+    failure_reason: str | None = None,
+) -> None:
+    sanitized_url, url_category, page_title = await _page_diagnostic_context(page)
+    recorder.mark(
+        stage,
+        detail,
+        success=success,
+        sanitized_url=sanitized_url,
+        url_category=url_category,
+        page_title=page_title,
+        failure_reason=failure_reason,
+    )
+
+
+async def _page_diagnostic_context(page: Any) -> tuple[str | None, str, str | None]:
+    url = getattr(page, "url", "") or ""
+    try:
+        title = _normalize_space(await page.title())
+    except PlaywrightError:
+        title = None
+    return _sanitize_source_ref(url) if url else None, _url_category(url), title or None
+
+
+def _url_category(url: str) -> str:
+    parts = urlsplit(url)
+    path = parts.path.lower()
+    if not parts.netloc:
+        return "UNKNOWN"
+    if _contains_any(f"{parts.netloc}{path}", ("challenge", "captcha", "verify", "risk", "whaleguard")):
+        return "CHALLENGE"
+    if "flights" in path and _contains_any(path, ("list", "result", "search", "itinerary")):
+        return "RESULT"
+    if path.rstrip("/") in {"/flights/home", "/iflight"}:
+        return "ENTRY"
+    if "flight" in path:
+        return "FLIGHT_PAGE"
+    return "OTHER"
+
+
+async def _attempt_public_search_interaction(
+    page: Any, probe_input: TongchengProbeInput, recorder: _StageRecorder
+) -> dict[str, Any]:
     # Tongcheng pages vary; this is conservative and failure is diagnostic, not fatal.
-    await _attempt_indexed_tongcheng_search_form(page, probe_input)
-    for label, value in (("from", probe_input.origin_text), ("to", probe_input.destination_text)):
+    interaction: dict[str, Any] = {}
+    await _attempt_indexed_tongcheng_search_form(page, probe_input, recorder, interaction)
+    for label, value, stage in (
+        ("from", probe_input.origin_text, BrowserProbeStage.ORIGIN_SET),
+        ("to", probe_input.destination_text, BrowserProbeStage.DESTINATION_SET),
+    ):
+        if interaction.get(stage.value):
+            continue
         selectors = (
             f"input[placeholder*='{label}']",
             "input[placeholder*='出发']" if label == "from" else "input[placeholder*='到达']",
             "input[aria-label*='出发']" if label == "from" else "input[aria-label*='到达']",
         )
+        matched = False
+        failure_reason = "no visible enabled city input matched"
         for selector in selectors:
             locator = page.locator(selector).first
             try:
@@ -1103,40 +1268,138 @@ async def _attempt_public_search_interaction(page: Any, probe_input: TongchengPr
                     await locator.fill(value)
                     await page.keyboard.press("Enter")
                     await page.wait_for_timeout(300)
+                    matched = True
+                    failure_reason = None
                     break
-            except PlaywrightError:
+            except PlaywrightError as exc:
+                failure_reason = _safe_error_message(exc)
                 continue
+        interaction[stage.value] = matched
+        await _record_page_stage(
+            recorder,
+            page,
+            stage,
+            f"setting TONGCHENG {label} city",
+            success=matched,
+            failure_reason=failure_reason,
+        )
+    if BrowserProbeStage.DATE_PICKER_OPEN.value not in interaction:
+        interaction[BrowserProbeStage.DATE_PICKER_OPEN.value] = False
+        await _record_page_stage(
+            recorder,
+            page,
+            BrowserProbeStage.DATE_PICKER_OPEN,
+            "opening TONGCHENG date picker",
+            success=False,
+            failure_reason="no visible date input matched",
+        )
+    if BrowserProbeStage.DATE_SET.value not in interaction:
+        interaction[BrowserProbeStage.DATE_SET.value] = False
+        await _record_page_stage(
+            recorder,
+            page,
+            BrowserProbeStage.DATE_SET,
+            "setting TONGCHENG departure date",
+            success=False,
+            failure_reason="date picker was not opened",
+        )
+    submitted = False
+    failure_reason = "no visible enabled search button matched"
     for text in ("搜索", "搜 索", "查询", "Search"):
         try:
             button = page.get_by_text(text, exact=False).first
             if await button.count() and await button.is_visible():
                 await button.click()
                 await page.wait_for_timeout(1000)
-                return
-        except PlaywrightError:
+                submitted = True
+                failure_reason = None
+                break
+        except PlaywrightError as exc:
+            failure_reason = _safe_error_message(exc)
             continue
+    interaction[BrowserProbeStage.SEARCH_SUBMITTED.value] = submitted
+    await _record_page_stage(
+        recorder,
+        page,
+        BrowserProbeStage.SEARCH_SUBMITTED,
+        "submitting TONGCHENG public search",
+        success=submitted,
+        failure_reason=failure_reason,
+    )
+    return interaction
 
 
-async def _attempt_indexed_tongcheng_search_form(page: Any, probe_input: TongchengProbeInput) -> None:
+async def _attempt_indexed_tongcheng_search_form(
+    page: Any, probe_input: TongchengProbeInput, recorder: _StageRecorder, interaction: dict[str, Any]
+) -> None:
     city_inputs = page.locator("input[placeholder*='城市']")
     date_inputs = page.locator("input[placeholder*='日期'], input[placeholder*='时间']")
     try:
         if await city_inputs.count() >= 2:
-            for index, value in enumerate((probe_input.origin_text, probe_input.destination_text)):
+            for index, value, stage in (
+                (0, probe_input.origin_text, BrowserProbeStage.ORIGIN_SET),
+                (1, probe_input.destination_text, BrowserProbeStage.DESTINATION_SET),
+            ):
                 item = city_inputs.nth(index)
+                matched = False
+                failure_reason = "indexed city input not visible or not enabled"
                 if await item.is_visible() and await item.is_enabled():
                     await item.click()
                     await item.fill(value)
                     await page.keyboard.press("Enter")
                     await page.wait_for_timeout(300)
+                    matched = True
+                    failure_reason = None
+                interaction[stage.value] = matched
+                await _record_page_stage(
+                    recorder,
+                    page,
+                    stage,
+                    f"setting indexed TONGCHENG city input {index}",
+                    success=matched,
+                    failure_reason=failure_reason,
+                )
         if await date_inputs.count() >= 1:
             item = date_inputs.nth(0)
+            picker_opened = False
+            date_set = False
+            failure_reason = "date input not visible or not enabled"
             if await item.is_visible() and await item.is_enabled():
                 await item.click()
+                picker_opened = True
+                await _record_page_stage(
+                    recorder,
+                    page,
+                    BrowserProbeStage.DATE_PICKER_OPEN,
+                    "opening TONGCHENG date picker",
+                    success=True,
+                )
                 await item.fill(probe_input.departure_date.isoformat())
                 await page.keyboard.press("Enter")
                 await page.wait_for_timeout(300)
-    except PlaywrightError:
+                date_set = True
+                failure_reason = None
+            interaction[BrowserProbeStage.DATE_PICKER_OPEN.value] = picker_opened
+            if not picker_opened:
+                await _record_page_stage(
+                    recorder,
+                    page,
+                    BrowserProbeStage.DATE_PICKER_OPEN,
+                    "opening TONGCHENG date picker",
+                    success=False,
+                    failure_reason=failure_reason,
+                )
+            interaction[BrowserProbeStage.DATE_SET.value] = date_set
+            await _record_page_stage(
+                recorder,
+                page,
+                BrowserProbeStage.DATE_SET,
+                "setting TONGCHENG departure date",
+                success=date_set,
+                failure_reason=failure_reason,
+            )
+    except PlaywrightError as exc:
+        interaction["interaction_error"] = _safe_error_message(exc)
         return
 
 
@@ -1325,6 +1588,10 @@ def _redact_sensitive_text(value: str) -> str:
     if _contains_any(value, ("authorization:", "cookie:", "session=", "token=", "passenger")):
         return "[REDACTED]"
     return value
+
+
+def _safe_error_message(exc: Exception) -> str:
+    return _redact_sensitive_text(_normalize_space(str(exc))[:240])
 
 
 if __name__ == "__main__":

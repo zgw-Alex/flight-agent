@@ -7,12 +7,14 @@ from flight_agent.adapters.flight_providers.tongcheng.browser_probe import (
     TONGCHENG_BROWSER_PROBE_VERSION,
     BrowserAcquisitionMode,
     BrowserProbeOutcome,
+    BrowserProbeStage,
     CapturedPayload,
     DomTraversalAssessment,
     ProviderMarketCompleteness,
     TongchengLevel2OfferEvidence,
     TongchengProbeInput,
     TongchengProbeRunResult,
+    _StageRecorder,
     classify_tongcheng_result_state,
     cross_check_structured_evidence_with_dom,
     extract_level1_evidence_from_payloads,
@@ -191,6 +193,7 @@ def test_tongcheng_detector_state_is_machine_checkable() -> None:
 
     assert state == {
         "access_challenge": False,
+        "weak_challenge_marker": False,
         "login_required": False,
         "provider_error": False,
         "result_container": True,
@@ -208,8 +211,72 @@ def test_tongcheng_homepage_login_and_promo_price_are_not_terminal_result_state(
     assert classify_tongcheng_result_state(html=html) is BrowserProbeOutcome.EVIDENCE_INSUFFICIENT
 
 
+def test_tongcheng_normal_login_verification_text_is_not_access_challenge() -> None:
+    html = "<main>同程账号登录 账号密码登录 验证码登录 登录后预订</main>"
+
+    state = summarize_tongcheng_detector_state(html)
+
+    assert state["weak_challenge_marker"] is True
+    assert state["access_challenge"] is False
+    assert state["login_required"] is True
+    assert classify_tongcheng_result_state(html=html) is BrowserProbeOutcome.LOGIN_REQUIRED
+
+
 def test_tongcheng_whaleguard_block_is_access_challenge() -> None:
     assert classify_tongcheng_result_state(html="<main>whaleguard block</main>") is BrowserProbeOutcome.ACCESS_CHALLENGE
+
+
+def test_tongcheng_visible_blocking_challenge_remains_access_challenge() -> None:
+    html = "<main>访问受限 请完成安全验证 拖动滑块 verify you are human</main>"
+
+    state = summarize_tongcheng_detector_state(html)
+
+    assert state["access_challenge"] is True
+    assert classify_tongcheng_result_state(html=html) is BrowserProbeOutcome.ACCESS_CHALLENGE
+
+
+def test_tongcheng_stage_progression_records_success_failure_and_last_stage() -> None:
+    recorder = _StageRecorder(started=0)
+
+    recorder.mark(BrowserProbeStage.HOME_READY, "home ready", success=True, page_title="同程旅行")
+    recorder.mark(
+        BrowserProbeStage.SEARCH_SUBMITTED,
+        "submit search",
+        success=False,
+        sanitized_url="https://www.ly.com/flights/home",
+        url_category="ENTRY",
+        failure_reason="no visible enabled search button matched",
+    )
+
+    stages = [stage.to_dict() for stage in recorder.stages]
+
+    assert stages[0]["stage"] == "HOME_READY"
+    assert stages[0]["success"] is True
+    assert stages[0]["page_title"] == "同程旅行"
+    assert stages[1]["stage"] == "SEARCH_SUBMITTED"
+    assert stages[1]["success"] is False
+    assert stages[1]["failure_reason"] == "no visible enabled search button matched"
+    assert recorder.last_stage() is BrowserProbeStage.SEARCH_SUBMITTED
+    assert recorder.last_successful_stage() is BrowserProbeStage.HOME_READY
+
+
+def test_tongcheng_response_listener_is_registered_before_navigation() -> None:
+    source = (
+        REPO_ROOT
+        / "apps"
+        / "backend"
+        / "src"
+        / "flight_agent"
+        / "adapters"
+        / "flight_providers"
+        / "tongcheng"
+        / "browser_probe.py"
+    ).read_text(encoding="utf-8")
+
+    listener_index = source.index('page.on("response"')
+    navigation_index = source.index("await page.goto")
+
+    assert listener_index < navigation_index
 
 
 def test_tongcheng_result_preserves_provider_market_completeness_unknown() -> None:
