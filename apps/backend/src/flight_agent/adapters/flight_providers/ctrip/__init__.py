@@ -33,6 +33,10 @@ from flight_agent.adapters.flight_providers.ctrip.browser_probe import (
     sanitize_probe_payload,
     summarize_ctrip_detector_state,
 )
+from flight_agent.adapters.flight_providers.ctrip.canonical_entry import (
+    CtripCanonicalEntry,
+    CtripCanonicalEntryResult,
+)
 from flight_agent.adapters.flight_providers.ctrip.mapper import (
     CTRIP_PROVIDER_MAPPER_VERSION,
     CtripProviderMapper,
@@ -52,6 +56,8 @@ __all__ = [
     "BrowserAcquisitionMode",
     "BrowserProbeOutcome",
     "BrowserProbeStage",
+    "CtripCanonicalEntry",
+    "CtripCanonicalEntryResult",
     "CtripLevel1Evidence",
     "CtripLevel2OfferEvidence",
     "CtripProbeInput",
