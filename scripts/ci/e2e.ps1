@@ -13,6 +13,24 @@ $FrontendUrl = "http://127.0.0.1:5173"
 $BackendProcess = $null
 $FrontendProcess = $null
 
+function Resolve-PowerShellExecutable {
+    if (-not [string]::IsNullOrWhiteSpace([System.Environment]::ProcessPath)) {
+        return [System.Environment]::ProcessPath
+    }
+
+    $CurrentProcess = Get-Process -Id $PID
+    if (-not [string]::IsNullOrWhiteSpace($CurrentProcess.Path)) {
+        return $CurrentProcess.Path
+    }
+
+    $PwshCommand = Get-Command pwsh -ErrorAction SilentlyContinue
+    if ($null -ne $PwshCommand -and -not [string]::IsNullOrWhiteSpace($PwshCommand.Source)) {
+        return $PwshCommand.Source
+    }
+
+    throw "Unable to resolve a PowerShell 7 executable for E2E child process launch"
+}
+
 function Invoke-Step {
     param(
         [Parameter(Mandatory = $true)]
@@ -60,14 +78,20 @@ function Start-HiddenProcess {
         [string] $LogPath
     )
 
-    return Start-Process `
-        -FilePath "powershell" `
-        -ArgumentList "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", $Command `
-        -WorkingDirectory $WorkingDirectory `
-        -RedirectStandardOutput "$LogPath.out.log" `
-        -RedirectStandardError "$LogPath.err.log" `
-        -WindowStyle Hidden `
-        -PassThru
+    $StartProcessParams = @{
+        FilePath = Resolve-PowerShellExecutable
+        ArgumentList = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", $Command)
+        WorkingDirectory = $WorkingDirectory
+        RedirectStandardOutput = "$LogPath.out.log"
+        RedirectStandardError = "$LogPath.err.log"
+        PassThru = $true
+    }
+
+    if ($IsWindows) {
+        $StartProcessParams["WindowStyle"] = "Hidden"
+    }
+
+    return Start-Process @StartProcessParams
 }
 
 New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
@@ -99,7 +123,7 @@ try {
     $env:VITE_BACKEND_URL = $BackendUrl
     $FrontendProcess = Start-HiddenProcess `
         -WorkingDirectory $FrontendDir `
-        -Command "pnpm dev -- --host 127.0.0.1 --port 5173" `
+        -Command "pnpm dev --host 127.0.0.1 --port 5173" `
         -LogPath $FrontendLog
     Wait-Http $FrontendUrl
 

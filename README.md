@@ -129,7 +129,7 @@ Invoke-WebRequest http://127.0.0.1:8000/healthz -UseBasicParsing
 
 ```powershell
 cd apps/frontend
-pnpm dev -- --host 127.0.0.1 --port 5173
+pnpm dev --host 127.0.0.1 --port 5173
 ```
 
 Open or check:
