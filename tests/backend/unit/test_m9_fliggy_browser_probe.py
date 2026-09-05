@@ -29,6 +29,8 @@ from flight_agent.adapters.flight_providers.fliggy.browser_probe import (
     _destination_readback_matches,
     _finalize_diagnostics,
     _resolve_destination_candidate,
+    _result_state_failure_taxonomy,
+    _result_state_retryable,
     _StageRecorder,
     _verify_pre_submit_query_state,
     assess_dom_coverage,
@@ -1063,6 +1065,224 @@ def test_ps12_challenge_and_network_classifications_are_preserved() -> None:
         )
         == "NETWORK_FAILURE"
     )
+
+
+def test_rs01_transitional_stale_then_correct_state_can_reach_q5() -> None:
+    stale = _result_context_candidate(
+        index=1,
+        url="https://sjipiao.fliggy.com/homeow/trip_flight_search.htm",
+        title="北京到上海机票预订",
+        identity=FliggyPageIdentity.FLIGHT_RESULT_CANDIDATE,
+        is_current=False,
+        route_conflict=False,
+        date_conflict=True,
+    )
+    correct = _result_context_candidate(
+        index=1,
+        url="https://sjipiao.fliggy.com/homeow/trip_flight_search.htm",
+        title="北京到上海机票预订",
+        identity=FliggyPageIdentity.FLIGHT_RESULT_CANDIDATE,
+        is_current=False,
+    )
+    stale.search_plan_evidence["normalized_expected_date"] = "2026-09-14"
+    stale.search_plan_evidence["normalized_observed_date"] = "2026-01-08"
+    stale.search_plan_evidence["date_parse_status"] = "ambiguous"
+
+    assert _result_state_failure_taxonomy((stale,), None) == "RESULT_STATE_STALE_OR_DEFAULT"
+    assert _result_state_retryable("RESULT_STATE_STALE_OR_DEFAULT") is True
+    assert choose_result_context_candidate((correct,)) == correct
+    assert _result_state_failure_taxonomy((correct,), correct) is None
+
+
+def test_rs02_persistent_stale_default_state_is_specific_failure() -> None:
+    candidate = _result_context_candidate(
+        index=1,
+        url="https://sjipiao.fliggy.com/homeow/trip_flight_search.htm",
+        title="北京到上海机票预订",
+        identity=FliggyPageIdentity.FLIGHT_RESULT_CANDIDATE,
+        is_current=False,
+        route_conflict=False,
+        date_conflict=True,
+    )
+    candidate.search_plan_evidence["normalized_expected_date"] = "2026-09-14"
+    candidate.search_plan_evidence["normalized_observed_date"] = "2026-01-08"
+    candidate.search_plan_evidence["date_parse_status"] = "ambiguous"
+
+    assert _result_state_failure_taxonomy((candidate,), None) == "RESULT_STATE_STALE_OR_DEFAULT"
+
+
+def test_rs03_result_route_correct_date_wrong_is_date_mismatch() -> None:
+    candidate = _result_context_candidate(
+        index=1,
+        url="https://sjipiao.fliggy.com/homeow/trip_flight_search.htm",
+        title="北京到上海机票预订",
+        identity=FliggyPageIdentity.FLIGHT_RESULT_CANDIDATE,
+        is_current=False,
+    )
+    candidate.search_plan_evidence["date_match"] = False
+    candidate.search_plan_evidence["date_conflict"] = False
+    candidate.search_plan_evidence["normalized_observed_date"] = "2026-09-15"
+
+    assert _result_state_failure_taxonomy((candidate,), None) == "RESULT_STATE_DATE_MISMATCH"
+
+
+def test_rs04_result_date_correct_route_wrong_is_route_mismatch() -> None:
+    candidate = _result_context_candidate(
+        index=1,
+        url="https://sjipiao.fliggy.com/homeow/trip_flight_search.htm",
+        title="北京到杭州机票预订",
+        identity=FliggyPageIdentity.FLIGHT_RESULT_CANDIDATE,
+        is_current=False,
+        route_conflict=True,
+    )
+    candidate.search_plan_evidence["date_match"] = True
+    candidate.search_plan_evidence["date_conflict"] = False
+
+    assert _result_state_failure_taxonomy((candidate,), None) == "RESULT_STATE_ROUTE_MISMATCH"
+
+
+def test_rs05_result_route_and_date_both_wrong_is_query_mismatch() -> None:
+    candidate = _result_context_candidate(
+        index=1,
+        url="https://sjipiao.fliggy.com/homeow/trip_flight_search.htm",
+        title="北京到杭州机票预订",
+        identity=FliggyPageIdentity.FLIGHT_RESULT_CANDIDATE,
+        is_current=False,
+        route_conflict=True,
+    )
+    candidate.search_plan_evidence["date_match"] = False
+    candidate.search_plan_evidence["date_conflict"] = False
+    candidate.search_plan_evidence["normalized_observed_date"] = "2026-09-15"
+
+    assert _result_state_failure_taxonomy((candidate,), None) == "RESULT_STATE_QUERY_MISMATCH"
+
+
+def test_rs06_unreadable_result_markers_do_not_guess() -> None:
+    candidate = _result_context_candidate(
+        index=1,
+        url="https://sjipiao.fliggy.com/homeow/trip_flight_search.htm",
+        title="航班查询",
+        identity=FliggyPageIdentity.FLIGHT_RESULT_CANDIDATE,
+        is_current=False,
+    )
+    candidate.search_plan_evidence["route_match"] = "insufficient"
+    candidate.search_plan_evidence["date_match"] = "insufficient"
+
+    assert _result_state_failure_taxonomy((candidate,), None) == "RESULT_STATE_QUERY_UNREADABLE"
+
+
+def test_rs07_no_legitimate_transition_or_readiness_is_not_observed() -> None:
+    entry = _result_context_candidate(
+        index=0,
+        url="https://www.fliggy.com/?tab=flight",
+        title="飞机票查询-机票预订【飞猪旅行】",
+        identity=FliggyPageIdentity.EXPECTED_FLIGHT_SEARCH,
+        is_current=True,
+        result_surface=False,
+    )
+
+    assert _result_state_failure_taxonomy((), None) == "RESULT_TRANSITION_NOT_OBSERVED"
+    assert _result_state_failure_taxonomy((entry,), None) == "RESULT_STATE_NOT_READY"
+
+
+def test_rs08_q4_match_allows_unchanged_q5_to_select() -> None:
+    candidate = _result_context_candidate(
+        index=1,
+        url="https://sjipiao.fliggy.com/homeow/trip_flight_search.htm",
+        title="北京到上海机票预订",
+        identity=FliggyPageIdentity.FLIGHT_RESULT_CANDIDATE,
+        is_current=False,
+    )
+
+    assert candidate.context_matches() is True
+    assert choose_result_context_candidate((candidate,)) == candidate
+
+
+def test_rs09_q5_mismatch_despite_q4_match_is_preserved() -> None:
+    first = _result_context_candidate(
+        index=1,
+        url="https://sjipiao.fliggy.com/homeow/trip_flight_search.htm",
+        title="北京到上海机票预订",
+        identity=FliggyPageIdentity.FLIGHT_RESULT_CANDIDATE,
+        is_current=False,
+    )
+    second = _result_context_candidate(
+        index=2,
+        url="https://sjipiao.fliggy.com/alternate/trip_flight_search.htm",
+        title="北京到上海航班查询预订",
+        identity=FliggyPageIdentity.FLIGHT_RESULT_CANDIDATE,
+        is_current=False,
+    )
+
+    assert _result_state_failure_taxonomy((first, second), None) == "SUBMIT_STATE_PROPAGATION_FAILED"
+    assert choose_result_context_candidate((first, second)) is None
+
+
+def test_rs10_historical_20260914_request_vs_20260108_result_is_rejected() -> None:
+    candidate = _result_context_candidate(
+        index=1,
+        url="https://sjipiao.fliggy.com/homeow/trip_flight_search.htm",
+        title="北京到上海机票预订",
+        identity=FliggyPageIdentity.FLIGHT_RESULT_CANDIDATE,
+        is_current=False,
+        date_conflict=True,
+    )
+    candidate.search_plan_evidence["normalized_expected_date"] = "2026-09-14"
+    candidate.search_plan_evidence["normalized_observed_date"] = "2026-01-08"
+    candidate.search_plan_evidence["date_parse_status"] = "ambiguous"
+
+    assert choose_result_context_candidate((candidate,)) is None
+    assert _result_state_failure_taxonomy((candidate,), None) == "RESULT_STATE_STALE_OR_DEFAULT"
+
+
+def test_rs11_network_and_challenge_classifications_remain_safe() -> None:
+    assert (
+        _browser_failure_taxonomy(
+            outcome=BrowserProbeOutcome.ACCESS_CHALLENGE,
+            failed_stage=BrowserProbeStage.RESULT_TRANSITION.value,
+            diagnostics={"post_submit_propagation_failed": True},
+        )
+        == "ACCESS_CHALLENGE"
+    )
+    assert (
+        _browser_failure_taxonomy(
+            outcome=BrowserProbeOutcome.NETWORK_ERROR,
+            failed_stage=BrowserProbeStage.RESULT_TRANSITION.value,
+            diagnostics={"post_submit_propagation_failed": True},
+        )
+        == "NETWORK_FAILURE"
+    )
+
+
+def test_rs12_result_state_diagnostics_are_sanitized() -> None:
+    result = _build_post_submit_query_state_diagnostics(
+        _post_submit_base_diagnostics(),
+        _post_submit_handoff(observed_date_text="2026-01-08 Cookie: a=b", date_match=False, context_match=False),
+    )
+
+    sanitized = sanitize_probe_payload({"post_submit_query_state_diagnostics": result})
+
+    assert sanitized["post_submit_query_state_diagnostics"]["q4_result_state_init"]["observed_date_text"] == "[REDACTED]"
+
+
+def test_rs13_pre_submit_input_behavior_semantics_unchanged() -> None:
+    assert _verify_pre_submit_query_state(_query_state()).submit_allowed is True
+    assert (
+        _verify_pre_submit_query_state(
+            _query_state(origin="北京", destination="上海", form_origin="北京", form_destination="杭州", form_date="2026-09-14")
+        ).failure_taxonomy
+        == "FORM_ROUTE_MISMATCH"
+    )
+
+
+def test_rs14_downstream_l1_booking_l2_behavior_remains_out_of_scope() -> None:
+    source = (REPO_ROOT / "apps" / "backend" / "src" / "flight_agent" / "adapters" / "flight_providers" / "fliggy" / "browser_probe.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert "_build_post_submit_query_state_diagnostics" in source
+    assert "def extract_level1_evidence" in source
+    assert "def map_level1_outcome_to_level2_failure" in source
 
 
 def test_navigation_source_ref_uses_stable_public_entry_and_sanitizes_tracking() -> None:

@@ -2660,11 +2660,13 @@ def _annotate_post_submit_query_propagation(diagnostics: dict[str, Any], handoff
     diagnostics["post_submit_mismatch_dimension"] = handoff_diagnostics.get("mismatch_dimension")
     diagnostics["post_submit_propagation_failed"] = bool(pre_submit_matched and not post_submit_matched)
     if diagnostics["post_submit_propagation_failed"]:
-        diagnostics["post_submit_failure_taxonomy"] = (
-            "RESULT_QUERY_MISMATCH"
-            if handoff_diagnostics.get("mismatch_dimension") in {"route", "date", "both"}
-            else "SUBMIT_STATE_PROPAGATION_FAILED"
-        )
+        result_state_failure = handoff_diagnostics.get("result_state_failure_taxonomy")
+        if isinstance(result_state_failure, str):
+            diagnostics["post_submit_failure_taxonomy"] = result_state_failure
+        elif handoff_diagnostics.get("mismatch_dimension") in {"route", "date", "both"}:
+            diagnostics["post_submit_failure_taxonomy"] = "RESULT_QUERY_MISMATCH"
+        else:
+            diagnostics["post_submit_failure_taxonomy"] = "SUBMIT_STATE_PROPAGATION_FAILED"
     else:
         diagnostics["post_submit_failure_taxonomy"] = None
 
@@ -2931,7 +2933,58 @@ async def _select_result_context_page(
     page_count_before_submit: int,
     wait_ms: int,
 ) -> tuple[Any, dict[str, Any]]:
-    await current_page.wait_for_timeout(wait_ms)
+    selected: ResultContextCandidate | None = None
+    candidates: list[ResultContextCandidate] = []
+    pages = list(context.pages)
+    attempts = max(1, min(4, wait_ms // 500))
+    interval_ms = max(250, wait_ms // attempts)
+    result_state_failure_taxonomy = "RESULT_TRANSITION_NOT_OBSERVED"
+    for attempt in range(attempts):
+        await current_page.wait_for_timeout(interval_ms)
+        pages, candidates = await _collect_result_context_candidates(
+            context=context,
+            current_page=current_page,
+            probe_input=probe_input,
+            page_error_type=page_error_type,
+        )
+        selected = choose_result_context_candidate(tuple(candidates))
+        result_state_failure_taxonomy = _result_state_failure_taxonomy(tuple(candidates), selected)
+        if selected is not None or not _result_state_retryable(result_state_failure_taxonomy):
+            break
+        if attempt == attempts - 1:
+            break
+    query_diagnostics = _query_identity_diagnostics(selected, tuple(candidates))
+    diagnostics = {
+        "page_count_before_submit": page_count_before_submit,
+        "page_count_after_submit": len(pages),
+        "popup_or_new_page_event": len(pages) > 1,
+        "result_state_sampling_attempts": attempts,
+        "result_state_failure_taxonomy": None if selected is not None else result_state_failure_taxonomy,
+        "candidate_pages": [candidate.to_dict() for candidate in candidates],
+        "selected_page_index": selected.page_index if selected is not None else None,
+        "selected_page_url": selected.sanitized_url if selected is not None else None,
+        "selected_page_identity": selected.identity.value if selected is not None else None,
+        "context_match": selected is not None,
+        "route_evidence": _matched_evidence_value(candidates, "origin") and _matched_evidence_value(candidates, "destination"),
+        "date_evidence": _matched_evidence_value(candidates, "departure_date"),
+        "result_surface_evidence": _matched_evidence_value(candidates, "result_surface"),
+        "route_conflict": _matched_evidence_value(candidates, "route_conflict"),
+        "date_conflict": _matched_evidence_value(candidates, "date_conflict"),
+        "selection_reason": _result_context_selection_reason(selected, tuple(candidates), query_diagnostics),
+        **query_diagnostics,
+    }
+    if selected is None:
+        return current_page, diagnostics
+    return pages[selected.page_index], diagnostics
+
+
+async def _collect_result_context_candidates(
+    *,
+    context: Any,
+    current_page: Any,
+    probe_input: ProbeInput,
+    page_error_type: type[Exception],
+) -> tuple[list[Any], list[ResultContextCandidate]]:
     candidates: list[ResultContextCandidate] = []
     pages = list(context.pages)
     for index, candidate_page in enumerate(pages):
@@ -2966,29 +3019,55 @@ async def _select_result_context_page(
                     is_current_page=candidate_page == current_page,
                 )
             )
+    return pages, candidates
 
-    selected = choose_result_context_candidate(tuple(candidates))
-    query_diagnostics = _query_identity_diagnostics(selected, tuple(candidates))
-    diagnostics = {
-        "page_count_before_submit": page_count_before_submit,
-        "page_count_after_submit": len(pages),
-        "popup_or_new_page_event": len(pages) > 1,
-        "candidate_pages": [candidate.to_dict() for candidate in candidates],
-        "selected_page_index": selected.page_index if selected is not None else None,
-        "selected_page_url": selected.sanitized_url if selected is not None else None,
-        "selected_page_identity": selected.identity.value if selected is not None else None,
-        "context_match": selected is not None,
-        "route_evidence": _matched_evidence_value(candidates, "origin") and _matched_evidence_value(candidates, "destination"),
-        "date_evidence": _matched_evidence_value(candidates, "departure_date"),
-        "result_surface_evidence": _matched_evidence_value(candidates, "result_surface"),
-        "route_conflict": _matched_evidence_value(candidates, "route_conflict"),
-        "date_conflict": _matched_evidence_value(candidates, "date_conflict"),
-        "selection_reason": _result_context_selection_reason(selected, tuple(candidates), query_diagnostics),
-        **query_diagnostics,
+
+def _result_state_failure_taxonomy(
+    candidates: tuple[ResultContextCandidate, ...],
+    selected: ResultContextCandidate | None,
+) -> str | None:
+    if selected is not None:
+        return None
+    if not candidates:
+        return "RESULT_TRANSITION_NOT_OBSERVED"
+    if not any(candidate.search_plan_evidence.get("result_surface_present") is True for candidate in candidates):
+        return "RESULT_STATE_NOT_READY"
+    diagnostic_candidate = _best_diagnostic_candidate(candidates)
+    if diagnostic_candidate is None:
+        return "RESULT_STATE_QUERY_UNREADABLE"
+    evidence = diagnostic_candidate.search_plan_evidence
+    route_match = evidence.get("route_match")
+    date_match = evidence.get("date_match")
+    if route_match == "insufficient" or date_match == "insufficient":
+        return "RESULT_STATE_QUERY_UNREADABLE"
+    if _stale_or_default_result_state(evidence):
+        return "RESULT_STATE_STALE_OR_DEFAULT"
+    if route_match is False and date_match is False:
+        return "RESULT_STATE_QUERY_MISMATCH"
+    if route_match is False:
+        return "RESULT_STATE_ROUTE_MISMATCH"
+    if date_match is False:
+        return "RESULT_STATE_DATE_MISMATCH"
+    return "SUBMIT_STATE_PROPAGATION_FAILED"
+
+
+def _result_state_retryable(failure_taxonomy: str | None) -> bool:
+    return failure_taxonomy in {
+        "RESULT_TRANSITION_NOT_OBSERVED",
+        "RESULT_STATE_NOT_READY",
+        "RESULT_STATE_STALE_OR_DEFAULT",
+        "RESULT_STATE_QUERY_UNREADABLE",
     }
-    if selected is None:
-        return current_page, diagnostics
-    return pages[selected.page_index], diagnostics
+
+
+def _stale_or_default_result_state(evidence: dict[str, Any]) -> bool:
+    observed_date = evidence.get("normalized_observed_date")
+    expected_date = evidence.get("normalized_expected_date")
+    if not isinstance(observed_date, str) or not isinstance(expected_date, str):
+        return False
+    if observed_date == expected_date:
+        return False
+    return evidence.get("date_parse_status") == "ambiguous" or evidence.get("date_conflict") is True
 
 
 def _matched_evidence_value(candidates: list[ResultContextCandidate], key: str) -> bool:
