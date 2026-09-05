@@ -28,6 +28,7 @@ _SENSITIVE_KEY_FRAGMENTS = (
     "authorization",
     "cookie",
     "csrf",
+    "full_dom",
     "password",
     "secret",
     "session",
@@ -194,7 +195,7 @@ class ResultContextCandidate:
     sanitized_url: str
     title: str
     identity: FliggyPageIdentity
-    search_plan_evidence: dict[str, bool]
+    search_plan_evidence: dict[str, Any]
     is_current_page: bool
 
     def score(self) -> int:
@@ -591,15 +592,11 @@ def _active_access_challenge_detected(page_text: str) -> bool:
     return _contains_any(lowered, ("输入验证码", "请完成", "校验", "验证后", "验证通过"))
 
 
-def summarize_search_plan_evidence(*, title: str, html: str, probe_input: ProbeInput, url: str = "") -> dict[str, bool]:
+def summarize_search_plan_evidence(*, title: str, html: str, probe_input: ProbeInput, url: str = "") -> dict[str, Any]:
     root = parse_html(html)
     page_text = root.text_content()
     text = " ".join((title, page_text, _decoded_url_evidence(url)))
-    departure_date = probe_input.departure_date.isoformat()
-    dotted_date = departure_date.replace("-", ".")
-    slash_date = departure_date.replace("-", "/")
-    chinese_date = f"{probe_input.departure_date.month}月{probe_input.departure_date.day}日"
-    padded_chinese_date = f"{probe_input.departure_date.month:02d}月{probe_input.departure_date.day:02d}日"
+    date_diagnostics = _date_identity_diagnostics(title=title, page_text=page_text, url=url, probe_input=probe_input)
     compact_route = f"{probe_input.origin_text}到{probe_input.destination_text}"
     detector_state = summarize_detector_state(html)
     result_surface = (
@@ -610,14 +607,33 @@ def summarize_search_plan_evidence(*, title: str, html: str, probe_input: ProbeI
     )
     route_conflict = _route_conflicts_with_query(text, probe_input)
     date_conflict = _date_conflicts_with_query(text, probe_input)
+    origin_match = probe_input.origin_text in text or compact_route in text
+    destination_match = probe_input.destination_text in text or compact_route in text
+    route_match = origin_match and destination_match and not route_conflict
+    date_match = date_diagnostics["date_match"] is True and not date_conflict
+    query_identity_decision = "match" if route_match and date_match and result_surface else "insufficient"
     return {
-        "origin": probe_input.origin_text in text or compact_route in text,
-        "destination": probe_input.destination_text in text or compact_route in text,
-        "departure_date": any(candidate in text for candidate in (departure_date, dotted_date, slash_date, chinese_date, padded_chinese_date)),
+        "origin": origin_match,
+        "destination": destination_match,
+        "departure_date": date_match,
         "result_surface": result_surface,
         "explicit_empty": detector_state["explicit_empty"] is True,
         "route_conflict": route_conflict,
         "date_conflict": date_conflict,
+        "date_marker_candidates_count": date_diagnostics["date_marker_candidates_count"],
+        "selected_date_marker_class": date_diagnostics["selected_date_marker_class"],
+        "observed_date_text": date_diagnostics["observed_date_text"],
+        "observed_date_source": date_diagnostics["observed_date_source"],
+        "date_parse_status": date_diagnostics["date_parse_status"],
+        "submitted_date": date_diagnostics["submitted_date"],
+        "normalized_expected_date": date_diagnostics["normalized_expected_date"],
+        "normalized_observed_date": date_diagnostics["normalized_observed_date"],
+        "date_match": date_diagnostics["date_match"],
+        "route_match": route_match,
+        "result_surface_present": result_surface,
+        "query_identity_decision": query_identity_decision,
+        "mismatch_dimension": _candidate_mismatch_dimension(route_match=route_match, date_match=date_match),
+        "timing_state": "ready",
     }
 
 
@@ -647,6 +663,104 @@ def _decoded_url_evidence(url: str) -> str:
     for key, value in parse_qsl(parts.fragment):
         values.extend((key, value))
     return " ".join(values)
+
+
+def _date_identity_diagnostics(*, title: str, page_text: str, url: str, probe_input: ProbeInput) -> dict[str, Any]:
+    candidates = _date_marker_candidates(title=title, page_text=page_text, url=url, probe_input=probe_input)
+    expected = probe_input.departure_date.isoformat()
+    parsed_values = tuple(candidate for candidate in candidates if candidate["normalized_observed_date"] is not None)
+    matching_values = tuple(candidate for candidate in parsed_values if candidate["normalized_observed_date"] == expected)
+    selected = matching_values[0] if matching_values else (parsed_values[0] if parsed_values else (candidates[0] if candidates else None))
+    normalized_values = {str(candidate["normalized_observed_date"]) for candidate in parsed_values}
+    if selected is None:
+        parse_status = "absent"
+        date_match: bool | str = "insufficient"
+    elif not parsed_values:
+        parse_status = "unparsable"
+        date_match = "insufficient"
+    elif len(normalized_values) > 1:
+        parse_status = "ambiguous"
+        date_match = expected in normalized_values
+    else:
+        parse_status = "parsed"
+        date_match = expected in normalized_values
+    return {
+        "submitted_date": expected,
+        "date_marker_candidates_count": min(len(candidates), 20),
+        "selected_date_marker_class": selected["class"] if selected is not None else None,
+        "observed_date_text": selected["text"] if selected is not None else None,
+        "observed_date_source": selected["source"] if selected is not None else "none",
+        "date_parse_status": parse_status,
+        "normalized_expected_date": expected,
+        "normalized_observed_date": selected["normalized_observed_date"] if selected is not None else None,
+        "date_match": date_match,
+    }
+
+
+def _date_marker_candidates(*, title: str, page_text: str, url: str, probe_input: ProbeInput) -> list[dict[str, str | None]]:
+    candidates: list[dict[str, str | None]] = []
+
+    def append_candidate(raw_text: str, source: str, marker_class: str) -> None:
+        text = _truncate_diagnostic_text(raw_text)
+        if not text:
+            return
+        candidates.append(
+            {
+                "text": text,
+                "source": source,
+                "class": marker_class,
+                "normalized_observed_date": _normalize_date_marker(text, probe_input),
+            }
+        )
+
+    for source, value in (("title", title), ("visible_text", page_text)):
+        for match in re.finditer(r"20\d{2}[-/.年]\d{1,2}[-/.月]\d{1,2}日?", value):
+            append_candidate(match.group(0), source, "full_date")
+        for match in re.finditer(r"(?<!\d)\d{1,2}月\d{1,2}日", value):
+            append_candidate(match.group(0), source, "month_day")
+    parts = urlsplit(url)
+    for key, value in (*parse_qsl(parts.query), *parse_qsl(parts.fragment)):
+        if _contains_any(key, ("date", "day", "dep")):
+            append_candidate(value, "page_state", f"url_param:{_truncate_diagnostic_text(key, limit=24)}")
+    return candidates[:20]
+
+
+def _normalize_date_marker(value: str, probe_input: ProbeInput) -> str | None:
+    full = re.search(r"(20\d{2})[-/.年](\d{1,2})[-/.月](\d{1,2})日?", value)
+    if full:
+        year, month, day = (int(part) for part in full.groups())
+        return _date_or_none(year, month, day)
+    month_day = re.search(r"(?<!\d)(\d{1,2})月(\d{1,2})日", value)
+    if month_day:
+        month, day = (int(part) for part in month_day.groups())
+        return _date_or_none(probe_input.departure_date.year, month, day)
+    compact = re.search(r"(20\d{2})(\d{2})(\d{2})", value)
+    if compact:
+        year, month, day = (int(part) for part in compact.groups())
+        return _date_or_none(year, month, day)
+    return None
+
+
+def _date_or_none(year: int, month: int, day: int) -> str | None:
+    try:
+        return date(year, month, day).isoformat()
+    except ValueError:
+        return None
+
+
+def _candidate_mismatch_dimension(*, route_match: bool, date_match: bool) -> str:
+    if route_match and date_match:
+        return "none"
+    if route_match and not date_match:
+        return "date"
+    if not route_match and date_match:
+        return "route"
+    return "both"
+
+
+def _truncate_diagnostic_text(value: str, *, limit: int = 48) -> str:
+    normalized = _normalize_space(_redact_sensitive_text(value))
+    return normalized[:limit]
 
 
 def _route_conflicts_with_query(text: str, probe_input: ProbeInput) -> bool:
@@ -2096,6 +2210,7 @@ async def _select_result_context_page(
             )
 
     selected = choose_result_context_candidate(tuple(candidates))
+    query_diagnostics = _query_identity_diagnostics(selected, tuple(candidates))
     diagnostics = {
         "page_count_before_submit": page_count_before_submit,
         "page_count_after_submit": len(pages),
@@ -2110,7 +2225,8 @@ async def _select_result_context_page(
         "result_surface_evidence": _matched_evidence_value(candidates, "result_surface"),
         "route_conflict": _matched_evidence_value(candidates, "route_conflict"),
         "date_conflict": _matched_evidence_value(candidates, "date_conflict"),
-        "selection_reason": _result_context_selection_reason(selected, tuple(candidates)),
+        "selection_reason": _result_context_selection_reason(selected, tuple(candidates), query_diagnostics),
+        **query_diagnostics,
     }
     if selected is None:
         return current_page, diagnostics
@@ -2124,9 +2240,16 @@ def _matched_evidence_value(candidates: list[ResultContextCandidate], key: str) 
 def _result_context_selection_reason(
     selected: ResultContextCandidate | None,
     candidates: tuple[ResultContextCandidate, ...],
+    query_diagnostics: dict[str, Any],
 ) -> str:
     if selected is not None:
         return "result_identity_route_date_surface_match"
+    if query_diagnostics["mismatch_dimension"] == "date":
+        return "date_mismatch"
+    if query_diagnostics["mismatch_dimension"] == "route":
+        return "route_mismatch"
+    if query_diagnostics["mismatch_dimension"] == "both":
+        return "route_and_date_mismatch"
     if any(candidate.search_plan_evidence.get("route_conflict") is True for candidate in candidates):
         return "route_mismatch"
     if any(candidate.search_plan_evidence.get("date_conflict") is True for candidate in candidates):
@@ -2148,6 +2271,90 @@ def _result_context_selection_reason(
     ):
         return "missing_route_evidence"
     return "no_deterministic_result_context"
+
+
+def _query_identity_diagnostics(
+    selected: ResultContextCandidate | None,
+    candidates: tuple[ResultContextCandidate, ...],
+) -> dict[str, Any]:
+    diagnostic_candidate = selected or _best_diagnostic_candidate(candidates)
+    if diagnostic_candidate is None:
+        return {
+            "submitted_date": None,
+            "date_marker_candidates_count": 0,
+            "selected_date_marker_class": None,
+            "observed_date_text": None,
+            "observed_date_source": "none",
+            "date_parse_status": "absent",
+            "normalized_expected_date": None,
+            "normalized_observed_date": None,
+            "date_match": "insufficient",
+            "route_match": "insufficient",
+            "result_surface_present": False,
+            "query_identity_decision": "insufficient",
+            "mismatch_dimension": "unknown",
+            "timing_state": "timed-out",
+            "root_cause_class": "INCONCLUSIVE",
+        }
+    evidence = diagnostic_candidate.search_plan_evidence
+    route_match = bool(evidence.get("route_match"))
+    date_match_value = evidence.get("date_match")
+    date_match = date_match_value if isinstance(date_match_value, bool) else "insufficient"
+    result_surface_present = bool(evidence.get("result_surface_present"))
+    query_identity_decision = "match" if selected is not None else "insufficient"
+    mismatch_dimension = _candidate_mismatch_dimension(
+        route_match=route_match,
+        date_match=date_match is True,
+    )
+    if date_match == "insufficient" and route_match:
+        mismatch_dimension = "date"
+    if evidence.get("route_conflict") is True and (evidence.get("date_conflict") is True or date_match is False):
+        mismatch_dimension = "both"
+    return {
+        "submitted_date": evidence.get("submitted_date"),
+        "date_marker_candidates_count": evidence.get("date_marker_candidates_count", 0),
+        "selected_date_marker_class": evidence.get("selected_date_marker_class"),
+        "observed_date_text": evidence.get("observed_date_text"),
+        "observed_date_source": evidence.get("observed_date_source", "none"),
+        "date_parse_status": evidence.get("date_parse_status", "absent"),
+        "normalized_expected_date": evidence.get("normalized_expected_date"),
+        "normalized_observed_date": evidence.get("normalized_observed_date"),
+        "date_match": date_match,
+        "route_match": route_match,
+        "result_surface_present": result_surface_present,
+        "query_identity_decision": query_identity_decision,
+        "mismatch_dimension": mismatch_dimension,
+        "timing_state": evidence.get("timing_state", "ready"),
+        "root_cause_class": _date_root_cause_class(evidence=evidence, route_match=route_match, date_match=date_match),
+    }
+
+
+def _best_diagnostic_candidate(candidates: tuple[ResultContextCandidate, ...]) -> ResultContextCandidate | None:
+    if not candidates:
+        return None
+    result_candidates = tuple(candidate for candidate in candidates if candidate.identity is FliggyPageIdentity.FLIGHT_RESULT_CANDIDATE)
+    pool = result_candidates or candidates
+    return max(pool, key=lambda candidate: candidate.score())
+
+
+def _date_root_cause_class(*, evidence: dict[str, Any], route_match: bool, date_match: bool | str) -> str:
+    if evidence.get("result_surface_present") is True and route_match and date_match is True:
+        return "INCONCLUSIVE"
+    if evidence.get("date_marker_candidates_count", 0) == 0:
+        return "DATE_MARKER_NOT_PRESENT"
+    if evidence.get("date_parse_status") == "unparsable":
+        return "DATE_FORMAT_PARSE_GAP"
+    if evidence.get("date_parse_status") == "ambiguous":
+        return "MULTI_FACTOR_CONTEXT_GAP"
+    if date_match is False and evidence.get("normalized_observed_date") is not None:
+        return "DATE_TRUE_QUERY_MISMATCH"
+    if evidence.get("route_conflict") is True and date_match is not True:
+        return "MULTI_FACTOR_CONTEXT_GAP"
+    if route_match and date_match == "insufficient":
+        return "DATE_MARKER_NOT_PRESENT"
+    if not route_match and evidence.get("result_surface_present") is True:
+        return "STALE_RESULT_CONTEXT"
+    return "INCONCLUSIVE"
 
 
 def _remaining_ms(started: float, deadline_seconds: float) -> int:

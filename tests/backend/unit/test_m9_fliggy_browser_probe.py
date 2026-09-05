@@ -452,6 +452,135 @@ def test_rc09_historical_diag_shape_confirms_when_url_supplies_query_identity() 
     assert evidence["result_surface"] is True
 
 
+def test_du2_01_date_marker_exists_and_matches_current_parser() -> None:
+    evidence = summarize_search_plan_evidence(
+        title="北京到上海机票预订",
+        html="<main>2026-09-14 航班查询</main>",
+        probe_input=ProbeInput("北京", "上海", date(2026, 9, 14)),
+        url="https://sjipiao.fliggy.com/homeow/trip_flight_search.htm",
+    )
+
+    assert evidence["date_marker_candidates_count"] == 1
+    assert evidence["date_parse_status"] == "parsed"
+    assert evidence["normalized_expected_date"] == "2026-09-14"
+    assert evidence["normalized_observed_date"] == "2026-09-14"
+    assert evidence["date_match"] is True
+
+
+def test_du2_02_alternate_date_format_reports_normalized_result() -> None:
+    evidence = summarize_search_plan_evidence(
+        title="北京到上海航班查询 09月14日",
+        html="<main>起飞 到达 经济舱</main>",
+        probe_input=ProbeInput("北京", "上海", date(2026, 9, 14)),
+        url="https://sjipiao.fliggy.com/homeow/trip_flight_search.htm",
+    )
+
+    assert evidence["selected_date_marker_class"] == "month_day"
+    assert evidence["observed_date_text"] == "09月14日"
+    assert evidence["observed_date_source"] == "title"
+    assert evidence["normalized_observed_date"] == "2026-09-14"
+    assert evidence["date_match"] is True
+
+
+def test_du2_03_absent_date_marker_is_not_reported_as_route_mismatch() -> None:
+    candidate = _result_context_candidate(
+        index=1,
+        url="https://sjipiao.fliggy.com/homeow/trip_flight_search.htm",
+        title="北京到上海机票预订",
+        identity=FliggyPageIdentity.FLIGHT_RESULT_CANDIDATE,
+        is_current=False,
+        departure_date=False,
+        result_surface=True,
+    )
+
+    assert choose_result_context_candidate((candidate,)) is None
+    assert candidate.search_plan_evidence["mismatch_dimension"] == "date"
+
+
+def test_du2_04_route_true_date_false_reports_date_dimension() -> None:
+    evidence = summarize_search_plan_evidence(
+        title="北京到上海机票预订",
+        html="<main>航班查询 起飞 到达</main>",
+        probe_input=ProbeInput("北京", "上海", date(2026, 9, 14)),
+        url="https://sjipiao.fliggy.com/homeow/trip_flight_search.htm",
+    )
+
+    assert evidence["route_match"] is True
+    assert evidence["date_match"] == "insufficient"
+    assert evidence["mismatch_dimension"] == "date"
+
+
+def test_du2_05_route_false_date_true_reports_route_dimension() -> None:
+    evidence = summarize_search_plan_evidence(
+        title="北京到杭州机票预订 9月14日",
+        html="<main>航班查询 起飞 到达</main>",
+        probe_input=ProbeInput("北京", "上海", date(2026, 9, 14)),
+        url="https://sjipiao.fliggy.com/homeow/trip_flight_search.htm",
+    )
+
+    assert evidence["date_match"] is True
+    assert evidence["route_match"] is False
+    assert evidence["mismatch_dimension"] == "route"
+
+
+def test_du2_06_both_route_and_date_conflict_are_reported() -> None:
+    evidence = summarize_search_plan_evidence(
+        title="北京到杭州机票预订 9月15日",
+        html="<main>航班查询 起飞 到达</main>",
+        probe_input=ProbeInput("北京", "上海", date(2026, 9, 14)),
+        url="https://sjipiao.fliggy.com/homeow/trip_flight_search.htm",
+    )
+
+    assert evidence["route_match"] is False
+    assert evidence["date_match"] is False
+    assert evidence["mismatch_dimension"] == "both"
+
+
+def test_du2_07_insufficient_date_evidence_keeps_query_identity_insufficient() -> None:
+    evidence = summarize_search_plan_evidence(
+        title="北京到上海机票预订",
+        html="<main>航班查询 起飞 到达 经济舱</main>",
+        probe_input=ProbeInput("北京", "上海", date(2026, 9, 14)),
+        url="https://sjipiao.fliggy.com/homeow/trip_flight_search.htm",
+    )
+
+    assert evidence["query_identity_decision"] == "insufficient"
+    assert evidence["departure_date"] is False
+
+
+def test_du2_08_stale_context_has_route_dimension_and_result_surface() -> None:
+    evidence = summarize_search_plan_evidence(
+        title="北京到杭州机票预订 9月14日",
+        html="<main>航班查询 起飞 到达 经济舱</main>",
+        probe_input=ProbeInput("北京", "上海", date(2026, 9, 14)),
+        url="https://sjipiao.fliggy.com/homeow/trip_flight_search.htm",
+    )
+
+    assert evidence["result_surface_present"] is True
+    assert evidence["route_match"] is False
+    assert evidence["mismatch_dimension"] == "route"
+
+
+def test_du2_09_date_diagnostic_payload_stays_sanitized() -> None:
+    payload = {
+        "observed_date_text": "2026-09-14 Cookie: a=b",
+        "session": "secret",
+        "full_dom": "<html>private</html>",
+    }
+
+    assert sanitize_probe_payload(payload) == {
+        "observed_date_text": "[REDACTED]",
+        "session": "[REDACTED]",
+        "full_dom": "[REDACTED]",
+    }
+
+
+def test_du2_10_challenge_detection_still_precedes_query_identity() -> None:
+    html = "<main>北京到上海机票 9月14日 拖动滑块完成安全验证</main>"
+
+    assert classify_result_state(html) is BrowserProbeOutcome.ACCESS_CHALLENGE
+
+
 def test_navigation_source_ref_uses_stable_public_entry_and_sanitizes_tracking() -> None:
     result = ProbeRunResult(
         provider_identity="FLIGGY",
@@ -872,6 +1001,8 @@ def _result_context_candidate(
     route_conflict: bool = False,
     date_conflict: bool = False,
 ) -> ResultContextCandidate:
+    route_match = origin and destination and not route_conflict
+    date_match = departure_date and not date_conflict
     return ResultContextCandidate(
         page_index=index,
         sanitized_url=url,
@@ -884,6 +1015,17 @@ def _result_context_candidate(
             "result_surface": result_surface,
             "route_conflict": route_conflict,
             "date_conflict": date_conflict,
+            "route_match": route_match,
+            "date_match": date_match,
+            "result_surface_present": result_surface,
+            "query_identity_decision": "match" if route_match and date_match and result_surface else "insufficient",
+            "mismatch_dimension": "none"
+            if route_match and date_match
+            else "date"
+            if route_match
+            else "route"
+            if date_match
+            else "both",
         },
         is_current_page=is_current,
     )
