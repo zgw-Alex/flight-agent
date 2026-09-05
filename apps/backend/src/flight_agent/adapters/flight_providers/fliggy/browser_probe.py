@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from enum import Enum
 from html.parser import HTMLParser
+from itertools import pairwise
 from pathlib import Path
 from typing import Any, Self
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
@@ -215,6 +216,11 @@ class ResultContextCandidate:
     identity: FliggyPageIdentity
     search_plan_evidence: dict[str, Any]
     is_current_page: bool
+    transient_id: str | None = None
+    creation_order: int | None = None
+    opener_relation: str = "unknown"
+    alive: bool = True
+    document_ready_state: str | None = None
 
     def score(self) -> int:
         score = 0
@@ -264,6 +270,18 @@ class ResultContextCandidate:
             "identity": self.identity.value,
             "search_plan_evidence": self.search_plan_evidence,
             "is_current_page": self.is_current_page,
+            "transient_id": self.transient_id or f"context-{self.page_index}",
+            "creation_order": self.creation_order if self.creation_order is not None else self.page_index,
+            "opener_relation": self.opener_relation,
+            "alive": self.alive,
+            "closed": not self.alive,
+            "document_ready_state": self.document_ready_state,
+            "url_class": _url_class(self.sanitized_url),
+            "result_like_surface": self.search_plan_evidence.get("result_surface_present") is True,
+            "route_match": self.search_plan_evidence.get("route_match"),
+            "date_match": self.search_plan_evidence.get("date_match"),
+            "observed_date_text": self.search_plan_evidence.get("observed_date_text"),
+            "observed_date_source": self.search_plan_evidence.get("observed_date_source"),
             "score": self.score(),
         }
 
@@ -2697,6 +2715,7 @@ def _build_post_submit_query_state_diagnostics(diagnostics: dict[str, Any], hand
         "diagnostic_state_consistent": stale_source is None,
         "stale_taxonomy_source": stale_source,
         "root_cause_class": _post_submit_root_cause_class(first_mismatch, stale_source, diagnostics),
+        "diag_u4_p0_p7": _diag_u4_p0_p7(diagnostics, handoff_diagnostics),
     }
 
 
@@ -2721,6 +2740,47 @@ def _q1_pre_submit_query(pre_submit_state: Any, pre_submit_verification: Any) ->
         }
     verified = isinstance(pre_submit_verification, dict) and pre_submit_verification.get("query_state_decision") == "match"
     return {"query": query, "verified": verified}
+
+
+def _diag_u4_p0_p7(diagnostics: dict[str, Any], handoff_diagnostics: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "p0_source_pre_submit": {
+            "query": _q0_requested_query(diagnostics.get("pre_submit_query_state")),
+            "verified": bool(
+                isinstance(diagnostics.get("pre_submit_query_verification"), dict)
+                and diagnostics["pre_submit_query_verification"].get("query_state_decision") == "match"
+            ),
+        },
+        "p1_submit_trigger": {
+            "submit_action_observed": diagnostics.get("submit_executed") is True,
+            "method": "public_search_button" if diagnostics.get("submit_executed") is True else "none",
+        },
+        "p2_context_created": {
+            "context_count": handoff_diagnostics.get("context_count", 0),
+            "popup_or_new_page_event": handoff_diagnostics.get("popup_or_new_page_event"),
+            "context_candidates": handoff_diagnostics.get("context_candidates", []),
+        },
+        "p3_context_selected": {
+            "selected_context_id": handoff_diagnostics.get("selected_context_id"),
+            "selected_page_identity": handoff_diagnostics.get("selected_page_identity"),
+            "selection_reason": handoff_diagnostics.get("selection_reason"),
+        },
+        "p4_initial_page_state": _first_result_state_sample(handoff_diagnostics),
+        "p5_load_progress": {
+            "base_deadline_reached": handoff_diagnostics.get("result_state_base_deadline_reached"),
+            "extension_used": handoff_diagnostics.get("result_state_extension_used"),
+            "extension_reason": handoff_diagnostics.get("result_state_extension_reason"),
+            "marker_transition_count": _marker_transition_count(tuple(handoff_diagnostics.get("result_state_samples") or ())),
+        },
+        "p6_settled_result_state": {
+            "settled_state_reached": handoff_diagnostics.get("settled_state_reached"),
+            "result_surface_present": handoff_diagnostics.get("result_surface_present"),
+            "page_closed_or_replaced": handoff_diagnostics.get("page_closed_or_replaced"),
+            "failure_taxonomy": handoff_diagnostics.get("result_state_failure_taxonomy"),
+            "diagnostic_root_cause_class": handoff_diagnostics.get("diagnostic_root_cause_class"),
+        },
+        "p7_query_identity": _q4_result_state_init(handoff_diagnostics),
+    }
 
 
 def _q3_post_submit_nav_state(handoff_diagnostics: dict[str, Any]) -> dict[str, Any]:
@@ -2938,8 +2998,14 @@ async def _select_result_context_page(
     pages = list(context.pages)
     attempts = max(1, min(4, wait_ms // 500))
     interval_ms = max(250, wait_ms // attempts)
+    base_attempts = attempts
+    max_attempts = attempts * 2
+    base_window_ms = interval_ms * attempts
+    extension_used = False
+    extension_reason = "none"
+    samples: list[dict[str, Any]] = []
     result_state_failure_taxonomy = "RESULT_TRANSITION_NOT_OBSERVED"
-    for attempt in range(attempts):
+    for attempt in range(max_attempts):
         await current_page.wait_for_timeout(interval_ms)
         pages, candidates = await _collect_result_context_candidates(
             context=context,
@@ -2949,21 +3015,56 @@ async def _select_result_context_page(
         )
         selected = choose_result_context_candidate(tuple(candidates))
         result_state_failure_taxonomy = _result_state_failure_taxonomy(tuple(candidates), selected)
+        samples.append(
+            _result_state_sample(
+                attempt=attempt + 1,
+                window="extension" if attempt >= base_attempts else "base",
+                candidates=tuple(candidates),
+                selected=selected,
+                failure_taxonomy=result_state_failure_taxonomy,
+            )
+        )
         if selected is not None or not _result_state_retryable(result_state_failure_taxonomy):
             break
-        if attempt == attempts - 1:
+        if attempt == base_attempts - 1:
+            if _result_state_forward_progress(samples):
+                extension_used = True
+                extension_reason = _result_state_extension_reason(samples)
+                continue
+            break
+        if attempt == max_attempts - 1:
             break
     query_diagnostics = _query_identity_diagnostics(selected, tuple(candidates))
+    root_cause_class = _diag_u4_root_cause(
+        candidates=tuple(candidates),
+        selected=selected,
+        result_state_failure_taxonomy=result_state_failure_taxonomy,
+        extension_used=extension_used,
+        samples=tuple(samples),
+    )
     diagnostics = {
         "page_count_before_submit": page_count_before_submit,
         "page_count_after_submit": len(pages),
         "popup_or_new_page_event": len(pages) > 1,
-        "result_state_sampling_attempts": attempts,
+        "result_state_sampling_attempts": len(samples),
+        "result_state_timeout_base_ms": wait_ms,
+        "result_state_base_window_ms": base_window_ms,
+        "result_state_max_observation_ms": base_window_ms * 2,
+        "result_state_base_deadline_reached": len(samples) >= base_attempts,
+        "result_state_extension_used": extension_used,
+        "result_state_extension_reason": extension_reason,
+        "result_state_samples": samples,
         "result_state_failure_taxonomy": None if selected is not None else result_state_failure_taxonomy,
+        "diagnostic_root_cause_class": root_cause_class,
         "candidate_pages": [candidate.to_dict() for candidate in candidates],
+        "context_count": len(candidates),
+        "context_candidates": _diag_context_inventory(tuple(candidates)),
         "selected_page_index": selected.page_index if selected is not None else None,
+        "selected_context_id": _candidate_context_id(selected) if selected is not None else None,
         "selected_page_url": selected.sanitized_url if selected is not None else None,
         "selected_page_identity": selected.identity.value if selected is not None else None,
+        "page_closed_or_replaced": _page_closed_or_replaced(tuple(candidates), selected),
+        "settled_state_reached": selected is not None or _settled_state_reached(tuple(samples)),
         "context_match": selected is not None,
         "route_evidence": _matched_evidence_value(candidates, "origin") and _matched_evidence_value(candidates, "destination"),
         "date_evidence": _matched_evidence_value(candidates, "departure_date"),
@@ -2988,7 +3089,26 @@ async def _collect_result_context_candidates(
     candidates: list[ResultContextCandidate] = []
     pages = list(context.pages)
     for index, candidate_page in enumerate(pages):
+        transient_id = f"context-{index}"
+        is_current = candidate_page == current_page
+        alive = not bool(candidate_page.is_closed())
+        opener_relation = "unknown"
+        document_ready_state: str | None = None
+        if alive:
+            with suppress(page_error_type):
+                opener = await candidate_page.opener()
+                if opener == current_page:
+                    opener_relation = "source"
+                elif opener is not None:
+                    opener_relation = "other"
+                else:
+                    opener_relation = "none"
+            with suppress(page_error_type):
+                ready_state = await candidate_page.evaluate("document.readyState")
+                document_ready_state = str(ready_state)
         try:
+            if not alive:
+                raise page_error_type("page closed")
             title = await candidate_page.title()
             html = await candidate_page.content()
             identity = classify_fliggy_page_identity(url=candidate_page.url, title=title, html=html)
@@ -3005,7 +3125,12 @@ async def _collect_result_context_candidates(
                     title=title,
                     identity=identity,
                     search_plan_evidence=search_plan_evidence,
-                    is_current_page=candidate_page == current_page,
+                    is_current_page=is_current,
+                    transient_id=transient_id,
+                    creation_order=index,
+                    opener_relation=opener_relation,
+                    alive=alive,
+                    document_ready_state=document_ready_state,
                 )
             )
         except page_error_type:
@@ -3016,10 +3141,214 @@ async def _collect_result_context_candidates(
                     title="<unavailable>",
                     identity=FliggyPageIdentity.UNKNOWN,
                     search_plan_evidence={"origin": False, "destination": False, "departure_date": False},
-                    is_current_page=candidate_page == current_page,
+                    is_current_page=is_current,
+                    transient_id=transient_id,
+                    creation_order=index,
+                    opener_relation=opener_relation,
+                    alive=False,
+                    document_ready_state=document_ready_state,
                 )
             )
     return pages, candidates
+
+
+def _result_state_sample(
+    *,
+    attempt: int,
+    window: str,
+    candidates: tuple[ResultContextCandidate, ...],
+    selected: ResultContextCandidate | None,
+    failure_taxonomy: str | None,
+) -> dict[str, Any]:
+    diagnostic_candidate = selected or _best_diagnostic_candidate(candidates)
+    evidence = diagnostic_candidate.search_plan_evidence if diagnostic_candidate is not None else {}
+    return {
+        "attempt": attempt,
+        "window": window,
+        "context_count": len(candidates),
+        "selected_context_id": _candidate_context_id(selected) if selected is not None else None,
+        "failure_taxonomy": failure_taxonomy,
+        "result_surface_present": any(
+            candidate.search_plan_evidence.get("result_surface_present") is True for candidate in candidates
+        ),
+        "alive_context_count": sum(1 for candidate in candidates if candidate.alive),
+        "closed_context_count": sum(1 for candidate in candidates if not candidate.alive),
+        "document_ready_states": sorted(
+            {
+                str(candidate.document_ready_state)
+                for candidate in candidates
+                if candidate.document_ready_state is not None
+            }
+        ),
+        "route_match": evidence.get("route_match", "insufficient"),
+        "date_match": evidence.get("date_match", "insufficient"),
+        "observed_date_text": evidence.get("observed_date_text"),
+        "normalized_observed_date": evidence.get("normalized_observed_date"),
+        "observed_date_source": evidence.get("observed_date_source"),
+        "marker_signature": _result_marker_signature(evidence),
+    }
+
+
+def _diag_context_inventory(candidates: tuple[ResultContextCandidate, ...]) -> list[dict[str, Any]]:
+    return [
+        {
+            "context_id": _candidate_context_id(candidate),
+            "creation_order": candidate.creation_order if candidate.creation_order is not None else candidate.page_index,
+            "opener_relation": candidate.opener_relation,
+            "url_class": _url_class(candidate.sanitized_url),
+            "identity": candidate.identity.value,
+            "alive": candidate.alive,
+            "closed": not candidate.alive,
+            "document_ready_state": candidate.document_ready_state,
+            "result_like_surface": candidate.search_plan_evidence.get("result_surface_present") is True,
+            "route_match": candidate.search_plan_evidence.get("route_match"),
+            "date_match": candidate.search_plan_evidence.get("date_match"),
+            "observed_date_text": candidate.search_plan_evidence.get("observed_date_text"),
+            "observed_date_source": candidate.search_plan_evidence.get("observed_date_source"),
+        }
+        for candidate in candidates
+    ]
+
+
+def _first_result_state_sample(handoff_diagnostics: dict[str, Any]) -> dict[str, Any]:
+    samples = handoff_diagnostics.get("result_state_samples")
+    if isinstance(samples, list) and samples:
+        return samples[0]
+    return {
+        "attempt": None,
+        "window": "none",
+        "context_count": handoff_diagnostics.get("context_count", 0),
+        "result_surface_present": handoff_diagnostics.get("result_surface_present"),
+    }
+
+
+def _result_marker_signature(evidence: dict[str, Any]) -> tuple[Any, ...]:
+    return (
+        evidence.get("route_match"),
+        evidence.get("date_match"),
+        evidence.get("observed_date_text"),
+        evidence.get("normalized_observed_date"),
+        evidence.get("selected_date_marker_class"),
+        evidence.get("result_surface_present"),
+    )
+
+
+def _marker_transition_count(samples: tuple[dict[str, Any], ...]) -> int:
+    signatures = [sample.get("marker_signature") for sample in samples]
+    return sum(1 for previous, current in pairwise(signatures) if previous != current)
+
+
+def _result_state_forward_progress(samples: list[dict[str, Any]]) -> bool:
+    if len(samples) < 2:
+        return bool(samples and samples[-1].get("result_surface_present") is True)
+    previous = samples[-2]
+    current = samples[-1]
+    return (
+        previous.get("context_count") != current.get("context_count")
+        or previous.get("alive_context_count") != current.get("alive_context_count")
+        or previous.get("result_surface_present") != current.get("result_surface_present")
+        or previous.get("marker_signature") != current.get("marker_signature")
+        or previous.get("document_ready_states") != current.get("document_ready_states")
+    )
+
+
+def _result_state_extension_reason(samples: list[dict[str, Any]]) -> str:
+    if len(samples) < 2:
+        return "result_surface_present" if samples and samples[-1].get("result_surface_present") is True else "none"
+    previous = samples[-2]
+    current = samples[-1]
+    if previous.get("context_count") != current.get("context_count"):
+        return "context_count_changed"
+    if previous.get("alive_context_count") != current.get("alive_context_count"):
+        return "context_lifecycle_changed"
+    if previous.get("result_surface_present") != current.get("result_surface_present"):
+        return "result_surface_changed"
+    if previous.get("marker_signature") != current.get("marker_signature"):
+        return "route_date_marker_changed"
+    if previous.get("document_ready_states") != current.get("document_ready_states"):
+        return "document_ready_state_changed"
+    return "none"
+
+
+def _settled_state_reached(samples: tuple[dict[str, Any], ...]) -> bool | str:
+    if samples and samples[-1].get("selected_context_id") is not None:
+        return True
+    if len(samples) < 2:
+        return "insufficient"
+    last = samples[-1]
+    previous = samples[-2]
+    stable = (
+        last.get("marker_signature") == previous.get("marker_signature")
+        and last.get("result_surface_present") is True
+        and last.get("alive_context_count", 0) > 0
+    )
+    return True if stable else "insufficient"
+
+
+def _page_closed_or_replaced(candidates: tuple[ResultContextCandidate, ...], selected: ResultContextCandidate | None) -> bool:
+    if selected is not None:
+        return not selected.alive
+    return bool(candidates) and any(not candidate.alive for candidate in candidates)
+
+
+def _diag_u4_root_cause(
+    *,
+    candidates: tuple[ResultContextCandidate, ...],
+    selected: ResultContextCandidate | None,
+    result_state_failure_taxonomy: str | None,
+    extension_used: bool,
+    samples: tuple[dict[str, Any], ...],
+) -> str:
+    if _page_closed_or_replaced(candidates, selected):
+        return "PAGE_CLOSED_OR_REPLACED_DURING_TRANSITION"
+    if selected is not None:
+        return "RESULT_STATE_SETTLING_GAP" if extension_used else "INCONCLUSIVE"
+    if _ambiguous_result_candidates(candidates):
+        return "PAGE_CONTEXT_SELECTION_AMBIGUOUS"
+    if _has_correct_alternate_candidate(candidates):
+        return "WRONG_PAGE_CONTEXT_SELECTED"
+    if result_state_failure_taxonomy == "RESULT_STATE_STALE_OR_DEFAULT":
+        return "STALE_DEFAULT_CONTEXT_PERSISTED" if extension_used else "RESULT_STATE_SETTLING_GAP"
+    if result_state_failure_taxonomy in {
+        "RESULT_STATE_QUERY_MISMATCH",
+        "RESULT_STATE_ROUTE_MISMATCH",
+        "RESULT_STATE_DATE_MISMATCH",
+    }:
+        return "CROSS_PAGE_QUERY_PROPAGATION_FAILED"
+    if result_state_failure_taxonomy in {"RESULT_STATE_QUERY_UNREADABLE", "RESULT_STATE_NOT_READY"}:
+        return "RESULT_STATE_OBSERVATION_GAP"
+    if result_state_failure_taxonomy == "RESULT_TRANSITION_NOT_OBSERVED":
+        return "RESULT_STATE_OBSERVATION_GAP" if samples else "INCONCLUSIVE"
+    return "INCONCLUSIVE"
+
+
+def _has_correct_alternate_candidate(candidates: tuple[ResultContextCandidate, ...]) -> bool:
+    return any(
+        candidate.identity is FliggyPageIdentity.FLIGHT_RESULT_CANDIDATE
+        and candidate.search_plan_evidence.get("route_match") is True
+        and candidate.search_plan_evidence.get("date_match") is True
+        and candidate.search_plan_evidence.get("result_surface_present") is True
+        and not candidate.is_current_page
+        for candidate in candidates
+    )
+
+
+def _candidate_context_id(candidate: ResultContextCandidate) -> str:
+    return candidate.transient_id or f"context-{candidate.page_index}"
+
+
+def _ambiguous_result_candidates(candidates: tuple[ResultContextCandidate, ...]) -> bool:
+    result_candidates = tuple(
+        candidate
+        for candidate in candidates
+        if candidate.identity is FliggyPageIdentity.FLIGHT_RESULT_CANDIDATE
+        and candidate.search_plan_evidence.get("result_surface_present") is True
+    )
+    if len(result_candidates) < 2:
+        return False
+    best_score = max(candidate.score() for candidate in result_candidates)
+    tied = tuple(candidate for candidate in result_candidates if candidate.score() == best_score)
+    return len({candidate.signature() for candidate in tied}) > 1
 
 
 def _result_state_failure_taxonomy(

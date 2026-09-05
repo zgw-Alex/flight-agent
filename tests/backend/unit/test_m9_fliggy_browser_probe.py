@@ -27,10 +27,18 @@ from flight_agent.adapters.flight_providers.fliggy.browser_probe import (
     _destination_commitment_result,
     _destination_commitment_status,
     _destination_readback_matches,
+    _diag_context_inventory,
+    _diag_u4_p0_p7,
+    _diag_u4_root_cause,
     _finalize_diagnostics,
+    _marker_transition_count,
     _resolve_destination_candidate,
+    _result_state_extension_reason,
     _result_state_failure_taxonomy,
+    _result_state_forward_progress,
     _result_state_retryable,
+    _result_state_sample,
+    _settled_state_reached,
     _StageRecorder,
     _verify_pre_submit_query_state,
     assess_dom_coverage,
@@ -1285,6 +1293,305 @@ def test_rs14_downstream_l1_booking_l2_behavior_remains_out_of_scope() -> None:
     assert "def map_level1_outcome_to_level2_failure" in source
 
 
+def test_ph01_source_plus_one_deterministic_popup_selects_popup() -> None:
+    source = _result_context_candidate(
+        index=0,
+        url="https://www.fliggy.com/?tab=flight",
+        title="飞机票查询-机票预订【飞猪旅行】",
+        identity=FliggyPageIdentity.EXPECTED_FLIGHT_SEARCH,
+        is_current=True,
+        result_surface=False,
+    )
+    popup = _result_context_candidate(
+        index=1,
+        url="https://sjipiao.fliggy.com/homeow/trip_flight_search.htm",
+        title="北京到上海机票预订",
+        identity=FliggyPageIdentity.FLIGHT_RESULT_CANDIDATE,
+        is_current=False,
+    )
+
+    assert choose_result_context_candidate((source, popup)) == popup
+    inventory = _diag_context_inventory((source, popup))
+    assert inventory[1]["context_id"] == "context-1"
+    assert inventory[1]["url_class"] == "FLIGGY_RESULT"
+
+
+def test_ph02_multiple_pages_one_deterministic_result_candidate_selects_it() -> None:
+    unrelated = _result_context_candidate(
+        index=1,
+        url="https://www.fliggy.com/?tab=hotel",
+        title="飞猪旅行",
+        identity=FliggyPageIdentity.UNKNOWN,
+        is_current=False,
+        result_surface=False,
+    )
+    result = _result_context_candidate(
+        index=2,
+        url="https://sjipiao.fliggy.com/homeow/trip_flight_search.htm",
+        title="北京到上海机票预订",
+        identity=FliggyPageIdentity.FLIGHT_RESULT_CANDIDATE,
+        is_current=False,
+    )
+
+    assert choose_result_context_candidate((unrelated, result)) == result
+
+
+def test_ph03_multiple_equally_plausible_pages_are_ambiguous() -> None:
+    first = _result_context_candidate(
+        index=1,
+        url="https://sjipiao.fliggy.com/homeow/trip_flight_search.htm",
+        title="北京到上海机票预订",
+        identity=FliggyPageIdentity.FLIGHT_RESULT_CANDIDATE,
+        is_current=False,
+    )
+    second = _result_context_candidate(
+        index=2,
+        url="https://sjipiao.fliggy.com/alternate/trip_flight_search.htm",
+        title="北京到上海航班查询预订",
+        identity=FliggyPageIdentity.FLIGHT_RESULT_CANDIDATE,
+        is_current=False,
+    )
+
+    assert choose_result_context_candidate((first, second)) is None
+    assert (
+        _diag_u4_root_cause(
+            candidates=(first, second),
+            selected=None,
+            result_state_failure_taxonomy="SUBMIT_STATE_PROPAGATION_FAILED",
+            extension_used=False,
+            samples=(),
+        )
+        == "PAGE_CONTEXT_SELECTION_AMBIGUOUS"
+    )
+
+
+def test_ph04_stale_initial_state_becomes_correct_before_base_deadline() -> None:
+    stale = _result_context_candidate(
+        index=1,
+        url="https://sjipiao.fliggy.com/homeow/trip_flight_search.htm",
+        title="北京到上海机票预订",
+        identity=FliggyPageIdentity.FLIGHT_RESULT_CANDIDATE,
+        is_current=False,
+        date_conflict=True,
+    )
+    stale.search_plan_evidence["normalized_observed_date"] = "2026-01-08"
+    correct = _result_context_candidate(
+        index=1,
+        url="https://sjipiao.fliggy.com/homeow/trip_flight_search.htm",
+        title="北京到上海机票预订",
+        identity=FliggyPageIdentity.FLIGHT_RESULT_CANDIDATE,
+        is_current=False,
+    )
+    samples = (
+        _result_state_sample(attempt=1, window="base", candidates=(stale,), selected=None, failure_taxonomy="RESULT_STATE_STALE_OR_DEFAULT"),
+        _result_state_sample(attempt=2, window="base", candidates=(correct,), selected=correct, failure_taxonomy=None),
+    )
+
+    assert _marker_transition_count(samples) == 1
+    assert _settled_state_reached(samples) is True
+
+
+def test_ph05_correct_query_only_during_extension_marks_settling_gap() -> None:
+    correct = _result_context_candidate(
+        index=1,
+        url="https://sjipiao.fliggy.com/homeow/trip_flight_search.htm",
+        title="北京到上海机票预订",
+        identity=FliggyPageIdentity.FLIGHT_RESULT_CANDIDATE,
+        is_current=False,
+    )
+
+    assert (
+        _diag_u4_root_cause(
+            candidates=(correct,),
+            selected=correct,
+            result_state_failure_taxonomy=None,
+            extension_used=True,
+            samples=(),
+        )
+        == "RESULT_STATE_SETTLING_GAP"
+    )
+
+
+def test_ph06_no_forward_progress_at_base_deadline_does_not_extend() -> None:
+    stale = _result_context_candidate(
+        index=1,
+        url="https://sjipiao.fliggy.com/homeow/trip_flight_search.htm",
+        title="北京到上海机票预订",
+        identity=FliggyPageIdentity.FLIGHT_RESULT_CANDIDATE,
+        is_current=False,
+        date_conflict=True,
+    )
+    sample = _result_state_sample(
+        attempt=1,
+        window="base",
+        candidates=(stale,),
+        selected=None,
+        failure_taxonomy="RESULT_STATE_STALE_OR_DEFAULT",
+    )
+
+    assert _result_state_forward_progress([sample, sample]) is False
+    assert _result_state_extension_reason([sample, sample]) == "none"
+
+
+def test_ph07_progress_but_mismatch_persists_through_extension_is_stale_default() -> None:
+    stale = _result_context_candidate(
+        index=1,
+        url="https://sjipiao.fliggy.com/homeow/trip_flight_search.htm",
+        title="北京到上海机票预订",
+        identity=FliggyPageIdentity.FLIGHT_RESULT_CANDIDATE,
+        is_current=False,
+        date_conflict=True,
+    )
+    stale.search_plan_evidence["normalized_expected_date"] = "2026-09-14"
+    stale.search_plan_evidence["normalized_observed_date"] = "2026-01-08"
+    stale.search_plan_evidence["date_parse_status"] = "ambiguous"
+
+    assert (
+        _diag_u4_root_cause(
+            candidates=(stale,),
+            selected=None,
+            result_state_failure_taxonomy="RESULT_STATE_STALE_OR_DEFAULT",
+            extension_used=True,
+            samples=(),
+        )
+        == "STALE_DEFAULT_CONTEXT_PERSISTED"
+    )
+
+
+def test_ph08_selected_page_closed_or_replaced_is_lifecycle_gap() -> None:
+    closed = _result_context_candidate(
+        index=1,
+        url="<unavailable>",
+        title="<unavailable>",
+        identity=FliggyPageIdentity.UNKNOWN,
+        is_current=False,
+        alive=False,
+    )
+
+    assert (
+        _diag_u4_root_cause(
+            candidates=(closed,),
+            selected=None,
+            result_state_failure_taxonomy="RESULT_TRANSITION_NOT_OBSERVED",
+            extension_used=False,
+            samples=(),
+        )
+        == "PAGE_CLOSED_OR_REPLACED_DURING_TRANSITION"
+    )
+
+
+def test_ph09_another_deterministic_candidate_correct_means_wrong_context_target() -> None:
+    current_wrong = _result_context_candidate(
+        index=0,
+        url="https://www.fliggy.com/?tab=flight",
+        title="飞机票查询-机票预订【飞猪旅行】",
+        identity=FliggyPageIdentity.EXPECTED_FLIGHT_SEARCH,
+        is_current=True,
+        result_surface=False,
+    )
+    alternate_correct = _result_context_candidate(
+        index=1,
+        url="https://sjipiao.fliggy.com/homeow/trip_flight_search.htm",
+        title="北京到上海机票预订",
+        identity=FliggyPageIdentity.FLIGHT_RESULT_CANDIDATE,
+        is_current=False,
+    )
+
+    assert (
+        _diag_u4_root_cause(
+            candidates=(current_wrong, alternate_correct),
+            selected=None,
+            result_state_failure_taxonomy="RESULT_STATE_NOT_READY",
+            extension_used=False,
+            samples=(),
+        )
+        == "WRONG_PAGE_CONTEXT_SELECTED"
+    )
+
+
+def test_ph10_correct_page_exists_but_reader_unreadable_is_observation_gap() -> None:
+    candidate = _result_context_candidate(
+        index=1,
+        url="https://sjipiao.fliggy.com/homeow/trip_flight_search.htm",
+        title="航班查询",
+        identity=FliggyPageIdentity.FLIGHT_RESULT_CANDIDATE,
+        is_current=False,
+    )
+    candidate.search_plan_evidence["route_match"] = "insufficient"
+    candidate.search_plan_evidence["date_match"] = "insufficient"
+
+    assert (
+        _diag_u4_root_cause(
+            candidates=(candidate,),
+            selected=None,
+            result_state_failure_taxonomy="RESULT_STATE_QUERY_UNREADABLE",
+            extension_used=False,
+            samples=(),
+        )
+        == "RESULT_STATE_OBSERVATION_GAP"
+    )
+
+
+def test_ph11_historical_20260906_and_20260108_remain_failures() -> None:
+    for observed in ("2026-09-06", "2026-01-08"):
+        candidate = _result_context_candidate(
+            index=1,
+            url="https://sjipiao.fliggy.com/homeow/trip_flight_search.htm",
+            title="北京到上海机票预订",
+            identity=FliggyPageIdentity.FLIGHT_RESULT_CANDIDATE,
+            is_current=False,
+            date_conflict=True,
+        )
+        candidate.search_plan_evidence["normalized_expected_date"] = "2026-09-14"
+        candidate.search_plan_evidence["normalized_observed_date"] = observed
+        candidate.search_plan_evidence["date_parse_status"] = "ambiguous"
+
+        assert choose_result_context_candidate((candidate,)) is None
+        assert _result_state_failure_taxonomy((candidate,), None) == "RESULT_STATE_STALE_OR_DEFAULT"
+
+
+def test_ph12_diag_u4_payload_is_sanitized() -> None:
+    handoff = _post_submit_handoff(observed_date_text="2026-01-08 Cookie: a=b", date_match=False, context_match=False)
+    handoff["context_candidates"] = [{"context_id": "context-1", "observed_date_text": "Cookie: a=b"}]
+    payload = _diag_u4_p0_p7(_post_submit_base_diagnostics(), handoff)
+
+    sanitized = sanitize_probe_payload({"diag_u4": payload})
+
+    assert sanitized["diag_u4"]["p2_context_created"]["context_candidates"][0]["observed_date_text"] == "[REDACTED]"
+    assert sanitized["diag_u4"]["p7_query_identity"]["observed_date_text"] == "[REDACTED]"
+
+
+def test_ph13_challenge_and_network_classifications_remain_safe_for_diag_u4() -> None:
+    assert (
+        _browser_failure_taxonomy(
+            outcome=BrowserProbeOutcome.ACCESS_CHALLENGE,
+            failed_stage=BrowserProbeStage.RESULT_TRANSITION.value,
+            diagnostics={"result_context_handoff": {"diagnostic_root_cause_class": "INCONCLUSIVE"}},
+        )
+        == "ACCESS_CHALLENGE"
+    )
+    assert (
+        _browser_failure_taxonomy(
+            outcome=BrowserProbeOutcome.NETWORK_ERROR,
+            failed_stage=BrowserProbeStage.RESULT_TRANSITION.value,
+            diagnostics={"result_context_handoff": {"diagnostic_root_cause_class": "INCONCLUSIVE"}},
+        )
+        == "NETWORK_FAILURE"
+    )
+
+
+def test_ph14_no_input_q5_downstream_or_shared_behavior_change() -> None:
+    source = (REPO_ROOT / "apps" / "backend" / "src" / "flight_agent" / "adapters" / "flight_providers" / "fliggy" / "browser_probe.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert _verify_pre_submit_query_state(_query_state()).submit_allowed is True
+    assert "def extract_level1_evidence" in source
+    assert "def extract_level2_offer_evidence" in source
+    assert "CommonNormalizer" not in source
+    assert "CandidateMerger" not in source
+
+
 def test_navigation_source_ref_uses_stable_public_entry_and_sanitizes_tracking() -> None:
     result = ProbeRunResult(
         provider_identity="FLIGGY",
@@ -1764,6 +2071,7 @@ def _result_context_candidate(
     result_surface: bool = True,
     route_conflict: bool = False,
     date_conflict: bool = False,
+    alive: bool = True,
 ) -> ResultContextCandidate:
     route_match = origin and destination and not route_conflict
     date_match = departure_date and not date_conflict
@@ -1792,4 +2100,5 @@ def _result_context_candidate(
             else "both",
         },
         is_current_page=is_current,
+        alive=alive,
     )
