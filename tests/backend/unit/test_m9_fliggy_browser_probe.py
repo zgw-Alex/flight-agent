@@ -10,6 +10,7 @@ from flight_agent.adapters.flight_providers.fliggy.browser_probe import (
     BrowserProbeOutcome,
     BrowserProbeStage,
     ControlReadiness,
+    DestinationSuggestionCandidate,
     DomTraversalAssessment,
     ExperimentDiagnosis,
     FliggyPageIdentity,
@@ -21,7 +22,11 @@ from flight_agent.adapters.flight_providers.fliggy.browser_probe import (
     SearchFormReadiness,
     StageDiagnostic,
     _annotate_post_submit_query_propagation,
+    _destination_commitment_result,
+    _destination_commitment_status,
+    _destination_readback_matches,
     _finalize_diagnostics,
+    _resolve_destination_candidate,
     _StageRecorder,
     _verify_pre_submit_query_state,
     assess_dom_coverage,
@@ -731,6 +736,159 @@ def test_qs12_historical_requested_vs_result_date_cannot_be_accepted() -> None:
     assert diagnostics["post_submit_date_match"] is False
 
 
+def test_dst01_deterministic_shanghai_suggestion_confirms_commitment() -> None:
+    candidates = (_destination_candidate("北京"), _destination_candidate("上海", index=1))
+    resolution = _resolve_destination_candidate(candidates, "上海", suggestion_surface_present=True)
+    commitment = _destination_commitment_result(
+        requested_destination="上海",
+        destination_control_ready=True,
+        typed_destination="上海",
+        candidates=candidates,
+        suggestion_surface_present=True,
+        selected_candidate=resolution.selected_candidate,
+        selection_method="click",
+        commit_readback="上海",
+        failure_taxonomy=resolution.failure_taxonomy,
+    )
+
+    assert resolution.selected_candidate is not None
+    assert resolution.selected_candidate.label == "上海"
+    assert commitment.commitment_status == "confirmed"
+    assert commitment.destination_match is True
+    assert commitment.failure_taxonomy is None
+
+
+def test_dst02_no_suggestion_surface_blocks_without_submit() -> None:
+    resolution = _resolve_destination_candidate((), "上海", suggestion_surface_present=False)
+
+    assert resolution.selected_candidate is None
+    assert resolution.failure_taxonomy == "DESTINATION_SUGGESTION_NOT_READY"
+
+
+def test_dst03_suggestion_surface_without_matching_option_is_not_found() -> None:
+    candidates = (_destination_candidate("北京"), _destination_candidate("杭州", index=1))
+    resolution = _resolve_destination_candidate(candidates, "上海", suggestion_surface_present=True)
+
+    assert resolution.selected_candidate is None
+    assert resolution.failure_taxonomy == "DESTINATION_OPTION_NOT_FOUND"
+
+
+def test_dst04_multiple_shanghai_like_options_are_ambiguous() -> None:
+    candidates = (_destination_candidate("上海虹桥"), _destination_candidate("上海浦东", index=1))
+    resolution = _resolve_destination_candidate(candidates, "上海", suggestion_surface_present=True)
+
+    assert resolution.selected_candidate is None
+    assert resolution.failure_taxonomy == "DESTINATION_OPTION_AMBIGUOUS"
+
+
+def test_dst05_matching_option_action_failure_is_reported() -> None:
+    candidate = _destination_candidate("上海")
+    commitment = _destination_commitment_result(
+        requested_destination="上海",
+        destination_control_ready=True,
+        typed_destination="上海",
+        candidates=(candidate,),
+        suggestion_surface_present=True,
+        selected_candidate=candidate,
+        selection_method="click",
+        commit_readback=None,
+        failure_taxonomy="DESTINATION_OPTION_SELECTION_FAILED",
+    )
+
+    assert commitment.commitment_status == "failed"
+    assert commitment.failure_taxonomy == "DESTINATION_OPTION_SELECTION_FAILED"
+
+
+def test_dst06_selection_without_committed_readback_is_not_confirmed() -> None:
+    assert (
+        _destination_commitment_status(
+            "到达城市，可直接输入城市名称搜索",
+            "上海",
+            action_performed=True,
+            failure_taxonomy=None,
+        )
+        == "failed"
+    )
+
+
+def test_dst07_different_readback_is_form_destination_mismatch() -> None:
+    candidate = _destination_candidate("上海")
+    commitment = _destination_commitment_result(
+        requested_destination="上海",
+        destination_control_ready=True,
+        typed_destination="上海",
+        candidates=(candidate,),
+        suggestion_surface_present=True,
+        selected_candidate=candidate,
+        selection_method="click",
+        commit_readback="杭州",
+        failure_taxonomy=None,
+    )
+
+    assert commitment.destination_match is False
+    assert commitment.failure_taxonomy == "FORM_DESTINATION_MISMATCH"
+
+
+def test_dst08_committed_destination_allows_existing_u2_pre_submit_verify() -> None:
+    verification = _verify_pre_submit_query_state(
+        _query_state(origin="北京", destination="上海", form_origin="北京", form_destination="上海", form_date="2026-09-14")
+    )
+
+    assert verification.submit_allowed is True
+    assert verification.query_state_decision == "match"
+
+
+def test_dst09_origin_and_date_u2_semantics_remain_unchanged() -> None:
+    old_date = _verify_pre_submit_query_state(
+        _query_state(origin="北京", destination="上海", form_origin="北京", form_destination="上海", form_date="2026-09-06")
+    )
+    wrong_origin = _verify_pre_submit_query_state(
+        _query_state(origin="北京", destination="上海", form_origin="广州", form_destination="上海", form_date="2026-09-14")
+    )
+
+    assert old_date.failure_taxonomy == "FORM_DATE_MISMATCH"
+    assert wrong_origin.failure_taxonomy == "FORM_ROUTE_MISMATCH"
+
+
+def test_dst10_challenge_classification_still_precedes_destination_repair() -> None:
+    assert classify_result_state("<main>北京 上海 2026-09-14 安全验证</main>") is BrowserProbeOutcome.ACCESS_CHALLENGE
+
+
+def test_dst11_destination_diagnostics_stay_bounded_and_sanitized() -> None:
+    commitment = _destination_commitment_result(
+        requested_destination="上海",
+        destination_control_ready=True,
+        typed_destination="上海",
+        candidates=(_destination_candidate("上海 Cookie: a=b"),),
+        suggestion_surface_present=True,
+        selected_candidate=_destination_candidate("上海 Cookie: a=b"),
+        selection_method="click",
+        commit_readback="上海 Cookie: a=b",
+        failure_taxonomy=None,
+    )
+
+    assert sanitize_probe_payload({"destination_commitment": commitment.to_dict()}) == {
+        "destination_commitment": {
+            "requested_destination": "上海",
+            "destination_control_ready": True,
+            "typed_destination": "上海",
+            "suggestion_surface_present": True,
+            "suggestion_candidate_count": 1,
+            "candidate_labels": ["[REDACTED]"],
+            "selected_candidate_label": "[REDACTED]",
+            "selection_method": "click",
+            "commit_readback": "[REDACTED]",
+            "destination_match": True,
+            "commitment_status": "confirmed",
+            "failure_taxonomy": None,
+        }
+    }
+
+
+def test_dst12_placeholder_destination_can_never_equal_shanghai() -> None:
+    assert _destination_readback_matches("到达城市，可直接输入城市名称搜索", "上海") is False
+
+
 def test_navigation_source_ref_uses_stable_public_entry_and_sanitizes_tracking() -> None:
     result = ProbeRunResult(
         provider_identity="FLIGGY",
@@ -1154,6 +1312,10 @@ def _query_state(
         form_destination_readback=form_destination,
         form_date_readback=form_date,
     )
+
+
+def _destination_candidate(label: str, *, selector: str = ".next-overlay-wrapper li", index: int = 0) -> DestinationSuggestionCandidate:
+    return DestinationSuggestionCandidate(selector=selector, index=index, label=label)
 
 
 def _result_context_candidate(

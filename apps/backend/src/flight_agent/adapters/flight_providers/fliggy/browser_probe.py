@@ -11,6 +11,7 @@ import argparse
 import json
 import re
 import time
+from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from enum import Enum
@@ -18,6 +19,8 @@ from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any, Self
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+
+from playwright.async_api import Error as PlaywrightError
 
 FLIGGY_BROWSER_PROBE_VERSION = "m9-bp5-u1-fliggy-browser-probe-v0.1"
 FLIGGY_PROVIDER_ID = "FLIGGY"
@@ -33,6 +36,21 @@ _SENSITIVE_KEY_FRAGMENTS = (
     "secret",
     "session",
     "token",
+)
+
+_FLIGGY_DESTINATION_INPUT_SELECTOR = ".rc-flight-searchbar input#form_arrCity"
+_FLIGGY_DESTINATION_SUGGESTION_SELECTORS = (
+    ".next-overlay-wrapper [role='option']",
+    ".next-overlay-wrapper .next-menu-item",
+    ".next-overlay-wrapper li",
+    ".rc-flight-searchbar [role='option']",
+    ".rc-flight-searchbar .next-menu-item",
+    ".rc-flight-searchbar .city-item",
+    ".rc-flight-searchbar .suggestion-item",
+    ".rc-flight-searchbar .autocomplete-item",
+    ".citys-flight li",
+    ".city-list li",
+    ".J_CityList li",
 )
 
 
@@ -336,6 +354,58 @@ class PreSubmitQueryVerification:
             "submit_allowed": self.submit_allowed,
             "failure_taxonomy": self.failure_taxonomy,
             "query_state_decision": self.query_state_decision,
+        }
+
+
+@dataclass(frozen=True)
+class DestinationSuggestionCandidate:
+    selector: str
+    index: int
+    label: str
+
+    def to_dict(self) -> dict[str, str | int]:
+        return {
+            "selector": self.selector,
+            "index": self.index,
+            "label": self.label,
+        }
+
+
+@dataclass(frozen=True)
+class DestinationOptionResolution:
+    selected_candidate: DestinationSuggestionCandidate | None
+    failure_taxonomy: str | None
+
+
+@dataclass(frozen=True)
+class DestinationCommitmentResult:
+    requested_destination: str
+    destination_control_ready: bool
+    typed_destination: str | None
+    suggestion_surface_present: bool
+    suggestion_candidate_count: int
+    candidate_labels: tuple[str, ...]
+    selected_candidate_label: str | None
+    selection_method: str
+    commit_readback: str | None
+    destination_match: bool | str
+    commitment_status: str
+    failure_taxonomy: str | None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "requested_destination": self.requested_destination,
+            "destination_control_ready": self.destination_control_ready,
+            "typed_destination": self.typed_destination,
+            "suggestion_surface_present": self.suggestion_surface_present,
+            "suggestion_candidate_count": self.suggestion_candidate_count,
+            "candidate_labels": list(self.candidate_labels),
+            "selected_candidate_label": self.selected_candidate_label,
+            "selection_method": self.selection_method,
+            "commit_readback": self.commit_readback,
+            "destination_match": self.destination_match,
+            "commitment_status": self.commitment_status,
+            "failure_taxonomy": self.failure_taxonomy,
         }
 
 
@@ -1204,7 +1274,6 @@ async def run_fliggy_level2_live_validation(
 
     try:
         recorder.mark(BrowserProbeStage.BROWSER_LAUNCH, "launching Playwright Chromium")
-        from playwright.async_api import Error as PlaywrightError
         from playwright.async_api import TimeoutError as PlaywrightTimeoutError
         from playwright.async_api import async_playwright
     except ImportError as exc:
@@ -1552,6 +1621,11 @@ def _browser_failure_taxonomy(
     if diagnostics.get("wrong_navigation_target") is True:
         return "RESULT_PAGE_LAYOUT_DRIFT"
     if isinstance(diagnostics.get("pre_submit_query_verification"), dict):
+        destination_commitment = diagnostics.get("destination_commitment")
+        if isinstance(destination_commitment, dict):
+            destination_failure = destination_commitment.get("failure_taxonomy")
+            if isinstance(destination_failure, str):
+                return destination_failure
         pre_submit_failure = diagnostics["pre_submit_query_verification"].get("failure_taxonomy")
         if isinstance(pre_submit_failure, str):
             return pre_submit_failure
@@ -1689,7 +1763,6 @@ async def run_fliggy_browser_probe(probe_input: ProbeInput) -> ProbeRunResult:
 
     try:
         recorder.mark(BrowserProbeStage.BROWSER_LAUNCH, "launching Playwright Chromium")
-        from playwright.async_api import Error as PlaywrightError
         from playwright.async_api import TimeoutError as PlaywrightTimeoutError
         from playwright.async_api import async_playwright
     except ImportError as exc:
@@ -2177,7 +2250,7 @@ def _parse_price_currency(raw_text: str | None) -> str | None:
     return None
 
 
-async def _write_public_flight_search_fields(page: Any, probe_input: ProbeInput) -> None:
+async def _write_public_flight_search_fields(page: Any, probe_input: ProbeInput) -> dict[str, Any]:
     async def fill_input(selector: str, value: str, *, force: bool = False, press_enter: bool = True) -> None:
         field = page.locator(selector).nth(0)
         if force:
@@ -2192,33 +2265,290 @@ async def _write_public_flight_search_fields(page: Any, probe_input: ProbeInput)
     await page.wait_for_selector(".rc-flight-searchbar input#form_depCity")
     await fill_input(".rc-flight-searchbar input#form_depCity", probe_input.origin_text)
     await fill_input(".rc-flight-searchbar input#form_depDate", probe_input.departure_date.isoformat(), force=True)
-    await fill_input(".rc-flight-searchbar input#form_arrCity", probe_input.destination_text)
+    destination_commitment = await _commit_public_destination(page, probe_input.destination_text)
+    return {"destination_commitment": destination_commitment.to_dict()}
 
 
 async def _submit_public_flight_search(context: Any, page: Any, probe_input: ProbeInput) -> None:
     page_count_before_submit = len(context.pages)
-    await _write_public_flight_search_fields(page, probe_input)
+    write_diagnostics = await _write_public_flight_search_fields(page, probe_input)
+    destination_commitment = write_diagnostics.get("destination_commitment")
+    if not (isinstance(destination_commitment, dict) and destination_commitment.get("commitment_status") == "confirmed"):
+        return
     if len(context.pages) == page_count_before_submit:
         await page.locator(".rc-flight-searchbar button.search-button").nth(0).click()
 
 
 async def _submit_verified_public_flight_search(context: Any, page: Any, probe_input: ProbeInput) -> tuple[bool, dict[str, Any]]:
     page_count_before_submit = len(context.pages)
-    await _write_public_flight_search_fields(page, probe_input)
+    write_diagnostics = await _write_public_flight_search_fields(page, probe_input)
     query_state = await _capture_public_search_query_state(page, probe_input)
     verification = _verify_pre_submit_query_state(query_state)
+    destination_commitment = write_diagnostics.get("destination_commitment")
+    destination_committed = isinstance(destination_commitment, dict) and destination_commitment.get("commitment_status") == "confirmed"
     diagnostics: dict[str, Any] = {
+        **write_diagnostics,
         "pre_submit_query_state": query_state.to_dict(),
         "pre_submit_query_verification": verification.to_dict(),
-        "submit_allowed": verification.submit_allowed,
+        "submit_allowed": verification.submit_allowed and destination_committed,
         "submit_executed": False,
     }
-    if not verification.submit_allowed:
+    if diagnostics["submit_allowed"] is not True:
         return False, diagnostics
     if len(context.pages) == page_count_before_submit:
         await page.locator(".rc-flight-searchbar button.search-button").nth(0).click()
     diagnostics["submit_executed"] = True
     return True, diagnostics
+
+
+async def _commit_public_destination(page: Any, requested_destination: str) -> DestinationCommitmentResult:
+    control = page.locator(_FLIGGY_DESTINATION_INPUT_SELECTOR)
+    destination_control_ready = False
+    try:
+        if await control.count() > 0:
+            field = control.nth(0)
+            destination_control_ready = await field.is_visible() and await field.is_enabled() and await field.is_editable()
+        if not destination_control_ready:
+            return _destination_commitment_result(
+                requested_destination=requested_destination,
+                destination_control_ready=False,
+                typed_destination=None,
+                candidates=(),
+                suggestion_surface_present=False,
+                selected_candidate=None,
+                selection_method="none",
+                commit_readback=None,
+                failure_taxonomy="DESTINATION_CONTROL_NOT_READY",
+            )
+        await field.click()
+        await field.fill(requested_destination)
+        await page.wait_for_timeout(300)
+    except PlaywrightError:
+        return _destination_commitment_result(
+            requested_destination=requested_destination,
+            destination_control_ready=destination_control_ready,
+            typed_destination=None,
+            candidates=(),
+            suggestion_surface_present=False,
+            selected_candidate=None,
+            selection_method="none",
+            commit_readback=None,
+            failure_taxonomy="DESTINATION_INPUT_WRITE_FAILED",
+        )
+
+    candidates = await _wait_for_destination_suggestion_candidates(page)
+    suggestion_surface_present = bool(candidates)
+    resolution = _resolve_destination_candidate(
+        candidates,
+        requested_destination,
+        suggestion_surface_present=suggestion_surface_present,
+    )
+    if resolution.selected_candidate is None:
+        return _destination_commitment_result(
+            requested_destination=requested_destination,
+            destination_control_ready=True,
+            typed_destination=requested_destination,
+            candidates=candidates,
+            suggestion_surface_present=suggestion_surface_present,
+            selected_candidate=None,
+            selection_method="none",
+            commit_readback=await _read_control_text(page, _FLIGGY_DESTINATION_INPUT_SELECTOR),
+            failure_taxonomy=resolution.failure_taxonomy,
+        )
+
+    try:
+        await page.locator(resolution.selected_candidate.selector).nth(resolution.selected_candidate.index).click()
+        await page.wait_for_timeout(300)
+    except PlaywrightError:
+        return _destination_commitment_result(
+            requested_destination=requested_destination,
+            destination_control_ready=True,
+            typed_destination=requested_destination,
+            candidates=candidates,
+            suggestion_surface_present=suggestion_surface_present,
+            selected_candidate=resolution.selected_candidate,
+            selection_method="click",
+            commit_readback=await _read_control_text(page, _FLIGGY_DESTINATION_INPUT_SELECTOR),
+            failure_taxonomy="DESTINATION_OPTION_SELECTION_FAILED",
+        )
+
+    commit_readback = await _read_control_text(page, _FLIGGY_DESTINATION_INPUT_SELECTOR)
+    return _destination_commitment_result(
+        requested_destination=requested_destination,
+        destination_control_ready=True,
+        typed_destination=requested_destination,
+        candidates=candidates,
+        suggestion_surface_present=suggestion_surface_present,
+        selected_candidate=resolution.selected_candidate,
+        selection_method="click",
+        commit_readback=commit_readback,
+        failure_taxonomy=None,
+    )
+
+
+async def _collect_destination_suggestion_candidates(page: Any, *, max_candidates: int = 8) -> tuple[DestinationSuggestionCandidate, ...]:
+    candidates: list[DestinationSuggestionCandidate] = []
+    seen_labels: set[str] = set()
+    for selector in _FLIGGY_DESTINATION_SUGGESTION_SELECTORS:
+        locator = page.locator(selector)
+        count = 0
+        with suppress(PlaywrightError):
+            count = min(await locator.count(), max_candidates)
+        for index in range(count):
+            item = locator.nth(index)
+            label = None
+            with suppress(PlaywrightError):
+                if not await item.is_visible():
+                    continue
+                label = await _read_locator_text(item)
+            if label is None:
+                continue
+            normalized_label = _normalize_destination_label(label)
+            if normalized_label in seen_labels:
+                continue
+            seen_labels.add(normalized_label)
+            candidates.append(DestinationSuggestionCandidate(selector=selector, index=index, label=label))
+            if len(candidates) >= max_candidates:
+                return tuple(candidates)
+    return tuple(candidates)
+
+
+async def _wait_for_destination_suggestion_candidates(
+    page: Any,
+    *,
+    max_candidates: int = 8,
+    attempts: int = 5,
+    wait_ms: int = 300,
+) -> tuple[DestinationSuggestionCandidate, ...]:
+    for attempt in range(attempts):
+        candidates = await _collect_destination_suggestion_candidates(page, max_candidates=max_candidates)
+        if candidates or attempt == attempts - 1:
+            return candidates
+        await page.wait_for_timeout(wait_ms)
+    return ()
+
+
+async def _read_locator_text(locator: Any) -> str | None:
+    for expression in (
+        "node => node.getAttribute('aria-label')",
+        "node => node.getAttribute('title')",
+        "node => node.textContent",
+        "node => node.value",
+    ):
+        value = await locator.evaluate(expression)
+        if isinstance(value, str) and value.strip():
+            return _truncate_diagnostic_text(value)
+    return None
+
+
+def _resolve_destination_candidate(
+    candidates: tuple[DestinationSuggestionCandidate, ...],
+    requested_destination: str,
+    *,
+    suggestion_surface_present: bool,
+) -> DestinationOptionResolution:
+    if not suggestion_surface_present:
+        return DestinationOptionResolution(selected_candidate=None, failure_taxonomy="DESTINATION_SUGGESTION_NOT_READY")
+    exact_matches = [
+        candidate
+        for candidate in candidates
+        if _normalize_destination_label(candidate.label) == _normalize_destination_label(requested_destination)
+    ]
+    if len(exact_matches) == 1:
+        return DestinationOptionResolution(selected_candidate=exact_matches[0], failure_taxonomy=None)
+    if len(exact_matches) > 1:
+        return DestinationOptionResolution(selected_candidate=None, failure_taxonomy="DESTINATION_OPTION_AMBIGUOUS")
+    plausible_matches = [
+        candidate
+        for candidate in candidates
+        if _destination_label_contains_requested(candidate.label, requested_destination)
+    ]
+    if len(plausible_matches) == 1:
+        return DestinationOptionResolution(selected_candidate=plausible_matches[0], failure_taxonomy=None)
+    if len(plausible_matches) > 1:
+        return DestinationOptionResolution(selected_candidate=None, failure_taxonomy="DESTINATION_OPTION_AMBIGUOUS")
+    return DestinationOptionResolution(selected_candidate=None, failure_taxonomy="DESTINATION_OPTION_NOT_FOUND")
+
+
+def _destination_commitment_result(
+    *,
+    requested_destination: str,
+    destination_control_ready: bool,
+    typed_destination: str | None,
+    candidates: tuple[DestinationSuggestionCandidate, ...],
+    suggestion_surface_present: bool,
+    selected_candidate: DestinationSuggestionCandidate | None,
+    selection_method: str,
+    commit_readback: str | None,
+    failure_taxonomy: str | None,
+) -> DestinationCommitmentResult:
+    destination_match = _destination_readback_matches(commit_readback, requested_destination)
+    commitment_status = _destination_commitment_status(
+        commit_readback,
+        requested_destination,
+        action_performed=selected_candidate is not None,
+        failure_taxonomy=failure_taxonomy,
+    )
+    effective_failure = failure_taxonomy
+    if effective_failure is None and commitment_status != "confirmed":
+        effective_failure = "FORM_DESTINATION_MISMATCH" if destination_match is False else "DESTINATION_COMMIT_NOT_CONFIRMED"
+    return DestinationCommitmentResult(
+        requested_destination=requested_destination,
+        destination_control_ready=destination_control_ready,
+        typed_destination=typed_destination,
+        suggestion_surface_present=suggestion_surface_present,
+        suggestion_candidate_count=len(candidates),
+        candidate_labels=tuple(candidate.label for candidate in candidates),
+        selected_candidate_label=selected_candidate.label if selected_candidate is not None else None,
+        selection_method=selection_method,
+        commit_readback=commit_readback,
+        destination_match=destination_match,
+        commitment_status=commitment_status,
+        failure_taxonomy=effective_failure,
+    )
+
+
+def _destination_commitment_status(
+    readback: str | None,
+    requested_destination: str,
+    *,
+    action_performed: bool,
+    failure_taxonomy: str | None,
+) -> str:
+    destination_match = _destination_readback_matches(readback, requested_destination)
+    if destination_match is True:
+        return "confirmed"
+    if failure_taxonomy in {"DESTINATION_CONTROL_NOT_READY", "DESTINATION_INPUT_WRITE_FAILED", "DESTINATION_OPTION_SELECTION_FAILED"}:
+        return "failed"
+    if destination_match == "insufficient":
+        return "insufficient"
+    if action_performed and _is_destination_placeholder(readback):
+        return "failed"
+    return "mismatch"
+
+
+def _destination_readback_matches(readback: str | None, requested_destination: str) -> bool | str:
+    if readback is None or not readback.strip():
+        return "insufficient"
+    if _is_destination_placeholder(readback):
+        return False
+    return _normalize_destination_label(requested_destination) in _normalize_destination_label(readback)
+
+
+def _destination_label_contains_requested(label: str, requested_destination: str) -> bool:
+    normalized_label = _normalize_destination_label(label)
+    normalized_requested = _normalize_destination_label(requested_destination)
+    return normalized_requested in normalized_label
+
+
+def _normalize_destination_label(value: str) -> str:
+    return re.sub(r"\s+", "", value).strip().lower()
+
+
+def _is_destination_placeholder(readback: str | None) -> bool:
+    if readback is None:
+        return False
+    return "到达城市" in readback and "输入" in readback
 
 
 async def _capture_public_search_query_state(page: Any, probe_input: ProbeInput) -> PublicSearchQueryState:
@@ -2227,7 +2557,7 @@ async def _capture_public_search_query_state(page: Any, probe_input: ProbeInput)
         requested_destination=probe_input.destination_text,
         requested_departure_date=probe_input.departure_date.isoformat(),
         form_origin_readback=await _read_control_text(page, ".rc-flight-searchbar input#form_depCity"),
-        form_destination_readback=await _read_control_text(page, ".rc-flight-searchbar input#form_arrCity"),
+        form_destination_readback=await _read_control_text(page, _FLIGGY_DESTINATION_INPUT_SELECTOR),
         form_date_readback=await _read_control_text(page, ".rc-flight-searchbar input#form_depDate"),
     )
 
