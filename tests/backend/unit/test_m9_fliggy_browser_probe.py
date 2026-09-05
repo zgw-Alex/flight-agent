@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from datetime import UTC, date, datetime
 from pathlib import Path
 
@@ -12,16 +13,18 @@ from flight_agent.adapters.flight_providers.fliggy.browser_probe import (
     DomTraversalAssessment,
     ExperimentDiagnosis,
     FliggyPageIdentity,
-    ProviderMarketCompleteness,
     ProbeInput,
     ProbeRunResult,
+    ProviderMarketCompleteness,
     ResultContextCandidate,
     SearchFormReadiness,
     StageDiagnostic,
+    _finalize_diagnostics,
+    _StageRecorder,
     assess_dom_coverage,
     choose_result_context_candidate,
-    classify_fliggy_page_identity,
     classify_experiment_diagnosis,
+    classify_fliggy_page_identity,
     classify_result_state,
     extract_level1_evidence,
     sanitize_probe_payload,
@@ -150,6 +153,21 @@ def test_classifier_detection_order_prioritizes_access_challenge() -> None:
     assert classify_result_state(html) is BrowserProbeOutcome.ACCESS_CHALLENGE
 
 
+def test_public_login_verification_code_copy_is_not_active_access_challenge() -> None:
+    html = "<main>验证码登录 获取验证码 飞猪会员登录</main>"
+
+    assert summarize_detector_state(html)["access_challenge"] is False
+    assert classify_result_state(html) is BrowserProbeOutcome.EVIDENCE_INSUFFICIENT
+    assert (
+        classify_fliggy_page_identity(
+            url="https://www.fliggy.com/?tab=flight",
+            title="飞机票查询-机票预订【飞猪旅行】",
+            html=f"<html><body>{html}</body></html>",
+        )
+        is FliggyPageIdentity.UNKNOWN
+    )
+
+
 def test_detector_state_summary_is_sanitized_and_machine_checkable() -> None:
     state = summarize_detector_state(DIRECT_FLIGHT_HTML)
 
@@ -161,6 +179,25 @@ def test_detector_state_summary_is_sanitized_and_machine_checkable() -> None:
         "explicit_empty": False,
         "observed_row_count": 1,
         "terminal_boundary_observed": True,
+    }
+
+
+def test_diag_u1_required_browser_probe_stages_are_available() -> None:
+    assert {stage.value for stage in BrowserProbeStage} >= {
+        "BROWSER_LAUNCH",
+        "ENTRY_NAVIGATION",
+        "SEARCH_INPUT_READINESS",
+        "SEARCH_INPUT",
+        "SEARCH_SUBMIT",
+        "RESULT_TRANSITION",
+        "RESULT_READINESS",
+        "LEVEL1_DISCOVERY",
+        "TARGET_SELECTION",
+        "BOOKING_ACTION_DISCOVERY",
+        "BOOKING_ACTION",
+        "LEVEL2_READINESS",
+        "LEVEL2_EXTRACTION",
+        "SANITIZATION",
     }
 
 
@@ -562,6 +599,56 @@ def test_stage_diagnostics_and_timeout_last_stage_are_serialized() -> None:
     assert result["diagnostics"]["last_stage"] == BrowserProbeStage.RESULT_STATE_WAIT.value
     assert result["diagnostics"]["cookie"] == "[REDACTED]"
     assert result["diagnostics"]["stage_diagnostics"][0]["stage"] == BrowserProbeStage.BROWSER_LAUNCH.value
+
+
+def test_diag_finalizer_localizes_search_form_readiness_failure() -> None:
+    diagnostics = {
+        "final_sanitized_url": "https://www.fliggy.com/?tab=flight",
+        "detector_state": summarize_detector_state(""),
+        "search_form_ready": False,
+    }
+    recorder = _StageRecorder(time.monotonic())
+    recorder.mark(BrowserProbeStage.BROWSER_LAUNCH, "launch")
+    recorder.mark(BrowserProbeStage.ENTRY_NAVIGATION, "entry")
+    recorder.mark(BrowserProbeStage.SEARCH_INPUT_READINESS, "readiness")
+
+    _finalize_diagnostics(
+        diagnostics=diagnostics,
+        recorder=recorder,
+        outcome=BrowserProbeOutcome.EVIDENCE_INSUFFICIENT,
+        started=time.monotonic(),
+    )
+
+    assert diagnostics["last_successful_stage"] == BrowserProbeStage.ENTRY_NAVIGATION.value
+    assert diagnostics["failed_stage"] == BrowserProbeStage.SEARCH_INPUT_READINESS.value
+    assert diagnostics["failure_taxonomy"] == "SEARCH_FORM_NOT_READY"
+    assert diagnostics["url_class"] == "FLIGGY_PUBLIC_ENTRY"
+    assert diagnostics["challenge_detected"] is False
+
+
+def test_diag_finalizer_keeps_result_transition_failure_at_handoff_stage() -> None:
+    diagnostics = {
+        "final_sanitized_url": "https://www.fliggy.com/?tab=flight",
+        "detector_state": summarize_detector_state(""),
+        "search_submission_attempted": True,
+        "result_context_selected": False,
+    }
+    recorder = _StageRecorder(time.monotonic())
+    recorder.mark(BrowserProbeStage.SEARCH_SUBMIT, "submit")
+    recorder.mark(BrowserProbeStage.RESULT_TRANSITION, "handoff")
+    recorder.mark(BrowserProbeStage.RESULT_READINESS, "wait")
+    recorder.mark(BrowserProbeStage.LEVEL1_DISCOVERY, "rows")
+
+    _finalize_diagnostics(
+        diagnostics=diagnostics,
+        recorder=recorder,
+        outcome=BrowserProbeOutcome.EVIDENCE_INSUFFICIENT,
+        started=time.monotonic(),
+    )
+
+    assert diagnostics["last_successful_stage"] == BrowserProbeStage.SEARCH_SUBMIT.value
+    assert diagnostics["failed_stage"] == BrowserProbeStage.RESULT_TRANSITION.value
+    assert diagnostics["failure_taxonomy"] == "SEARCH_SUBMIT_NO_TRANSITION"
 
 
 def test_experiment_diagnosis_classification() -> None:

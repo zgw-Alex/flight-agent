@@ -64,6 +64,18 @@ class Level2ExpansionOutcome(str, Enum):
 class BrowserProbeStage(str, Enum):
     BROWSER_LAUNCH = "BROWSER_LAUNCH"
     ENTRY_NAVIGATION = "ENTRY_NAVIGATION"
+    SEARCH_INPUT_READINESS = "SEARCH_INPUT_READINESS"
+    SEARCH_INPUT = "SEARCH_INPUT"
+    SEARCH_SUBMIT = "SEARCH_SUBMIT"
+    RESULT_TRANSITION = "RESULT_TRANSITION"
+    RESULT_READINESS = "RESULT_READINESS"
+    LEVEL1_DISCOVERY = "LEVEL1_DISCOVERY"
+    TARGET_SELECTION = "TARGET_SELECTION"
+    BOOKING_ACTION_DISCOVERY = "BOOKING_ACTION_DISCOVERY"
+    BOOKING_ACTION = "BOOKING_ACTION"
+    LEVEL2_READINESS = "LEVEL2_READINESS"
+    LEVEL2_EXTRACTION = "LEVEL2_EXTRACTION"
+    SANITIZATION = "SANITIZATION"
     SEARCH_INPUT_READY = "SEARCH_INPUT_READY"
     SEARCH_SUBMITTED = "SEARCH_SUBMITTED"
     RESULT_STATE_WAIT = "RESULT_STATE_WAIT"
@@ -508,7 +520,7 @@ def summarize_detector_state(html: str) -> dict[str, bool | int]:
     result_count = len(_result_rows(root))
     terminal_observed, _ = _terminal_boundary_from_html(html)
     return {
-        "access_challenge": _contains_any(page_text, ("captcha", "验证码", "滑块", "安全验证", "访问验证", "拖动滑块")),
+        "access_challenge": _active_access_challenge_detected(page_text),
         "login_required": _contains_any(page_text, ("请登录", "登录后", "login required", "sign in", "请先登录")),
         "provider_error": _contains_any(page_text, ("系统繁忙", "服务异常", "出错了", "provider error", "upstream error")),
         "result_container": result_count > 0,
@@ -523,7 +535,7 @@ def classify_fliggy_page_identity(*, url: str, title: str, html: str) -> FliggyP
     page_text = root.text_content()
     lowered_text = page_text.lower()
     host = urlsplit(url).netloc.lower()
-    if _contains_any(lowered_text, ("captcha", "验证码", "滑块", "安全验证", "访问验证", "拖动滑块")):
+    if _active_access_challenge_detected(lowered_text):
         return FliggyPageIdentity.ACCESS_CHALLENGE
     if _contains_any(page_text, ("没有找到相应的店铺信息", "没有找到店铺", "店铺不存在", "找不到店铺")):
         return FliggyPageIdentity.WRONG_NAVIGATION_TARGET
@@ -545,6 +557,19 @@ def classify_fliggy_page_identity(*, url: str, title: str, html: str) -> FliggyP
     if _contains_any(page_text, ("请登录", "登录后", "请先登录")) and not expected_origin:
         return FliggyPageIdentity.LOGIN_REQUIRED
     return FliggyPageIdentity.UNKNOWN
+
+
+def _active_access_challenge_detected(page_text: str) -> bool:
+    lowered = page_text.lower()
+    if _contains_any(lowered, ("拖动滑块", "安全验证", "访问验证", "人机验证", "完成验证", "security check")):
+        return True
+    if "captcha" in lowered and _contains_any(lowered, ("complete", "verify", "challenge", "blocked")):
+        return True
+    if "验证码" not in lowered:
+        return False
+    if _contains_any(lowered, ("验证码登录", "登录验证码", "短信验证码", "获取验证码")):
+        return False
+    return _contains_any(lowered, ("输入验证码", "请完成", "校验", "验证后", "验证通过"))
 
 
 def summarize_search_plan_evidence(*, title: str, html: str, probe_input: ProbeInput) -> dict[str, bool]:
@@ -890,6 +915,45 @@ def map_level1_outcome_to_level2_failure(outcome: BrowserProbeOutcome) -> Level2
     return Level2ExpansionOutcome.EVIDENCE_INSUFFICIENT
 
 
+def _level2_as_browser_outcome(outcome: Level2ExpansionOutcome) -> BrowserProbeOutcome:
+    if outcome is Level2ExpansionOutcome.SUCCESS_EXPANDED:
+        return BrowserProbeOutcome.SUCCESS_COMPLETE
+    if outcome is Level2ExpansionOutcome.SUCCESS_EMPTY:
+        return BrowserProbeOutcome.SUCCESS_EMPTY
+    if outcome is Level2ExpansionOutcome.ACCESS_CHALLENGE:
+        return BrowserProbeOutcome.ACCESS_CHALLENGE
+    if outcome is Level2ExpansionOutcome.TIMEOUT:
+        return BrowserProbeOutcome.TIMEOUT
+    if outcome is Level2ExpansionOutcome.NETWORK_ERROR:
+        return BrowserProbeOutcome.NETWORK_ERROR
+    if outcome is Level2ExpansionOutcome.PROVIDER_ERROR:
+        return BrowserProbeOutcome.PROVIDER_ERROR
+    return BrowserProbeOutcome.EVIDENCE_INSUFFICIENT
+
+
+def _finalize_level2_live_diagnostics(
+    *,
+    diagnostics: dict[str, Any],
+    recorder: _StageRecorder,
+    outcome: Level2ExpansionOutcome,
+    started: float,
+) -> dict[str, Any]:
+    finalized = dict(diagnostics)
+    _finalize_diagnostics(
+        diagnostics=finalized,
+        recorder=recorder,
+        outcome=_level2_as_browser_outcome(outcome),
+        started=started,
+    )
+    if outcome is Level2ExpansionOutcome.ACTION_NOT_AVAILABLE:
+        finalized["failure_taxonomy"] = "BOOKING_ACTION_NOT_FOUND"
+    elif outcome is Level2ExpansionOutcome.SUCCESS_EMPTY:
+        finalized["failure_taxonomy"] = None
+    elif outcome is Level2ExpansionOutcome.EVIDENCE_INSUFFICIENT and finalized.get("failed_stage") == BrowserProbeStage.LEVEL2_EXTRACTION.value:
+        finalized["failure_taxonomy"] = "LEVEL2_ROWS_NOT_FOUND"
+    return finalized
+
+
 async def run_fliggy_level2_live_validation(
     probe_input: ProbeInput,
     *,
@@ -904,6 +968,7 @@ async def run_fliggy_level2_live_validation(
     started = time.monotonic()
     acquired_at = datetime.now(UTC)
     url = _build_fliggy_search_url(probe_input)
+    recorder = _StageRecorder(started)
     diagnostics: dict[str, Any] = {
         "live_validation_unit": "M9-FLIGGY-LEVEL2-LIVE-U1",
         "read_only": True,
@@ -914,9 +979,17 @@ async def run_fliggy_level2_live_validation(
         "clicked": False,
         "retries": 0,
         "stop_policy": "stop_on_challenge_or_first_sufficient_evidence",
+        "stage_diagnostics": [],
+        "last_stage": None,
+        "last_successful_stage": None,
+        "failed_stage": None,
+        "failure_taxonomy": None,
+        "url_class": "UNAVAILABLE",
+        "challenge_detected": False,
     }
 
     try:
+        recorder.mark(BrowserProbeStage.BROWSER_LAUNCH, "launching Playwright Chromium")
         from playwright.async_api import Error as PlaywrightError
         from playwright.async_api import TimeoutError as PlaywrightTimeoutError
         from playwright.async_api import async_playwright
@@ -931,6 +1004,7 @@ async def run_fliggy_level2_live_validation(
             context = await browser.new_context(storage_state=None)
             page = await context.new_page()
             page.set_default_timeout(_remaining_ms(started, probe_input.overall_deadline_seconds))
+            recorder.mark(BrowserProbeStage.ENTRY_NAVIGATION, "opening FLIGGY public search page")
             await page.goto(url, wait_until="domcontentloaded", timeout=_remaining_ms(started, probe_input.overall_deadline_seconds))
             html = await page.content()
             title = await page.title()
@@ -953,11 +1027,18 @@ async def run_fliggy_level2_live_validation(
                     duration_ms=int((time.monotonic() - started) * 1000),
                     source_url=page.url,
                     bounds=target_bounds,
-                    diagnostics=diagnostics,
+                    diagnostics=_finalize_level2_live_diagnostics(
+                        diagnostics=diagnostics,
+                        recorder=recorder,
+                        outcome=Level2ExpansionOutcome.ACCESS_CHALLENGE,
+                        started=started,
+                    ),
                 )
 
+            recorder.mark(BrowserProbeStage.SEARCH_INPUT_READINESS, "checking public flight-search controls")
             readiness = await _capture_search_form_readiness(page)
             diagnostics["search_form_readiness"] = readiness.to_dict()
+            diagnostics["search_form_ready"] = readiness.is_ready()
             if not readiness.is_ready():
                 await context.close()
                 await browser.close()
@@ -971,12 +1052,21 @@ async def run_fliggy_level2_live_validation(
                     duration_ms=int((time.monotonic() - started) * 1000),
                     source_url=page.url,
                     bounds=target_bounds,
-                    diagnostics={**diagnostics, "failure_kind": "search_form_not_ready"},
+                    diagnostics=_finalize_level2_live_diagnostics(
+                        diagnostics={**diagnostics, "failure_kind": "search_form_not_ready"},
+                        recorder=recorder,
+                        outcome=Level2ExpansionOutcome.EVIDENCE_INSUFFICIENT,
+                        started=started,
+                    ),
                 )
 
             page_count_before_submit = len(context.pages)
+            recorder.mark(BrowserProbeStage.SEARCH_INPUT, "public flight-search controls detected")
             await _submit_public_flight_search(context, page, probe_input)
+            diagnostics["search_input_succeeded"] = True
+            recorder.mark(BrowserProbeStage.SEARCH_SUBMIT, "search submitted through public visible flight form")
             diagnostics["search_submission_attempted"] = True
+            recorder.mark(BrowserProbeStage.RESULT_TRANSITION, "selecting deterministic result context")
             page, handoff_diagnostics = await _select_result_context_page(
                 context=context,
                 current_page=page,
@@ -986,6 +1076,8 @@ async def run_fliggy_level2_live_validation(
                 wait_ms=min(5000, max(500, _remaining_ms(started, probe_input.overall_deadline_seconds) - 500)),
             )
             diagnostics["result_context_handoff"] = handoff_diagnostics
+            diagnostics["result_context_selected"] = handoff_diagnostics["selected_page_index"] is not None
+            recorder.mark(BrowserProbeStage.RESULT_READINESS, "waiting for terminal/result state")
             await page.wait_for_load_state("networkidle", timeout=_remaining_ms(started, probe_input.overall_deadline_seconds))
             html = await page.content()
             title = await page.title()
@@ -994,6 +1086,7 @@ async def run_fliggy_level2_live_validation(
             diagnostics["final_sanitized_url"] = _sanitize_source_ref(page.url)
             level1_outcome = classify_result_state(html)
             diagnostics["level1_outcome"] = level1_outcome.value
+            recorder.mark(BrowserProbeStage.LEVEL1_DISCOVERY, "discovering Level-1 rows")
             level1_evidence = extract_level1_evidence(html)
             diagnostics["level1_observed_result_count"] = len(level1_evidence)
             if not level1_evidence or level1_outcome not in {
@@ -1012,9 +1105,15 @@ async def run_fliggy_level2_live_validation(
                     duration_ms=int((time.monotonic() - started) * 1000),
                     source_url=page.url,
                     bounds=target_bounds,
-                    diagnostics=diagnostics,
+                    diagnostics=_finalize_level2_live_diagnostics(
+                        diagnostics=diagnostics,
+                        recorder=recorder,
+                        outcome=map_level1_outcome_to_level2_failure(level1_outcome),
+                        started=started,
+                    ),
                 )
 
+            recorder.mark(BrowserProbeStage.TARGET_SELECTION, "selecting first bounded Level-1 target")
             selected_level1 = level1_evidence[0]
             target = Level2ExpansionTarget(
                 parent_level1_ref=build_level2_live_parent_ref(selected_level1),
@@ -1022,6 +1121,7 @@ async def run_fliggy_level2_live_validation(
                 provider_row_ref=str(selected_level1.container_diagnostic.get("selector")),
             )
             diagnostics["level1_targets_attempted"] = 1
+            recorder.mark(BrowserProbeStage.BOOKING_ACTION_DISCOVERY, "checking Level-1 booking action")
             action_selector = selected_level1.booking_action_diagnostic.get("selector")
             diagnostics["target_booking_action_selector"] = action_selector
             if not isinstance(action_selector, str) or not action_selector.strip():
@@ -1037,16 +1137,28 @@ async def run_fliggy_level2_live_validation(
                     duration_ms=int((time.monotonic() - started) * 1000),
                     source_url=page.url,
                     bounds=target_bounds,
-                    diagnostics=diagnostics,
+                    diagnostics=_finalize_level2_live_diagnostics(
+                        diagnostics=diagnostics,
+                        recorder=recorder,
+                        outcome=Level2ExpansionOutcome.ACTION_NOT_AVAILABLE,
+                        started=started,
+                    ),
                 )
 
             row_selector = str(selected_level1.container_diagnostic.get("selector") or ".flight-item-tr")
             action = page.locator(row_selector).nth(selected_level1.evidence_index - 1).locator(action_selector).first
+            recorder.mark(BrowserProbeStage.BOOKING_ACTION, "clicking bounded Level-1 booking action")
             await action.click(timeout=min(target_bounds.max_wait_ms, _remaining_ms(started, probe_input.overall_deadline_seconds)))
             diagnostics["clicked"] = True
+            recorder.mark(BrowserProbeStage.LEVEL2_READINESS, "waiting for bounded Level-2 expansion")
             await page.wait_for_timeout(min(target_bounds.max_wait_ms, _remaining_ms(started, probe_input.overall_deadline_seconds)))
             html = await page.content()
             diagnostics["post_expansion_detector_state"] = summarize_detector_state(html)
+            recorder.mark(BrowserProbeStage.LEVEL2_EXTRACTION, "extracting Level-2 offer evidence")
+            level2_outcome = classify_level2_expansion_state(html)
+            if level2_outcome in {Level2ExpansionOutcome.SUCCESS_EXPANDED, Level2ExpansionOutcome.SUCCESS_EMPTY}:
+                recorder.mark(BrowserProbeStage.SANITIZATION, "sanitizing probe diagnostics")
+                recorder.mark(BrowserProbeStage.COMPLETED, "probe result completed")
             result = build_level2_expansion_result_from_html(
                 html,
                 target=target,
@@ -1057,7 +1169,12 @@ async def run_fliggy_level2_live_validation(
                 duration_ms=int((time.monotonic() - started) * 1000),
                 source_url=page.url,
                 bounds=target_bounds,
-                diagnostics=diagnostics,
+                diagnostics=_finalize_level2_live_diagnostics(
+                    diagnostics=diagnostics,
+                    recorder=recorder,
+                    outcome=level2_outcome,
+                    started=started,
+                ),
             )
             await context.close()
             await browser.close()
@@ -1073,7 +1190,16 @@ async def run_fliggy_level2_live_validation(
             duration_ms=int((time.monotonic() - started) * 1000),
             source_url=url,
             bounds=target_bounds,
-            diagnostics={**diagnostics, "failure_kind": "timeout", "last_html_classification": classify_level2_expansion_state(html).value},
+            diagnostics=_finalize_level2_live_diagnostics(
+                diagnostics={
+                    **diagnostics,
+                    "failure_kind": "timeout",
+                    "last_html_classification": classify_level2_expansion_state(html).value,
+                },
+                recorder=recorder,
+                outcome=Level2ExpansionOutcome.TIMEOUT,
+                started=started,
+            ),
         )
     except PlaywrightError as exc:
         return build_level2_expansion_failure_result(
@@ -1086,7 +1212,12 @@ async def run_fliggy_level2_live_validation(
             duration_ms=int((time.monotonic() - started) * 1000),
             source_url=url,
             bounds=target_bounds,
-            diagnostics={**diagnostics, "failure_kind": "playwright_error", "failure_message": str(exc)},
+            diagnostics=_finalize_level2_live_diagnostics(
+                diagnostics={**diagnostics, "failure_kind": "playwright_error", "failure_message": str(exc)},
+                recorder=recorder,
+                outcome=Level2ExpansionOutcome.NETWORK_ERROR,
+                started=started,
+            ),
         )
 
 
@@ -1119,6 +1250,116 @@ def sanitize_probe_payload(value: Any) -> Any:
     if isinstance(value, str):
         return _redact_sensitive_text(value)
     return value
+
+
+def _url_class(url: str | None) -> str:
+    if not url:
+        return "UNAVAILABLE"
+    parts = urlsplit(url)
+    host = parts.netloc.lower()
+    path = parts.path.lower()
+    if not host:
+        return "UNAVAILABLE"
+    if "fliggy.com" not in host and "alitrip.com" not in host:
+        return "NON_FLIGGY"
+    if _contains_any(path, ("flight_search_result", "trip_flight_search")):
+        return "FLIGGY_RESULT"
+    if "fliggy.com" in host and parts.query:
+        query_keys = {key for key, _ in parse_qsl(parts.query)}
+        if "tab" in query_keys:
+            return "FLIGGY_PUBLIC_ENTRY"
+    return "FLIGGY_OTHER"
+
+
+def _stage_value(stage: BrowserProbeStage | None) -> str | None:
+    return stage.value if stage is not None else None
+
+
+def _diagnostic_stage_summary(recorder: _StageRecorder, outcome: BrowserProbeOutcome) -> tuple[str | None, str | None]:
+    if outcome in {
+        BrowserProbeOutcome.SUCCESS_COMPLETE,
+        BrowserProbeOutcome.SUCCESS_PARTIAL,
+        BrowserProbeOutcome.SUCCESS_EMPTY,
+    }:
+        return _stage_value(recorder.last_stage()), None
+    return _stage_value(recorder.last_successful_stage()), _stage_value(recorder.last_stage())
+
+
+def _browser_failure_taxonomy(
+    *,
+    outcome: BrowserProbeOutcome,
+    failed_stage: str | None,
+    diagnostics: dict[str, Any],
+) -> str | None:
+    if outcome in {
+        BrowserProbeOutcome.SUCCESS_COMPLETE,
+        BrowserProbeOutcome.SUCCESS_PARTIAL,
+        BrowserProbeOutcome.SUCCESS_EMPTY,
+    }:
+        return None
+    if outcome in {BrowserProbeOutcome.ACCESS_CHALLENGE, BrowserProbeOutcome.LOGIN_REQUIRED}:
+        return "ACCESS_CHALLENGE"
+    if outcome is BrowserProbeOutcome.PROVIDER_ERROR:
+        return "PROVIDER_ERROR"
+    if outcome is BrowserProbeOutcome.NETWORK_ERROR:
+        if failed_stage == BrowserProbeStage.BROWSER_LAUNCH.value:
+            return "BROWSER_LAUNCH_FAILURE"
+        return "NETWORK_FAILURE"
+    if outcome is BrowserProbeOutcome.TIMEOUT:
+        if failed_stage == BrowserProbeStage.ENTRY_NAVIGATION.value:
+            return "ENTRY_NAVIGATION_TIMEOUT"
+        if failed_stage in {BrowserProbeStage.RESULT_TRANSITION.value, BrowserProbeStage.RESULT_READINESS.value}:
+            return "RESULT_CONTAINER_NOT_READY"
+        if failed_stage == BrowserProbeStage.LEVEL2_READINESS.value:
+            return "LEVEL2_CONTAINER_NOT_READY"
+        return "NETWORK_FAILURE"
+    if diagnostics.get("wrong_navigation_target") is True:
+        return "RESULT_PAGE_LAYOUT_DRIFT"
+    if diagnostics.get("search_form_ready") is False:
+        return "SEARCH_FORM_NOT_READY"
+    if diagnostics.get("search_input_succeeded") is False:
+        return "SEARCH_INPUT_FAILED"
+    if diagnostics.get("search_submission_attempted") is True and diagnostics.get("result_context_selected") is False:
+        return "SEARCH_SUBMIT_NO_TRANSITION"
+    if failed_stage == BrowserProbeStage.LEVEL1_DISCOVERY.value:
+        return "LEVEL1_ROWS_NOT_FOUND"
+    if failed_stage == BrowserProbeStage.TARGET_SELECTION.value:
+        return "LEVEL1_TARGET_NOT_FOUND"
+    if failed_stage == BrowserProbeStage.BOOKING_ACTION_DISCOVERY.value:
+        return "BOOKING_ACTION_NOT_FOUND"
+    if failed_stage == BrowserProbeStage.BOOKING_ACTION.value:
+        return "BOOKING_ACTION_FAILED"
+    if failed_stage == BrowserProbeStage.LEVEL2_EXTRACTION.value:
+        return "LEVEL2_ROWS_NOT_FOUND"
+    return "DIAGNOSTIC_INSUFFICIENT"
+
+
+def _finalize_diagnostics(
+    *,
+    diagnostics: dict[str, Any],
+    recorder: _StageRecorder,
+    outcome: BrowserProbeOutcome,
+    started: float,
+) -> None:
+    last_successful_stage, failed_stage = _diagnostic_stage_summary(recorder, outcome)
+    if diagnostics.get("search_submission_attempted") is True and diagnostics.get("result_context_selected") is False:
+        last_successful_stage = BrowserProbeStage.SEARCH_SUBMIT.value
+        failed_stage = BrowserProbeStage.RESULT_TRANSITION.value
+    diagnostics["last_successful_stage"] = last_successful_stage
+    diagnostics["failed_stage"] = failed_stage
+    diagnostics["last_stage"] = _stage_value(recorder.last_stage())
+    diagnostics["stage_diagnostics"] = [stage.to_dict() for stage in recorder.stages]
+    diagnostics["elapsed_ms"] = int((time.monotonic() - started) * 1000)
+    diagnostics["failure_taxonomy"] = _browser_failure_taxonomy(
+        outcome=outcome,
+        failed_stage=failed_stage,
+        diagnostics=diagnostics,
+    )
+    diagnostics["url_class"] = _url_class(str(diagnostics.get("final_sanitized_url") or ""))
+    diagnostics["challenge_detected"] = bool(
+        isinstance(diagnostics.get("detector_state"), dict)
+        and diagnostics["detector_state"].get("access_challenge") is True
+    )
 
 
 def classify_experiment_diagnosis(results: tuple[ProbeRunResult, ...]) -> ExperimentDiagnosis:
@@ -1166,11 +1407,19 @@ async def run_fliggy_browser_probe(probe_input: ProbeInput) -> ProbeRunResult:
         "entry_url_strategy": "public_fliggy_flight_entry_tab",
         "stage_diagnostics": [],
         "last_stage": None,
+        "last_successful_stage": None,
+        "failed_stage": None,
+        "failure_taxonomy": None,
+        "url_class": "UNAVAILABLE",
+        "challenge_detected": False,
         "detector_state": summarize_detector_state(""),
         "page_identity": FliggyPageIdentity.UNKNOWN.value,
         "wrong_navigation_target": False,
         "search_interaction_failed": False,
+        "search_form_ready": None,
+        "search_input_succeeded": None,
         "search_submission_attempted": False,
+        "result_context_selected": None,
         "visible_public_form_used": False,
         "search_form_readiness": None,
         "search_form_ready_ms": None,
@@ -1240,8 +1489,10 @@ async def run_fliggy_browser_probe(probe_input: ProbeInput) -> ProbeRunResult:
                 await context.close()
                 await browser.close()
             else:
+                recorder.mark(BrowserProbeStage.SEARCH_INPUT_READINESS, "checking public flight-search controls")
                 form_readiness = await _capture_search_form_readiness(page)
                 diagnostics["search_form_readiness"] = form_readiness.to_dict()
+                diagnostics["search_form_ready"] = form_readiness.is_ready()
                 if not form_readiness.is_ready():
                     diagnostics["search_interaction_failed"] = True
                     outcome = BrowserProbeOutcome.EVIDENCE_INSUFFICIENT
@@ -1250,15 +1501,17 @@ async def run_fliggy_browser_probe(probe_input: ProbeInput) -> ProbeRunResult:
                     should_wait_for_result_state = False
                 else:
                     diagnostics["search_form_ready_ms"] = int((time.monotonic() - started) * 1000)
-                    recorder.mark(BrowserProbeStage.SEARCH_INPUT_READY, "public flight-search controls detected")
+                    recorder.mark(BrowserProbeStage.SEARCH_INPUT, "public flight-search controls detected")
                     page_count_before_submit = len(context.pages)
                     diagnostics["result_context_handoff"]["page_count_before_submit"] = page_count_before_submit
                     diagnostics["submit_sequence"] = "origin_enter,date_force_fill_enter,destination_enter,submit_fallback_if_needed"
                     await _submit_public_flight_search(context, page, probe_input)
+                    diagnostics["search_input_succeeded"] = True
                     diagnostics["clicked"] = True
                     diagnostics["search_submission_attempted"] = True
                     diagnostics["visible_public_form_used"] = True
-                    recorder.mark(BrowserProbeStage.SEARCH_SUBMITTED, "search submitted through public visible flight form")
+                    recorder.mark(BrowserProbeStage.SEARCH_SUBMIT, "search submitted through public visible flight form")
+                    recorder.mark(BrowserProbeStage.RESULT_TRANSITION, "selecting deterministic result context")
                     page, handoff_diagnostics = await _select_result_context_page(
                         context=context,
                         current_page=page,
@@ -1268,6 +1521,7 @@ async def run_fliggy_browser_probe(probe_input: ProbeInput) -> ProbeRunResult:
                         wait_ms=min(5000, max(500, _remaining_ms(started, probe_input.overall_deadline_seconds) - 500)),
                     )
                     diagnostics["result_context_handoff"] = handoff_diagnostics
+                    diagnostics["result_context_selected"] = handoff_diagnostics["selected_page_index"] is not None
                     if handoff_diagnostics["selected_page_index"] is None:
                         diagnostics["search_interaction_failed"] = True
                     else:
@@ -1275,7 +1529,7 @@ async def run_fliggy_browser_probe(probe_input: ProbeInput) -> ProbeRunResult:
                         diagnostics["page_identity"] = handoff_diagnostics["selected_page_identity"]
                     should_wait_for_result_state = True
             if should_wait_for_result_state:
-                recorder.mark(BrowserProbeStage.RESULT_STATE_WAIT, "waiting for terminal/result state")
+                recorder.mark(BrowserProbeStage.RESULT_READINESS, "waiting for terminal/result state")
                 await page.wait_for_load_state("networkidle", timeout=_remaining_ms(started, probe_input.overall_deadline_seconds))
                 html = await page.content()
                 title = await page.title()
@@ -1311,7 +1565,7 @@ async def run_fliggy_browser_probe(probe_input: ProbeInput) -> ProbeRunResult:
                 await context.close()
                 await browser.close()
             else:
-                recorder.mark(BrowserProbeStage.RESULT_CONTAINER_DETECTED, "result container detected")
+                recorder.mark(BrowserProbeStage.LEVEL1_DISCOVERY, "result container detected")
                 recorder.mark(BrowserProbeStage.LEVEL1_EXTRACTION, "extracting Level-1 raw evidence")
                 initial_count = len(extract_level1_evidence(html))
                 previous_count = initial_count
@@ -1346,6 +1600,7 @@ async def run_fliggy_browser_probe(probe_input: ProbeInput) -> ProbeRunResult:
                 )
                 diagnostics["initial_result_count"] = initial_count
                 diagnostics["stabilization_rounds"] = stabilization_rounds
+                recorder.mark(BrowserProbeStage.SANITIZATION, "sanitizing probe diagnostics")
                 recorder.mark(BrowserProbeStage.COMPLETED, "probe result completed")
                 await context.close()
                 await browser.close()
@@ -1369,15 +1624,16 @@ async def run_fliggy_browser_probe(probe_input: ProbeInput) -> ProbeRunResult:
         stabilization_rounds=stabilization_rounds,
     )
     last_stage = recorder.last_stage()
-    if last_stage is not BrowserProbeStage.COMPLETED and outcome not in {
-        BrowserProbeOutcome.TIMEOUT,
-        BrowserProbeOutcome.NETWORK_ERROR,
-    }:
+    if outcome in {
+        BrowserProbeOutcome.SUCCESS_COMPLETE,
+        BrowserProbeOutcome.SUCCESS_PARTIAL,
+        BrowserProbeOutcome.SUCCESS_EMPTY,
+    } and last_stage is not BrowserProbeStage.COMPLETED:
+        recorder.mark(BrowserProbeStage.SANITIZATION, "sanitizing probe diagnostics")
         recorder.mark(BrowserProbeStage.COMPLETED, "probe result completed")
     last_stage = recorder.last_stage()
-    diagnostics["last_stage"] = last_stage.value if last_stage is not None else None
-    diagnostics["stage_diagnostics"] = [stage.to_dict() for stage in recorder.stages]
-    diagnostics["elapsed_ms"] = int((time.monotonic() - started) * 1000)
+    _ = last_stage
+    _finalize_diagnostics(diagnostics=diagnostics, recorder=recorder, outcome=outcome, started=started)
     return ProbeRunResult(
         provider_identity=FLIGGY_PROVIDER_ID,
         acquisition_mode=BrowserAcquisitionMode.BROWSER,
@@ -1448,6 +1704,13 @@ class _StageRecorder:
         if not self.stages:
             return None
         return self.stages[-1].stage
+
+    def last_successful_stage(self) -> BrowserProbeStage | None:
+        if not self.stages:
+            return None
+        if len(self.stages) == 1:
+            return None
+        return self.stages[-2].stage
 
 
 class HtmlNode:
