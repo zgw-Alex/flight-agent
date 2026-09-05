@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import UTC, date, datetime
 
 from flight_agent.adapters.flight_providers.fliggy import (
+    DEFAULT_FLIGGY_CANONICAL_ENTRY_PROFILE,
     BrowserAcquisitionMode,
     BrowserProbeOutcome,
     DomTraversalAssessment,
@@ -10,8 +11,15 @@ from flight_agent.adapters.flight_providers.fliggy import (
     FliggyCanonicalEntry,
     FliggyEvidenceMapper,
     FliggyFlightEvidence,
-    ProviderMarketCompleteness,
+    FliggyLevel2OfferMapper,
+    FliggyLevel2OfferRowEvidence,
+    FliggyLevel2ParentContext,
+    Level2ExpansionBounds,
+    Level2ExpansionOutcome,
+    Level2ExpansionResult,
+    Level2ExpansionTarget,
     ProbeRunResult,
+    ProviderMarketCompleteness,
 )
 from flight_agent.domain.flights import PriceSemantics
 from flight_agent.domain.requirements import AirportCode, LocalDate, RequirementId
@@ -25,7 +33,10 @@ from flight_agent.domain.search import (
 )
 from flight_agent.domain.shared import RequirementVersion, ValueState
 from flight_agent.ports import (
+    CandidateMerger,
     CoverageCompleteness,
+    EquivalenceDecision,
+    MergerVersion,
     NormalizationContext,
     NormalizerVersion,
     ProviderAcquisitionId,
@@ -129,6 +140,74 @@ def test_f_can_08_deterministic_replay_preserves_versions() -> None:
     assert first.reference_data_version == ReferenceDataVersion("m9-fliggy-reference-data-v1")
 
 
+def test_f_can_09_provider_local_airport_aliases_cover_full_human_labels() -> None:
+    profile = DEFAULT_FLIGGY_CANONICAL_ENTRY_PROFILE
+
+    assert profile.airport_code("大兴国际机场") == "PKX"
+    assert profile.airport_code("浦东国际机场T2") == "PVG"
+    assert profile.airport_code("大兴") == "PKX"
+    assert profile.airport_code("浦东") == "PVG"
+    assert profile.airport_code("未知国际机场T2") == "未知国际机场T2"
+
+
+def test_f_can_10_ca8341_human_case_survives_canonicalization_after_alias_repair() -> None:
+    level1_mapping = mapped_result(evidence=(ca8341_human_evidence(),))
+    level1 = FliggyCanonicalEntry().normalize(level1_mapping, ca8341_context())
+
+    assert level1.data_status is ProviderDataStatus.COMPLETE
+    assert level1.segments[0].marketing_carrier == "CA"
+    assert level1.segments[0].flight_number == "CA8341"
+    assert level1.segments[0].departure_airport == "PKX"
+    assert level1.segments[0].arrival_airport == "PVG"
+    assert level1.itineraries[0].segment_ids == (level1.segments[0].segment_id,)
+    assert level1.offers[0].itinerary_id == level1.itineraries[0].itinerary_id
+    assert level1.offers[0].total_price.amount == 399
+    assert level1.offers[0].price_semantics is PriceSemantics.LOWER_BOUND
+    assert level1.offers[0].provenance[0].detail_ref == "fliggy-level1-evidence:1"
+
+    parent = FliggyLevel2ParentContext(
+        parent_level1_ref="CA8341",
+        segments=level1_mapping.segments,
+        itinerary=level1_mapping.itineraries[0],
+    )
+    level2_mapping = FliggyLevel2OfferMapper((parent,)).map(ca8341_level2_provider_result())
+    level2 = FliggyCanonicalEntry().normalize(level2_mapping, ca8341_context())
+
+    assert level2.data_status is ProviderDataStatus.COMPLETE
+    assert [segment.departure_airport for segment in level2.segments] == ["PKX", "PKX", "PKX"]
+    assert [segment.arrival_airport for segment in level2.segments] == ["PVG", "PVG", "PVG"]
+    assert [offer.total_price.amount for offer in level2.offers] == [400, 399, 647]
+    assert [offer.price_semantics for offer in level2.offers] == [
+        PriceSemantics.EXACT,
+        PriceSemantics.EXACT,
+        PriceSemantics.EXACT,
+    ]
+    level2_detail_refs = tuple(offer.provenance[0].detail_ref for offer in level2.offers)
+    for ref in level2_detail_refs:
+        assert ref is not None
+        assert ref.startswith("fliggy-level2-offer-row:manual-row-")
+
+    merger = CandidateMerger(MergerVersion("candidate-merger-v1"))
+    assert merger.offer_equivalence(level1.offers[0], level2.offers[1]) is EquivalenceDecision.DISTINCT
+    assert merger.offer_equivalence(level2.offers[0], level2.offers[1]) is EquivalenceDecision.DISTINCT
+    assert merger.offer_equivalence(level2.offers[1], level2.offers[2]) is EquivalenceDecision.DISTINCT
+
+    same_price_mapping = FliggyLevel2OfferMapper((parent,)).map(
+        ca8341_level2_provider_result(
+            rows=(
+                ca8341_offer_row(row_ref="manual-row-02", seller="阿斯兰翱翔航服", amount=399),
+                ca8341_offer_row(row_ref="manual-row-04", seller="另一供应商", amount=399),
+            )
+        )
+    )
+    same_price_level2 = FliggyCanonicalEntry().normalize(same_price_mapping, ca8341_context())
+
+    assert (
+        merger.offer_equivalence(same_price_level2.offers[0], same_price_level2.offers[1])
+        is EquivalenceDecision.INSUFFICIENT_EVIDENCE
+    )
+
+
 def mapped_result(
     *,
     evidence: tuple[FliggyFlightEvidence, ...] | None = None,
@@ -151,6 +230,17 @@ def context() -> NormalizationContext:
             version=ReferenceDataVersion("m9-fliggy-reference-data-v1"),
             airports=frozenset({"PEK", "SHA", "PKX", "PVG"}),
             carriers=frozenset({"MU", "MF"}),
+        ),
+    )
+
+
+def ca8341_context() -> NormalizationContext:
+    return NormalizationContext(
+        normalizer_version=NormalizerVersion("common-normalizer-v1"),
+        reference_data=ReferenceData(
+            version=ReferenceDataVersion("m9-fliggy-human-case-reference-data-v1"),
+            airports=frozenset({"PKX", "PVG"}),
+            carriers=frozenset({"CA"}),
         ),
     )
 
@@ -253,6 +343,120 @@ def normal_evidence(*, price: FieldEvidence | None = None) -> FliggyFlightEviden
         booking_offer_expansion_action_present=True,
         booking_action_diagnostic={"selector": "button", "label": "订票", "present": True},
         container_diagnostic={"selector": "tr.flight-item-tr", "index": 1},
+    )
+
+
+def ca8341_human_evidence() -> FliggyFlightEvidence:
+    return FliggyFlightEvidence(
+        evidence_index=1,
+        raw_displayed_flight_identity=FieldEvidence.observed("国航CA8341", "human-observation:flight"),
+        raw_accessible_flight_label=FieldEvidence.missing("not observed"),
+        raw_aircraft_text=FieldEvidence.observed("中型机 321", "human-observation:aircraft"),
+        raw_departure_time=FieldEvidence.observed("22:00", "human-observation:departure-time"),
+        raw_arrival_time=FieldEvidence.observed("23:45", "human-observation:arrival-time"),
+        raw_departure_airport_terminal=FieldEvidence.observed(
+            "大兴国际机场",
+            "human-observation:departure-airport",
+        ),
+        raw_arrival_airport_terminal=FieldEvidence.observed(
+            "浦东国际机场T2",
+            "human-observation:arrival-airport",
+        ),
+        raw_duration_text=FieldEvidence.observed("约2小时", "human-observation:duration"),
+        raw_on_time_rate_text=FieldEvidence.missing("not observed"),
+        raw_displayed_lowest_price=FieldEvidence.observed(
+            "最低价格（不含税费） ¥399",
+            "human-observation:lowest-price",
+        ),
+        raw_discount_text=FieldEvidence.missing("not observed"),
+        raw_availability_tag=FieldEvidence.missing("not observed"),
+        raw_codeshare_indicator=FieldEvidence.missing("not observed"),
+        raw_codeshare_detail_text=FieldEvidence.missing("not observed"),
+        booking_offer_expansion_action_present=True,
+        booking_action_diagnostic={"label": "订票", "present": True},
+        container_diagnostic={"case_id": "FLI-HUM-CASE-001"},
+    )
+
+
+def ca8341_level2_provider_result(
+    *,
+    rows: tuple[FliggyLevel2OfferRowEvidence, ...] | None = None,
+) -> ProviderSearchResult:
+    plan = search_plan()
+    offer_rows = rows or (
+        ca8341_offer_row(
+            row_ref="manual-row-01",
+            seller="航司直营 / AIR CHINA 中国国际航空",
+            amount=400,
+        ),
+        ca8341_offer_row(row_ref="manual-row-02", seller="阿斯兰翱翔航服", amount=399),
+        ca8341_offer_row(row_ref="manual-row-03", seller="阿斯兰翱翔航服", amount=647),
+    )
+    raw = ProviderRawEvidence(
+        provider_id=ProviderId("FLIGGY"),
+        acquisition_id=ProviderAcquisitionId("fliggy-human-level2-acquisition-1"),
+        search_plan_id=plan.search_plan_id,
+        retrieved_at=datetime(2026, 9, 5, 0, 0, tzinfo=UTC),
+        payload=Level2ExpansionResult(
+            provider_identity="FLIGGY",
+            acquisition_mode=BrowserAcquisitionMode.BROWSER,
+            acquired_at=datetime(2026, 9, 5, 0, 0, tzinfo=UTC),
+            experiment_run_id="human-case-001",
+            search_plan_id="search-plan-fliggy",
+            execution_id="human-case-001",
+            target=Level2ExpansionTarget(parent_level1_ref="CA8341", level1_evidence_index=1),
+            outcome=Level2ExpansionOutcome.SUCCESS_EXPANDED,
+            observed_offer_row_count=len(offer_rows),
+            duration_ms=0,
+            sanitized_source_ref="LOCAL-ONLY:human-observation:FLI-HUM-CASE-001",
+            parser_selector_probe_version="manual-human-observation-v1",
+            bounds=Level2ExpansionBounds(max_offer_rows=20, max_wait_ms=1, max_retries=0),
+            offer_rows=offer_rows,
+            diagnostics={"read_only": True, "manual_case_id": "FLI-HUM-CASE-001"},
+        ).to_dict(),
+        source_refs=("LOCAL-ONLY:human-observation:FLI-HUM-CASE-001",),
+    )
+    return ProviderSearchResult(
+        provider_id=raw.provider_id,
+        acquisition_id=raw.acquisition_id,
+        search_plan_id=raw.search_plan_id,
+        requirement_id=plan.requirement_id,
+        based_on_requirement_version=plan.based_on_requirement_version,
+        execution_status=ProviderExecutionStatus.SUCCESS,
+        data_status=ProviderDataStatus.COMPLETE,
+        coverage=ProviderCoverage(
+            requested_scope=plan.requested_scope,
+            actual_scope=plan.requested_scope,
+            completeness=CoverageCompleteness.COMPLETE,
+        ),
+        raw_evidence=raw,
+    )
+
+
+def ca8341_offer_row(
+    *,
+    row_ref: str,
+    seller: str,
+    amount: int,
+) -> FliggyLevel2OfferRowEvidence:
+    return FliggyLevel2OfferRowEvidence(
+        offer_row_ref=row_ref,
+        sequence=int(row_ref.rsplit("-", maxsplit=1)[1]),
+        parent_level1_ref="CA8341",
+        raw_seller_text=FieldEvidence.observed(seller, "human-observation:seller"),
+        raw_seller_marker_text=FieldEvidence.missing("not separately observed"),
+        raw_price_text=FieldEvidence.observed(f"¥{amount}", "human-observation:row-price"),
+        price_amount=amount,
+        price_currency="CNY",
+        raw_cabin_product_text=FieldEvidence.observed("经济舱", "human-observation:cabin"),
+        raw_baggage_text=FieldEvidence.observed("托运行李20公斤", "human-observation:baggage"),
+        raw_refund_change_rule_text=FieldEvidence.observed(
+            "退改规则详情",
+            "human-observation:refund-change",
+        ),
+        raw_availability_text=FieldEvidence.missing("not observed"),
+        action_evidence=FieldEvidence.observed("订", "human-observation:action"),
+        row_diagnostic={"manual_case_id": "FLI-HUM-CASE-001"},
     )
 
 

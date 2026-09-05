@@ -35,7 +35,9 @@ DEFAULT_FLIGGY_CANONICAL_ENTRY_PROFILE = FliggyCanonicalEntryProfile(
     version=FLIGGY_CANONICAL_ENTRY_PROFILE_VERSION,
     airport_aliases={
         "大兴": "PKX",
+        "大兴国际机场": "PKX",
         "浦东": "PVG",
+        "浦东国际机场T2": "PVG",
         "虹桥": "SHA",
         "虹桥T2": "SHA",
         "首都": "PEK",
