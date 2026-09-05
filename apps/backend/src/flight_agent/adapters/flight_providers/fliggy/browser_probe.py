@@ -1382,6 +1382,10 @@ async def run_fliggy_level2_live_validation(
             diagnostics["result_context_handoff"] = handoff_diagnostics
             diagnostics["result_context_selected"] = handoff_diagnostics["selected_page_index"] is not None
             _annotate_post_submit_query_propagation(diagnostics, handoff_diagnostics)
+            diagnostics["post_submit_query_state_diagnostics"] = _build_post_submit_query_state_diagnostics(
+                diagnostics,
+                handoff_diagnostics,
+            )
             recorder.mark(BrowserProbeStage.RESULT_READINESS, "waiting for terminal/result state")
             await page.wait_for_load_state("networkidle", timeout=_remaining_ms(started, probe_input.overall_deadline_seconds))
             html = await page.content()
@@ -1620,18 +1624,18 @@ def _browser_failure_taxonomy(
         return "NETWORK_FAILURE"
     if diagnostics.get("wrong_navigation_target") is True:
         return "RESULT_PAGE_LAYOUT_DRIFT"
+    if diagnostics.get("post_submit_propagation_failed") is True:
+        post_submit_failure = diagnostics.get("post_submit_failure_taxonomy")
+        return post_submit_failure if isinstance(post_submit_failure, str) else "SUBMIT_STATE_PROPAGATION_FAILED"
     if isinstance(diagnostics.get("pre_submit_query_verification"), dict):
         destination_commitment = diagnostics.get("destination_commitment")
-        if isinstance(destination_commitment, dict):
+        if isinstance(destination_commitment, dict) and destination_commitment.get("commitment_status") != "confirmed":
             destination_failure = destination_commitment.get("failure_taxonomy")
             if isinstance(destination_failure, str):
                 return destination_failure
         pre_submit_failure = diagnostics["pre_submit_query_verification"].get("failure_taxonomy")
         if isinstance(pre_submit_failure, str):
             return pre_submit_failure
-    if diagnostics.get("post_submit_propagation_failed") is True:
-        post_submit_failure = diagnostics.get("post_submit_failure_taxonomy")
-        return post_submit_failure if isinstance(post_submit_failure, str) else "SUBMIT_STATE_PROPAGATION_FAILED"
     if diagnostics.get("search_form_ready") is False:
         return "SEARCH_FORM_NOT_READY"
     if diagnostics.get("search_input_succeeded") is False:
@@ -1847,6 +1851,10 @@ async def run_fliggy_browser_probe(probe_input: ProbeInput) -> ProbeRunResult:
                         diagnostics["result_context_handoff"] = handoff_diagnostics
                         diagnostics["result_context_selected"] = handoff_diagnostics["selected_page_index"] is not None
                         _annotate_post_submit_query_propagation(diagnostics, handoff_diagnostics)
+                        diagnostics["post_submit_query_state_diagnostics"] = _build_post_submit_query_state_diagnostics(
+                            diagnostics,
+                            handoff_diagnostics,
+                        )
                         if handoff_diagnostics["selected_page_index"] is None:
                             diagnostics["search_interaction_failed"] = True
                         else:
@@ -2490,6 +2498,8 @@ def _destination_commitment_result(
         failure_taxonomy=failure_taxonomy,
     )
     effective_failure = failure_taxonomy
+    if commitment_status == "confirmed":
+        effective_failure = None
     if effective_failure is None and commitment_status != "confirmed":
         effective_failure = "FORM_DESTINATION_MISMATCH" if destination_match is False else "DESTINATION_COMMIT_NOT_CONFIRMED"
     return DestinationCommitmentResult(
@@ -2657,6 +2667,218 @@ def _annotate_post_submit_query_propagation(diagnostics: dict[str, Any], handoff
         )
     else:
         diagnostics["post_submit_failure_taxonomy"] = None
+
+
+def _build_post_submit_query_state_diagnostics(diagnostics: dict[str, Any], handoff_diagnostics: dict[str, Any]) -> dict[str, Any]:
+    pre_submit_state = diagnostics.get("pre_submit_query_state")
+    pre_submit_verification = diagnostics.get("pre_submit_query_verification")
+    destination_commitment = diagnostics.get("destination_commitment")
+    q3_nav_state = _q3_post_submit_nav_state(handoff_diagnostics)
+    q4_result_state = _q4_result_state_init(handoff_diagnostics)
+    q5_result_context = _q5_result_context(handoff_diagnostics)
+    first_mismatch = _first_post_submit_mismatch_checkpoint(q3_nav_state, q4_result_state, q5_result_context)
+    mismatch_dimension = _post_submit_mismatch_dimension(q3_nav_state, q4_result_state, q5_result_context)
+    stale_source = _stale_destination_taxonomy_source(destination_commitment, diagnostics)
+    return {
+        "q0_requested": _q0_requested_query(pre_submit_state),
+        "q1_pre_submit": _q1_pre_submit_query(pre_submit_state, pre_submit_verification),
+        "q2_submit_action": {
+            "submit_action_observed": diagnostics.get("submit_executed") is True,
+            "method": "public_search_button" if diagnostics.get("submit_executed") is True else "none",
+        },
+        "q3_post_submit_nav_state": q3_nav_state,
+        "q4_result_state_init": q4_result_state,
+        "q5_result_context": q5_result_context,
+        "first_mismatch_checkpoint": first_mismatch,
+        "mismatch_dimension": mismatch_dimension,
+        "propagation_decision": _post_submit_propagation_decision(first_mismatch),
+        "diagnostic_state_consistent": stale_source is None,
+        "stale_taxonomy_source": stale_source,
+        "root_cause_class": _post_submit_root_cause_class(first_mismatch, stale_source, diagnostics),
+    }
+
+
+def _q0_requested_query(pre_submit_state: Any) -> dict[str, Any]:
+    if not isinstance(pre_submit_state, dict):
+        return {"origin": None, "destination": None, "departure_date": None}
+    return {
+        "origin": pre_submit_state.get("requested_origin"),
+        "destination": pre_submit_state.get("requested_destination"),
+        "departure_date": pre_submit_state.get("requested_departure_date"),
+    }
+
+
+def _q1_pre_submit_query(pre_submit_state: Any, pre_submit_verification: Any) -> dict[str, Any]:
+    if not isinstance(pre_submit_state, dict):
+        query = {"origin": None, "destination": None, "departure_date": None}
+    else:
+        query = {
+            "origin": pre_submit_state.get("form_origin_readback"),
+            "destination": pre_submit_state.get("form_destination_readback"),
+            "departure_date": pre_submit_state.get("form_date_readback"),
+        }
+    verified = isinstance(pre_submit_verification, dict) and pre_submit_verification.get("query_state_decision") == "match"
+    return {"query": query, "verified": verified}
+
+
+def _q3_post_submit_nav_state(handoff_diagnostics: dict[str, Any]) -> dict[str, Any]:
+    selected_url = str(handoff_diagnostics.get("selected_page_url") or "")
+    params = _extract_public_route_date_params(selected_url)
+    return {
+        "url_class": _url_class(selected_url),
+        "query_params": params,
+        "route_match": _match_if_observed(params.get("origin"), params.get("destination"), handoff_diagnostics.get("route_match")),
+        "date_match": _date_match_if_observed(params.get("departure_date"), handoff_diagnostics.get("date_match")),
+        "page_count_after_submit": handoff_diagnostics.get("page_count_after_submit"),
+        "popup_or_new_page_event": handoff_diagnostics.get("popup_or_new_page_event"),
+    }
+
+
+def _q4_result_state_init(handoff_diagnostics: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "result_surface": handoff_diagnostics.get("result_surface_present"),
+        "route_match": handoff_diagnostics.get("route_match"),
+        "date_match": handoff_diagnostics.get("date_match"),
+        "observed_date_text": handoff_diagnostics.get("observed_date_text"),
+        "observed_date_source": handoff_diagnostics.get("observed_date_source"),
+        "normalized_observed_date": handoff_diagnostics.get("normalized_observed_date"),
+        "date_parse_status": handoff_diagnostics.get("date_parse_status"),
+    }
+
+
+def _q5_result_context(handoff_diagnostics: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "context_match": handoff_diagnostics.get("context_match"),
+        "route_match": handoff_diagnostics.get("route_match"),
+        "date_match": handoff_diagnostics.get("date_match"),
+        "query_identity_decision": handoff_diagnostics.get("query_identity_decision"),
+        "selection_reason": handoff_diagnostics.get("selection_reason"),
+        "mismatch_dimension": handoff_diagnostics.get("mismatch_dimension"),
+    }
+
+
+def _extract_public_route_date_params(url: str) -> dict[str, str | None]:
+    allowed = {
+        "depCity": "origin",
+        "depCityName": "origin",
+        "from": "origin",
+        "fromCity": "origin",
+        "orgCity": "origin",
+        "arrCity": "destination",
+        "arrCityName": "destination",
+        "to": "destination",
+        "toCity": "destination",
+        "dstCity": "destination",
+        "depDate": "departure_date",
+        "date": "departure_date",
+        "departureDate": "departure_date",
+    }
+    extracted: dict[str, str | None] = {"origin": None, "destination": None, "departure_date": None}
+    for key, value in parse_qsl(urlsplit(url).query):
+        target = allowed.get(key)
+        if target is not None and extracted[target] is None:
+            extracted[target] = _truncate_diagnostic_text(value)
+    return extracted
+
+
+def _match_if_observed(origin: str | None, destination: str | None, fallback: Any) -> bool | str:
+    if origin is None and destination is None:
+        return "insufficient"
+    if isinstance(fallback, bool):
+        return fallback
+    return "insufficient"
+
+
+def _date_match_if_observed(departure_date: str | None, fallback: Any) -> bool | str:
+    if departure_date is None:
+        return "insufficient"
+    if isinstance(fallback, bool):
+        return fallback
+    return "insufficient"
+
+
+def _first_post_submit_mismatch_checkpoint(
+    q3_nav_state: dict[str, Any],
+    q4_result_state: dict[str, Any],
+    q5_result_context: dict[str, Any],
+) -> str:
+    if _checkpoint_has_mismatch(q3_nav_state):
+        return "Q3_POST_SUBMIT_NAV_STATE"
+    if _checkpoint_has_mismatch(q4_result_state):
+        return "Q4_RESULT_STATE_INIT"
+    if _checkpoint_has_mismatch(q5_result_context):
+        return "Q5_RESULT_CONTEXT"
+    if q5_result_context.get("context_match") is True:
+        return "none"
+    return "unknown"
+
+
+def _checkpoint_has_mismatch(checkpoint: dict[str, Any]) -> bool:
+    return checkpoint.get("route_match") is False or checkpoint.get("date_match") is False or checkpoint.get("context_match") is False
+
+
+def _post_submit_mismatch_dimension(
+    q3_nav_state: dict[str, Any],
+    q4_result_state: dict[str, Any],
+    q5_result_context: dict[str, Any],
+) -> str:
+    for checkpoint in (q3_nav_state, q4_result_state, q5_result_context):
+        dimension = _checkpoint_mismatch_dimension(checkpoint)
+        if dimension != "unknown":
+            return dimension
+    return "unknown"
+
+
+def _checkpoint_mismatch_dimension(checkpoint: dict[str, Any]) -> str:
+    route = checkpoint.get("route_match")
+    date_value = checkpoint.get("date_match")
+    if route is False and date_value is False:
+        return "both"
+    if route is False:
+        return "route"
+    if date_value is False:
+        return "date"
+    if checkpoint.get("mismatch_dimension") in {"route", "date", "both"}:
+        return str(checkpoint["mismatch_dimension"])
+    return "unknown"
+
+
+def _post_submit_propagation_decision(first_mismatch_checkpoint: str) -> str:
+    if first_mismatch_checkpoint == "none":
+        return "preserved"
+    if first_mismatch_checkpoint in {"Q3_POST_SUBMIT_NAV_STATE", "Q4_RESULT_STATE_INIT"}:
+        return "lost"
+    if first_mismatch_checkpoint == "Q5_RESULT_CONTEXT":
+        return "observation_gap"
+    return "insufficient"
+
+
+def _stale_destination_taxonomy_source(destination_commitment: Any, diagnostics: dict[str, Any]) -> str | None:
+    if not isinstance(destination_commitment, dict):
+        return None
+    if (
+        destination_commitment.get("commitment_status") == "confirmed"
+        and isinstance(destination_commitment.get("failure_taxonomy"), str)
+        and diagnostics.get("post_submit_propagation_failed") is True
+    ):
+        return "destination_commitment.failure_taxonomy"
+    return None
+
+
+def _post_submit_root_cause_class(first_mismatch_checkpoint: str, stale_source: str | None, diagnostics: dict[str, Any]) -> str:
+    if stale_source is not None and first_mismatch_checkpoint == "unknown":
+        return "STALE_DIAGNOSTIC_TAXONOMY"
+    if stale_source is not None and first_mismatch_checkpoint != "none":
+        return "MULTI_FACTOR_PROPAGATION_GAP"
+    if first_mismatch_checkpoint == "Q3_POST_SUBMIT_NAV_STATE":
+        return "POST_SUBMIT_NAV_STATE_MISMATCH"
+    if first_mismatch_checkpoint == "Q4_RESULT_STATE_INIT":
+        return "RESULT_STATE_INITIALIZATION_MISMATCH"
+    if first_mismatch_checkpoint == "Q5_RESULT_CONTEXT":
+        return "RESULT_CONTEXT_ONLY_MISMATCH"
+    if diagnostics.get("submit_executed") is True and first_mismatch_checkpoint == "unknown":
+        return "INCONCLUSIVE"
+    return "INCONCLUSIVE"
 
 
 async def _capture_search_form_readiness(page: Any) -> SearchFormReadiness:

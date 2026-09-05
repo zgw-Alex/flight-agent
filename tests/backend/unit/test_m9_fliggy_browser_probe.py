@@ -22,6 +22,8 @@ from flight_agent.adapters.flight_providers.fliggy.browser_probe import (
     SearchFormReadiness,
     StageDiagnostic,
     _annotate_post_submit_query_propagation,
+    _browser_failure_taxonomy,
+    _build_post_submit_query_state_diagnostics,
     _destination_commitment_result,
     _destination_commitment_status,
     _destination_readback_matches,
@@ -889,6 +891,180 @@ def test_dst12_placeholder_destination_can_never_equal_shanghai() -> None:
     assert _destination_readback_matches("到达城市，可直接输入城市名称搜索", "上海") is False
 
 
+def test_ps01_q1_verified_and_q3_q4_q5_match_is_preserved() -> None:
+    diagnostics = _post_submit_base_diagnostics()
+    handoff = _post_submit_handoff(route_match=True, date_match=True, context_match=True)
+
+    result = _build_post_submit_query_state_diagnostics(diagnostics, handoff)
+
+    assert result["first_mismatch_checkpoint"] == "none"
+    assert result["propagation_decision"] == "preserved"
+    assert result["root_cause_class"] == "INCONCLUSIVE"
+
+
+def test_ps02_q1_verified_and_q3_route_mismatch_localizes_nav_state() -> None:
+    diagnostics = _post_submit_base_diagnostics()
+    handoff = _post_submit_handoff(
+        selected_page_url="https://sjipiao.fliggy.com/homeow/trip_flight_search.htm?depCity=北京&arrCity=杭州&depDate=2026-09-14",
+        route_match=False,
+        date_match=True,
+        context_match=False,
+        mismatch_dimension="route",
+    )
+
+    result = _build_post_submit_query_state_diagnostics(diagnostics, handoff)
+
+    assert result["first_mismatch_checkpoint"] == "Q3_POST_SUBMIT_NAV_STATE"
+    assert result["mismatch_dimension"] == "route"
+    assert result["root_cause_class"] == "POST_SUBMIT_NAV_STATE_MISMATCH"
+
+
+def test_ps03_q3_match_and_q4_date_mismatch_localizes_result_state_init() -> None:
+    diagnostics = _post_submit_base_diagnostics()
+    handoff = _post_submit_handoff(
+        selected_page_url="https://sjipiao.fliggy.com/homeow/trip_flight_search.htm",
+        route_match=True,
+        date_match=False,
+        context_match=False,
+        mismatch_dimension="date",
+    )
+
+    result = _build_post_submit_query_state_diagnostics(diagnostics, handoff)
+
+    assert result["q3_post_submit_nav_state"]["route_match"] == "insufficient"
+    assert result["first_mismatch_checkpoint"] == "Q4_RESULT_STATE_INIT"
+    assert result["root_cause_class"] == "RESULT_STATE_INITIALIZATION_MISMATCH"
+
+
+def test_ps04_provider_state_correct_but_q5_only_wrong_is_observation_gap() -> None:
+    diagnostics = _post_submit_base_diagnostics()
+    handoff = _post_submit_handoff(
+        route_match=True,
+        date_match=True,
+        context_match=False,
+        query_identity_decision="insufficient",
+        mismatch_dimension="unknown",
+    )
+
+    result = _build_post_submit_query_state_diagnostics(diagnostics, handoff)
+
+    assert result["first_mismatch_checkpoint"] == "Q5_RESULT_CONTEXT"
+    assert result["propagation_decision"] == "observation_gap"
+    assert result["root_cause_class"] == "RESULT_CONTEXT_ONLY_MISMATCH"
+
+
+def test_ps05_q2_q4_match_and_q5_only_differs_keeps_matcher_strict() -> None:
+    diagnostics = _post_submit_base_diagnostics()
+    handoff = _post_submit_handoff(route_match=True, date_match=True, context_match=False)
+
+    result = _build_post_submit_query_state_diagnostics(diagnostics, handoff)
+
+    assert result["q2_submit_action"]["submit_action_observed"] is True
+    assert result["q5_result_context"]["context_match"] is False
+    assert result["root_cause_class"] == "RESULT_CONTEXT_ONLY_MISMATCH"
+
+
+def test_ps06_route_only_post_submit_mismatch_is_precise() -> None:
+    result = _build_post_submit_query_state_diagnostics(
+        _post_submit_base_diagnostics(),
+        _post_submit_handoff(route_match=False, date_match=True, context_match=False, mismatch_dimension="route"),
+    )
+
+    assert result["mismatch_dimension"] == "route"
+
+
+def test_ps07_date_only_post_submit_mismatch_is_precise() -> None:
+    result = _build_post_submit_query_state_diagnostics(
+        _post_submit_base_diagnostics(),
+        _post_submit_handoff(route_match=True, date_match=False, context_match=False, mismatch_dimension="date"),
+    )
+
+    assert result["mismatch_dimension"] == "date"
+
+
+def test_ps08_both_post_submit_mismatch_is_precise() -> None:
+    result = _build_post_submit_query_state_diagnostics(
+        _post_submit_base_diagnostics(),
+        _post_submit_handoff(route_match=False, date_match=False, context_match=False, mismatch_dimension="both"),
+    )
+
+    assert result["mismatch_dimension"] == "both"
+
+
+def test_ps09_confirmed_destination_stale_taxonomy_cannot_remain_final() -> None:
+    diagnostics = _post_submit_base_diagnostics()
+    diagnostics["destination_commitment"] = {
+        "commitment_status": "confirmed",
+        "failure_taxonomy": "DESTINATION_SUGGESTION_NOT_READY",
+    }
+    diagnostics["post_submit_propagation_failed"] = True
+    diagnostics["post_submit_failure_taxonomy"] = "RESULT_QUERY_MISMATCH"
+
+    result = _build_post_submit_query_state_diagnostics(
+        diagnostics,
+        _post_submit_handoff(route_match=False, date_match=False, context_match=False, mismatch_dimension="both"),
+    )
+
+    assert result["diagnostic_state_consistent"] is False
+    assert result["stale_taxonomy_source"] == "destination_commitment.failure_taxonomy"
+    assert (
+        _browser_failure_taxonomy(
+            outcome=BrowserProbeOutcome.EVIDENCE_INSUFFICIENT,
+            failed_stage=BrowserProbeStage.RESULT_TRANSITION.value,
+            diagnostics=diagnostics,
+        )
+        == "RESULT_QUERY_MISMATCH"
+    )
+
+
+def test_ps10_headless_destination_failure_remains_independent() -> None:
+    diagnostics = _post_submit_base_diagnostics(submit_executed=False)
+    diagnostics["destination_commitment"] = {"commitment_status": "mismatch", "failure_taxonomy": "DESTINATION_SUGGESTION_NOT_READY"}
+    diagnostics["pre_submit_query_verification"] = {
+        "query_state_decision": "mismatch",
+        "failure_taxonomy": "FORM_ROUTE_MISMATCH",
+    }
+
+    assert (
+        _browser_failure_taxonomy(
+            outcome=BrowserProbeOutcome.EVIDENCE_INSUFFICIENT,
+            failed_stage=BrowserProbeStage.SEARCH_INPUT.value,
+            diagnostics=diagnostics,
+        )
+        == "DESTINATION_SUGGESTION_NOT_READY"
+    )
+
+
+def test_ps11_post_submit_diagnostics_stay_sanitized() -> None:
+    result = _build_post_submit_query_state_diagnostics(
+        _post_submit_base_diagnostics(),
+        _post_submit_handoff(observed_date_text="2026-09-14 Cookie: a=b"),
+    )
+
+    assert sanitize_probe_payload({"post_submit_query_state_diagnostics": result})["post_submit_query_state_diagnostics"][
+        "q4_result_state_init"
+    ]["observed_date_text"] == "[REDACTED]"
+
+
+def test_ps12_challenge_and_network_classifications_are_preserved() -> None:
+    assert (
+        _browser_failure_taxonomy(
+            outcome=BrowserProbeOutcome.ACCESS_CHALLENGE,
+            failed_stage=BrowserProbeStage.ENTRY_NAVIGATION.value,
+            diagnostics={},
+        )
+        == "ACCESS_CHALLENGE"
+    )
+    assert (
+        _browser_failure_taxonomy(
+            outcome=BrowserProbeOutcome.NETWORK_ERROR,
+            failed_stage=BrowserProbeStage.SEARCH_INPUT.value,
+            diagnostics={},
+        )
+        == "NETWORK_FAILURE"
+    )
+
+
 def test_navigation_source_ref_uses_stable_public_entry_and_sanitizes_tracking() -> None:
     result = ProbeRunResult(
         provider_identity="FLIGGY",
@@ -1316,6 +1492,43 @@ def _query_state(
 
 def _destination_candidate(label: str, *, selector: str = ".next-overlay-wrapper li", index: int = 0) -> DestinationSuggestionCandidate:
     return DestinationSuggestionCandidate(selector=selector, index=index, label=label)
+
+
+def _post_submit_base_diagnostics(*, submit_executed: bool = True) -> dict[str, object]:
+    return {
+        "pre_submit_query_state": _query_state().to_dict(),
+        "pre_submit_query_verification": _verify_pre_submit_query_state(_query_state()).to_dict(),
+        "destination_commitment": {"commitment_status": "confirmed", "failure_taxonomy": None},
+        "submit_executed": submit_executed,
+    }
+
+
+def _post_submit_handoff(
+    *,
+    selected_page_url: str = "https://sjipiao.fliggy.com/homeow/trip_flight_search.htm?depCity=北京&arrCity=上海&depDate=2026-09-14",
+    route_match: bool = True,
+    date_match: bool = True,
+    context_match: bool = True,
+    query_identity_decision: str = "match",
+    mismatch_dimension: str = "none",
+    observed_date_text: str = "2026-09-14",
+) -> dict[str, object]:
+    return {
+        "selected_page_url": selected_page_url,
+        "page_count_after_submit": 2,
+        "popup_or_new_page_event": True,
+        "result_surface_present": True,
+        "route_match": route_match,
+        "date_match": date_match,
+        "context_match": context_match,
+        "query_identity_decision": query_identity_decision,
+        "selection_reason": "result_identity_route_date_surface_match" if context_match else "route_and_date_mismatch",
+        "mismatch_dimension": mismatch_dimension,
+        "observed_date_text": observed_date_text,
+        "observed_date_source": "visible_text",
+        "normalized_observed_date": "2026-09-14" if date_match else "2026-09-06",
+        "date_parse_status": "parsed",
+    }
 
 
 def _result_context_candidate(
