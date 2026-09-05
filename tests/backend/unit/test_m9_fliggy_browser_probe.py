@@ -29,6 +29,7 @@ from flight_agent.adapters.flight_providers.fliggy.browser_probe import (
     extract_level1_evidence,
     sanitize_probe_payload,
     summarize_detector_state,
+    summarize_search_plan_evidence,
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -334,6 +335,121 @@ def test_no_new_page_no_navigation_preserves_search_interaction_failure_semantic
     )
 
     assert choose_result_context_candidate((entry,)) is None
+
+
+def test_rc01_same_query_route_date_and_result_surface_confirms_context() -> None:
+    probe_input = ProbeInput("北京", "上海", date(2026, 9, 14))
+    evidence = summarize_search_plan_evidence(
+        title="北京到上海机票预订",
+        html="<main>2026-09-14 航班查询 起飞 到达 经济舱</main>",
+        probe_input=probe_input,
+        url="https://sjipiao.fliggy.com/homeow/trip_flight_search.htm",
+    )
+    candidate = _result_context_candidate(
+        index=1,
+        url="https://sjipiao.fliggy.com/homeow/trip_flight_search.htm",
+        title="北京到上海机票预订",
+        identity=FliggyPageIdentity.FLIGHT_RESULT_CANDIDATE,
+        is_current=False,
+        origin=evidence["origin"],
+        destination=evidence["destination"],
+        departure_date=evidence["departure_date"],
+        result_surface=evidence["result_surface"],
+    )
+
+    assert candidate.context_matches() is True
+    assert evidence["route_conflict"] is False
+    assert evidence["date_conflict"] is False
+    assert choose_result_context_candidate((candidate,)) == candidate
+
+
+def test_rc02_spa_same_page_context_does_not_require_full_navigation() -> None:
+    candidate = _result_context_candidate(
+        index=0,
+        url="https://sjipiao.fliggy.com/homeow/trip_flight_search.htm",
+        title="北京到上海航班查询 09月14日",
+        identity=FliggyPageIdentity.FLIGHT_RESULT_CANDIDATE,
+        is_current=True,
+    )
+
+    assert choose_result_context_candidate((candidate,)) == candidate
+
+
+def test_rc03_route_match_date_conflict_blocks_context() -> None:
+    candidate = _result_context_candidate(
+        index=1,
+        url="https://sjipiao.fliggy.com/homeow/trip_flight_search.htm",
+        title="北京到上海机票预订",
+        identity=FliggyPageIdentity.FLIGHT_RESULT_CANDIDATE,
+        is_current=False,
+        date_conflict=True,
+    )
+
+    assert candidate.context_matches() is False
+    assert choose_result_context_candidate((candidate,)) is None
+
+
+def test_rc04_date_match_route_conflict_blocks_context() -> None:
+    candidate = _result_context_candidate(
+        index=1,
+        url="https://sjipiao.fliggy.com/homeow/trip_flight_search.htm",
+        title="北京到杭州机票预订",
+        identity=FliggyPageIdentity.FLIGHT_RESULT_CANDIDATE,
+        is_current=False,
+        route_conflict=True,
+    )
+
+    assert candidate.context_matches() is False
+    assert choose_result_context_candidate((candidate,)) is None
+
+
+def test_rc05_visible_rows_without_route_date_identity_do_not_confirm_context() -> None:
+    probe_input = ProbeInput("北京", "上海", date(2026, 9, 14))
+    evidence = summarize_search_plan_evidence(
+        title="特价机票",
+        html=DIRECT_FLIGHT_HTML,
+        probe_input=probe_input,
+        url="https://sjipiao.fliggy.com/homeow/trip_flight_search.htm",
+    )
+
+    assert evidence["result_surface"] is True
+    assert evidence["origin"] is False
+    assert evidence["destination"] is False
+    assert evidence["departure_date"] is False
+
+
+def test_rc06_matched_empty_result_surface_is_valid_context() -> None:
+    probe_input = ProbeInput("北京", "上海", date(2026, 9, 14))
+    evidence = summarize_search_plan_evidence(
+        title="北京到上海机票预订",
+        html="<main>9月14日 暂无航班</main>",
+        probe_input=probe_input,
+        url="https://sjipiao.fliggy.com/homeow/trip_flight_search.htm",
+    )
+
+    assert evidence["explicit_empty"] is True
+    assert evidence["result_surface"] is True
+    assert evidence["origin"] is True
+    assert evidence["destination"] is True
+    assert evidence["departure_date"] is True
+
+
+def test_rc09_historical_diag_shape_confirms_when_url_supplies_query_identity() -> None:
+    probe_input = ProbeInput("北京", "上海", date(2026, 9, 14))
+    evidence = summarize_search_plan_evidence(
+        title="特价机票",
+        html="<main>航班查询 起飞 到达 经济舱</main>",
+        probe_input=probe_input,
+        url=(
+            "https://sjipiao.fliggy.com/homeow/trip_flight_search.htm?"
+            "depCityName=北京&arrCityName=上海&depDate=2026-09-14"
+        ),
+    )
+
+    assert evidence["origin"] is True
+    assert evidence["destination"] is True
+    assert evidence["departure_date"] is True
+    assert evidence["result_surface"] is True
 
 
 def test_navigation_source_ref_uses_stable_public_entry_and_sanitizes_tracking() -> None:
@@ -752,12 +868,22 @@ def _result_context_candidate(
     origin: bool = True,
     destination: bool = True,
     departure_date: bool = True,
+    result_surface: bool = True,
+    route_conflict: bool = False,
+    date_conflict: bool = False,
 ) -> ResultContextCandidate:
     return ResultContextCandidate(
         page_index=index,
         sanitized_url=url,
         title=title,
         identity=identity,
-        search_plan_evidence={"origin": origin, "destination": destination, "departure_date": departure_date},
+        search_plan_evidence={
+            "origin": origin,
+            "destination": destination,
+            "departure_date": departure_date,
+            "result_surface": result_surface,
+            "route_conflict": route_conflict,
+            "date_conflict": date_conflict,
+        },
         is_current_page=is_current,
     )

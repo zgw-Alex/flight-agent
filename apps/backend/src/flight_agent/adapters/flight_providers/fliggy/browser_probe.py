@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import time
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
@@ -205,7 +206,9 @@ class ResultContextCandidate:
         if self.search_plan_evidence.get("destination"):
             score += 2
         if self.search_plan_evidence.get("departure_date"):
-            score += 1
+            score += 2
+        if self.search_plan_evidence.get("result_surface"):
+            score += 2
         if "flight_search_result" in self.sanitized_url:
             score += 1
         if not self.is_current_page:
@@ -213,7 +216,23 @@ class ResultContextCandidate:
         return score
 
     def route_matches(self) -> bool:
-        return self.search_plan_evidence.get("origin") is True and self.search_plan_evidence.get("destination") is True
+        return (
+            self.search_plan_evidence.get("origin") is True
+            and self.search_plan_evidence.get("destination") is True
+            and self.search_plan_evidence.get("route_conflict") is not True
+        )
+
+    def date_matches(self) -> bool:
+        return (
+            self.search_plan_evidence.get("departure_date") is True
+            and self.search_plan_evidence.get("date_conflict") is not True
+        )
+
+    def result_surface_matches(self) -> bool:
+        return self.search_plan_evidence.get("result_surface") is True
+
+    def context_matches(self) -> bool:
+        return self.route_matches() and self.date_matches() and self.result_surface_matches()
 
     def signature(self) -> tuple[str, str, str]:
         return (self.sanitized_url, self.title, self.identity.value)
@@ -572,17 +591,33 @@ def _active_access_challenge_detected(page_text: str) -> bool:
     return _contains_any(lowered, ("输入验证码", "请完成", "校验", "验证后", "验证通过"))
 
 
-def summarize_search_plan_evidence(*, title: str, html: str, probe_input: ProbeInput) -> dict[str, bool]:
-    text = title + " " + parse_html(html).text_content()
+def summarize_search_plan_evidence(*, title: str, html: str, probe_input: ProbeInput, url: str = "") -> dict[str, bool]:
+    root = parse_html(html)
+    page_text = root.text_content()
+    text = " ".join((title, page_text, _decoded_url_evidence(url)))
     departure_date = probe_input.departure_date.isoformat()
     dotted_date = departure_date.replace("-", ".")
     slash_date = departure_date.replace("-", "/")
     chinese_date = f"{probe_input.departure_date.month}月{probe_input.departure_date.day}日"
+    padded_chinese_date = f"{probe_input.departure_date.month:02d}月{probe_input.departure_date.day:02d}日"
     compact_route = f"{probe_input.origin_text}到{probe_input.destination_text}"
+    detector_state = summarize_detector_state(html)
+    result_surface = (
+        detector_state["result_container"] is True
+        or detector_state["explicit_empty"] is True
+        or _contains_any(text, ("航班查询", "特价机票", "最低价格", "机票价格", "起飞", "到达", "经济舱", "暂无航班"))
+        or _contains_any(urlsplit(url).path, ("flight_search_result", "trip_flight_search"))
+    )
+    route_conflict = _route_conflicts_with_query(text, probe_input)
+    date_conflict = _date_conflicts_with_query(text, probe_input)
     return {
         "origin": probe_input.origin_text in text or compact_route in text,
         "destination": probe_input.destination_text in text or compact_route in text,
-        "departure_date": any(candidate in text for candidate in (departure_date, dotted_date, slash_date, chinese_date)),
+        "departure_date": any(candidate in text for candidate in (departure_date, dotted_date, slash_date, chinese_date, padded_chinese_date)),
+        "result_surface": result_surface,
+        "explicit_empty": detector_state["explicit_empty"] is True,
+        "route_conflict": route_conflict,
+        "date_conflict": date_conflict,
     }
 
 
@@ -592,7 +627,7 @@ def choose_result_context_candidate(
     eligible = tuple(
         candidate
         for candidate in candidates
-        if candidate.identity is FliggyPageIdentity.FLIGHT_RESULT_CANDIDATE and candidate.route_matches()
+        if candidate.identity is FliggyPageIdentity.FLIGHT_RESULT_CANDIDATE and candidate.context_matches()
     )
     if not eligible:
         return None
@@ -602,6 +637,33 @@ def choose_result_context_candidate(
     if len({candidate.signature() for candidate in tied}) > 1:
         return None
     return best
+
+
+def _decoded_url_evidence(url: str) -> str:
+    parts = urlsplit(url)
+    values = [parts.path, parts.query, parts.fragment]
+    for key, value in parse_qsl(parts.query):
+        values.extend((key, value))
+    for key, value in parse_qsl(parts.fragment):
+        values.extend((key, value))
+    return " ".join(values)
+
+
+def _route_conflicts_with_query(text: str, probe_input: ProbeInput) -> bool:
+    expected_route = f"{probe_input.origin_text}到{probe_input.destination_text}"
+    observed_routes = set(re.findall(r"([\u4e00-\u9fff]{2,8}?)到([\u4e00-\u9fff]{2,8}?)(?:机票|航班|特价|预订|查询|$)", text))
+    return any(f"{origin}到{destination}" != expected_route for origin, destination in observed_routes)
+
+
+def _date_conflicts_with_query(text: str, probe_input: ProbeInput) -> bool:
+    expected = probe_input.departure_date
+    for year, month, day in re.findall(r"(20\d{2})[-/.年](\d{1,2})[-/.月](\d{1,2})日?", text):
+        if (int(year), int(month), int(day)) != (expected.year, expected.month, expected.day):
+            return True
+    for month, day in re.findall(r"(?<!\d)(\d{1,2})月(\d{1,2})日", text):
+        if (int(month), int(day)) != (expected.month, expected.day):
+            return True
+    return False
 
 
 def extract_level1_evidence(html: str) -> tuple[FliggyFlightEvidence, ...]:
@@ -2005,7 +2067,12 @@ async def _select_result_context_page(
             title = await candidate_page.title()
             html = await candidate_page.content()
             identity = classify_fliggy_page_identity(url=candidate_page.url, title=title, html=html)
-            search_plan_evidence = summarize_search_plan_evidence(title=title, html=html, probe_input=probe_input)
+            search_plan_evidence = summarize_search_plan_evidence(
+                title=title,
+                html=html,
+                probe_input=probe_input,
+                url=candidate_page.url,
+            )
             candidates.append(
                 ResultContextCandidate(
                     page_index=index,
@@ -2037,11 +2104,50 @@ async def _select_result_context_page(
         "selected_page_index": selected.page_index if selected is not None else None,
         "selected_page_url": selected.sanitized_url if selected is not None else None,
         "selected_page_identity": selected.identity.value if selected is not None else None,
-        "selection_reason": "result_identity_and_route_match" if selected is not None else "no_deterministic_result_context",
+        "context_match": selected is not None,
+        "route_evidence": _matched_evidence_value(candidates, "origin") and _matched_evidence_value(candidates, "destination"),
+        "date_evidence": _matched_evidence_value(candidates, "departure_date"),
+        "result_surface_evidence": _matched_evidence_value(candidates, "result_surface"),
+        "route_conflict": _matched_evidence_value(candidates, "route_conflict"),
+        "date_conflict": _matched_evidence_value(candidates, "date_conflict"),
+        "selection_reason": _result_context_selection_reason(selected, tuple(candidates)),
     }
     if selected is None:
         return current_page, diagnostics
     return pages[selected.page_index], diagnostics
+
+
+def _matched_evidence_value(candidates: list[ResultContextCandidate], key: str) -> bool:
+    return any(candidate.search_plan_evidence.get(key) is True for candidate in candidates)
+
+
+def _result_context_selection_reason(
+    selected: ResultContextCandidate | None,
+    candidates: tuple[ResultContextCandidate, ...],
+) -> str:
+    if selected is not None:
+        return "result_identity_route_date_surface_match"
+    if any(candidate.search_plan_evidence.get("route_conflict") is True for candidate in candidates):
+        return "route_mismatch"
+    if any(candidate.search_plan_evidence.get("date_conflict") is True for candidate in candidates):
+        return "date_mismatch"
+    if any(
+        candidate.identity is FliggyPageIdentity.FLIGHT_RESULT_CANDIDATE
+        and candidate.search_plan_evidence.get("result_surface") is True
+        and candidate.route_matches()
+        and not candidate.date_matches()
+        for candidate in candidates
+    ):
+        return "missing_date_evidence"
+    if any(
+        candidate.identity is FliggyPageIdentity.FLIGHT_RESULT_CANDIDATE
+        and candidate.search_plan_evidence.get("result_surface") is True
+        and candidate.date_matches()
+        and not candidate.route_matches()
+        for candidate in candidates
+    ):
+        return "missing_route_evidence"
+    return "no_deterministic_result_context"
 
 
 def _remaining_ms(started: float, deadline_seconds: float) -> int:
