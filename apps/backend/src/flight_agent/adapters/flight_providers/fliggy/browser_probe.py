@@ -302,6 +302,44 @@ class SearchFormReadiness:
 
 
 @dataclass(frozen=True)
+class PublicSearchQueryState:
+    requested_origin: str
+    requested_destination: str
+    requested_departure_date: str
+    form_origin_readback: str | None
+    form_destination_readback: str | None
+    form_date_readback: str | None
+
+    def to_dict(self) -> dict[str, str | None]:
+        return {
+            "requested_origin": self.requested_origin,
+            "requested_destination": self.requested_destination,
+            "requested_departure_date": self.requested_departure_date,
+            "form_origin_readback": self.form_origin_readback,
+            "form_destination_readback": self.form_destination_readback,
+            "form_date_readback": self.form_date_readback,
+        }
+
+
+@dataclass(frozen=True)
+class PreSubmitQueryVerification:
+    pre_submit_route_match: bool | str
+    pre_submit_date_match: bool | str
+    submit_allowed: bool
+    failure_taxonomy: str | None
+    query_state_decision: str
+
+    def to_dict(self) -> dict[str, bool | str | None]:
+        return {
+            "pre_submit_route_match": self.pre_submit_route_match,
+            "pre_submit_date_match": self.pre_submit_date_match,
+            "submit_allowed": self.submit_allowed,
+            "failure_taxonomy": self.failure_taxonomy,
+            "query_state_decision": self.query_state_decision,
+        }
+
+
+@dataclass(frozen=True)
 class FliggyFlightEvidence:
     evidence_index: int
     raw_displayed_flight_identity: FieldEvidence
@@ -1238,8 +1276,29 @@ async def run_fliggy_level2_live_validation(
 
             page_count_before_submit = len(context.pages)
             recorder.mark(BrowserProbeStage.SEARCH_INPUT, "public flight-search controls detected")
-            await _submit_public_flight_search(context, page, probe_input)
-            diagnostics["search_input_succeeded"] = True
+            submit_allowed, query_state_diagnostics = await _submit_verified_public_flight_search(context, page, probe_input)
+            diagnostics.update(query_state_diagnostics)
+            diagnostics["search_input_succeeded"] = submit_allowed
+            if not submit_allowed:
+                await context.close()
+                await browser.close()
+                return build_level2_expansion_failure_result(
+                    target=target,
+                    outcome=Level2ExpansionOutcome.EVIDENCE_INSUFFICIENT,
+                    acquired_at=acquired_at,
+                    experiment_run_id=probe_input.experiment_run_id,
+                    search_plan_id=probe_input.search_plan_id,
+                    execution_id=probe_input.execution_id,
+                    duration_ms=int((time.monotonic() - started) * 1000),
+                    source_url=page.url,
+                    bounds=target_bounds,
+                    diagnostics=_finalize_level2_live_diagnostics(
+                        diagnostics={**diagnostics, "failure_kind": "pre_submit_query_state_verification_failed"},
+                        recorder=recorder,
+                        outcome=Level2ExpansionOutcome.EVIDENCE_INSUFFICIENT,
+                        started=started,
+                    ),
+                )
             recorder.mark(BrowserProbeStage.SEARCH_SUBMIT, "search submitted through public visible flight form")
             diagnostics["search_submission_attempted"] = True
             recorder.mark(BrowserProbeStage.RESULT_TRANSITION, "selecting deterministic result context")
@@ -1253,6 +1312,7 @@ async def run_fliggy_level2_live_validation(
             )
             diagnostics["result_context_handoff"] = handoff_diagnostics
             diagnostics["result_context_selected"] = handoff_diagnostics["selected_page_index"] is not None
+            _annotate_post_submit_query_propagation(diagnostics, handoff_diagnostics)
             recorder.mark(BrowserProbeStage.RESULT_READINESS, "waiting for terminal/result state")
             await page.wait_for_load_state("networkidle", timeout=_remaining_ms(started, probe_input.overall_deadline_seconds))
             html = await page.content()
@@ -1491,6 +1551,13 @@ def _browser_failure_taxonomy(
         return "NETWORK_FAILURE"
     if diagnostics.get("wrong_navigation_target") is True:
         return "RESULT_PAGE_LAYOUT_DRIFT"
+    if isinstance(diagnostics.get("pre_submit_query_verification"), dict):
+        pre_submit_failure = diagnostics["pre_submit_query_verification"].get("failure_taxonomy")
+        if isinstance(pre_submit_failure, str):
+            return pre_submit_failure
+    if diagnostics.get("post_submit_propagation_failed") is True:
+        post_submit_failure = diagnostics.get("post_submit_failure_taxonomy")
+        return post_submit_failure if isinstance(post_submit_failure, str) else "SUBMIT_STATE_PROPAGATION_FAILED"
     if diagnostics.get("search_form_ready") is False:
         return "SEARCH_FORM_NOT_READY"
     if diagnostics.get("search_input_succeeded") is False:
@@ -1681,29 +1748,38 @@ async def run_fliggy_browser_probe(probe_input: ProbeInput) -> ProbeRunResult:
                     page_count_before_submit = len(context.pages)
                     diagnostics["result_context_handoff"]["page_count_before_submit"] = page_count_before_submit
                     diagnostics["submit_sequence"] = "origin_enter,date_force_fill_enter,destination_enter,submit_fallback_if_needed"
-                    await _submit_public_flight_search(context, page, probe_input)
-                    diagnostics["search_input_succeeded"] = True
-                    diagnostics["clicked"] = True
-                    diagnostics["search_submission_attempted"] = True
+                    submit_allowed, query_state_diagnostics = await _submit_verified_public_flight_search(context, page, probe_input)
+                    diagnostics.update(query_state_diagnostics)
+                    diagnostics["search_input_succeeded"] = submit_allowed
                     diagnostics["visible_public_form_used"] = True
-                    recorder.mark(BrowserProbeStage.SEARCH_SUBMIT, "search submitted through public visible flight form")
-                    recorder.mark(BrowserProbeStage.RESULT_TRANSITION, "selecting deterministic result context")
-                    page, handoff_diagnostics = await _select_result_context_page(
-                        context=context,
-                        current_page=page,
-                        probe_input=probe_input,
-                        page_error_type=PlaywrightError,
-                        page_count_before_submit=page_count_before_submit,
-                        wait_ms=min(5000, max(500, _remaining_ms(started, probe_input.overall_deadline_seconds) - 500)),
-                    )
-                    diagnostics["result_context_handoff"] = handoff_diagnostics
-                    diagnostics["result_context_selected"] = handoff_diagnostics["selected_page_index"] is not None
-                    if handoff_diagnostics["selected_page_index"] is None:
+                    if not submit_allowed:
                         diagnostics["search_interaction_failed"] = True
+                        outcome = BrowserProbeOutcome.EVIDENCE_INSUFFICIENT
+                        should_wait_for_result_state = False
+                        await context.close()
+                        await browser.close()
                     else:
-                        diagnostics["final_sanitized_url"] = handoff_diagnostics["selected_page_url"]
-                        diagnostics["page_identity"] = handoff_diagnostics["selected_page_identity"]
-                    should_wait_for_result_state = True
+                        diagnostics["clicked"] = True
+                        diagnostics["search_submission_attempted"] = True
+                        recorder.mark(BrowserProbeStage.SEARCH_SUBMIT, "search submitted through public visible flight form")
+                        recorder.mark(BrowserProbeStage.RESULT_TRANSITION, "selecting deterministic result context")
+                        page, handoff_diagnostics = await _select_result_context_page(
+                            context=context,
+                            current_page=page,
+                            probe_input=probe_input,
+                            page_error_type=PlaywrightError,
+                            page_count_before_submit=page_count_before_submit,
+                            wait_ms=min(5000, max(500, _remaining_ms(started, probe_input.overall_deadline_seconds) - 500)),
+                        )
+                        diagnostics["result_context_handoff"] = handoff_diagnostics
+                        diagnostics["result_context_selected"] = handoff_diagnostics["selected_page_index"] is not None
+                        _annotate_post_submit_query_propagation(diagnostics, handoff_diagnostics)
+                        if handoff_diagnostics["selected_page_index"] is None:
+                            diagnostics["search_interaction_failed"] = True
+                        else:
+                            diagnostics["final_sanitized_url"] = handoff_diagnostics["selected_page_url"]
+                            diagnostics["page_identity"] = handoff_diagnostics["selected_page_identity"]
+                        should_wait_for_result_state = True
             if should_wait_for_result_state:
                 recorder.mark(BrowserProbeStage.RESULT_READINESS, "waiting for terminal/result state")
                 await page.wait_for_load_state("networkidle", timeout=_remaining_ms(started, probe_input.overall_deadline_seconds))
@@ -2101,9 +2177,7 @@ def _parse_price_currency(raw_text: str | None) -> str | None:
     return None
 
 
-async def _submit_public_flight_search(context: Any, page: Any, probe_input: ProbeInput) -> None:
-    page_count_before_submit = len(context.pages)
-
+async def _write_public_flight_search_fields(page: Any, probe_input: ProbeInput) -> None:
     async def fill_input(selector: str, value: str, *, force: bool = False, press_enter: bool = True) -> None:
         field = page.locator(selector).nth(0)
         if force:
@@ -2119,8 +2193,140 @@ async def _submit_public_flight_search(context: Any, page: Any, probe_input: Pro
     await fill_input(".rc-flight-searchbar input#form_depCity", probe_input.origin_text)
     await fill_input(".rc-flight-searchbar input#form_depDate", probe_input.departure_date.isoformat(), force=True)
     await fill_input(".rc-flight-searchbar input#form_arrCity", probe_input.destination_text)
+
+
+async def _submit_public_flight_search(context: Any, page: Any, probe_input: ProbeInput) -> None:
+    page_count_before_submit = len(context.pages)
+    await _write_public_flight_search_fields(page, probe_input)
     if len(context.pages) == page_count_before_submit:
         await page.locator(".rc-flight-searchbar button.search-button").nth(0).click()
+
+
+async def _submit_verified_public_flight_search(context: Any, page: Any, probe_input: ProbeInput) -> tuple[bool, dict[str, Any]]:
+    page_count_before_submit = len(context.pages)
+    await _write_public_flight_search_fields(page, probe_input)
+    query_state = await _capture_public_search_query_state(page, probe_input)
+    verification = _verify_pre_submit_query_state(query_state)
+    diagnostics: dict[str, Any] = {
+        "pre_submit_query_state": query_state.to_dict(),
+        "pre_submit_query_verification": verification.to_dict(),
+        "submit_allowed": verification.submit_allowed,
+        "submit_executed": False,
+    }
+    if not verification.submit_allowed:
+        return False, diagnostics
+    if len(context.pages) == page_count_before_submit:
+        await page.locator(".rc-flight-searchbar button.search-button").nth(0).click()
+    diagnostics["submit_executed"] = True
+    return True, diagnostics
+
+
+async def _capture_public_search_query_state(page: Any, probe_input: ProbeInput) -> PublicSearchQueryState:
+    return PublicSearchQueryState(
+        requested_origin=probe_input.origin_text,
+        requested_destination=probe_input.destination_text,
+        requested_departure_date=probe_input.departure_date.isoformat(),
+        form_origin_readback=await _read_control_text(page, ".rc-flight-searchbar input#form_depCity"),
+        form_destination_readback=await _read_control_text(page, ".rc-flight-searchbar input#form_arrCity"),
+        form_date_readback=await _read_control_text(page, ".rc-flight-searchbar input#form_depDate"),
+    )
+
+
+async def _read_control_text(page: Any, selector: str) -> str | None:
+    locator = page.locator(selector)
+    if await locator.count() == 0:
+        return None
+    first = locator.nth(0)
+    for expression in ("node => node.value", "node => node.getAttribute('aria-label')", "node => node.getAttribute('title')", "node => node.textContent"):
+        value = await first.evaluate(expression)
+        if isinstance(value, str) and value.strip():
+            return _truncate_diagnostic_text(value)
+    return None
+
+
+def _verify_pre_submit_query_state(query_state: PublicSearchQueryState) -> PreSubmitQueryVerification:
+    route_match = _readback_contains(query_state.form_origin_readback, query_state.requested_origin) and _readback_contains(
+        query_state.form_destination_readback,
+        query_state.requested_destination,
+    )
+    date_match = _readback_date_matches(query_state.form_date_readback, query_state.requested_departure_date)
+    if route_match is None or date_match is None:
+        failure = "FORM_STATE_UNREADABLE" if _query_state_unreadable(query_state) else "FORM_STATE_INSUFFICIENT"
+        return PreSubmitQueryVerification(
+            pre_submit_route_match=route_match if route_match is not None else "insufficient",
+            pre_submit_date_match=date_match if date_match is not None else "insufficient",
+            submit_allowed=False,
+            failure_taxonomy=failure,
+            query_state_decision="insufficient",
+        )
+    if route_match and date_match:
+        return PreSubmitQueryVerification(
+            pre_submit_route_match=True,
+            pre_submit_date_match=True,
+            submit_allowed=True,
+            failure_taxonomy=None,
+            query_state_decision="match",
+        )
+    failure = (
+        "FORM_ROUTE_AND_DATE_MISMATCH"
+        if not route_match and not date_match
+        else "FORM_ROUTE_MISMATCH"
+        if not route_match
+        else "FORM_DATE_MISMATCH"
+    )
+    return PreSubmitQueryVerification(
+        pre_submit_route_match=route_match,
+        pre_submit_date_match=date_match,
+        submit_allowed=False,
+        failure_taxonomy=failure,
+        query_state_decision="mismatch",
+    )
+
+
+def _readback_contains(readback: str | None, expected: str) -> bool | None:
+    if readback is None or not readback.strip():
+        return None
+    return expected in readback
+
+
+def _readback_date_matches(readback: str | None, expected: str) -> bool | None:
+    if readback is None or not readback.strip():
+        return None
+    try:
+        expected_date = date.fromisoformat(expected)
+    except ValueError:
+        return None
+    observed = _normalize_date_marker(readback, ProbeInput("北京", "上海", expected_date))
+    if observed is None:
+        return None
+    return observed == expected
+
+
+def _query_state_unreadable(query_state: PublicSearchQueryState) -> bool:
+    return (
+        query_state.form_origin_readback is None
+        or query_state.form_destination_readback is None
+        or query_state.form_date_readback is None
+    )
+
+
+def _annotate_post_submit_query_propagation(diagnostics: dict[str, Any], handoff_diagnostics: dict[str, Any]) -> None:
+    verification = diagnostics.get("pre_submit_query_verification")
+    pre_submit_matched = isinstance(verification, dict) and verification.get("query_state_decision") == "match"
+    post_submit_matched = handoff_diagnostics.get("context_match") is True
+    diagnostics["post_submit_route_match"] = handoff_diagnostics.get("route_match")
+    diagnostics["post_submit_date_match"] = handoff_diagnostics.get("date_match")
+    diagnostics["post_submit_query_identity_decision"] = handoff_diagnostics.get("query_identity_decision")
+    diagnostics["post_submit_mismatch_dimension"] = handoff_diagnostics.get("mismatch_dimension")
+    diagnostics["post_submit_propagation_failed"] = bool(pre_submit_matched and not post_submit_matched)
+    if diagnostics["post_submit_propagation_failed"]:
+        diagnostics["post_submit_failure_taxonomy"] = (
+            "RESULT_QUERY_MISMATCH"
+            if handoff_diagnostics.get("mismatch_dimension") in {"route", "date", "both"}
+            else "SUBMIT_STATE_PROPAGATION_FAILED"
+        )
+    else:
+        diagnostics["post_submit_failure_taxonomy"] = None
 
 
 async def _capture_search_form_readiness(page: Any) -> SearchFormReadiness:

@@ -16,11 +16,14 @@ from flight_agent.adapters.flight_providers.fliggy.browser_probe import (
     ProbeInput,
     ProbeRunResult,
     ProviderMarketCompleteness,
+    PublicSearchQueryState,
     ResultContextCandidate,
     SearchFormReadiness,
     StageDiagnostic,
+    _annotate_post_submit_query_propagation,
     _finalize_diagnostics,
     _StageRecorder,
+    _verify_pre_submit_query_state,
     assess_dom_coverage,
     choose_result_context_candidate,
     classify_experiment_diagnosis,
@@ -581,6 +584,153 @@ def test_du2_10_challenge_detection_still_precedes_query_identity() -> None:
     assert classify_result_state(html) is BrowserProbeOutcome.ACCESS_CHALLENGE
 
 
+def test_qs01_committed_route_and_date_allow_submit() -> None:
+    verification = _verify_pre_submit_query_state(
+        _query_state(origin="北京", destination="上海", form_origin="北京", form_destination="上海", form_date="2026-09-14")
+    )
+
+    assert verification.pre_submit_route_match is True
+    assert verification.pre_submit_date_match is True
+    assert verification.submit_allowed is True
+
+
+def test_qs02_typed_date_but_old_committed_date_blocks_submit() -> None:
+    verification = _verify_pre_submit_query_state(
+        _query_state(origin="北京", destination="上海", form_origin="北京", form_destination="上海", form_date="2026-09-06")
+    )
+
+    assert verification.submit_allowed is False
+    assert verification.failure_taxonomy == "FORM_DATE_MISMATCH"
+
+
+def test_qs03_committed_route_mismatch_blocks_submit() -> None:
+    verification = _verify_pre_submit_query_state(
+        _query_state(origin="北京", destination="上海", form_origin="北京", form_destination="杭州", form_date="2026-09-14")
+    )
+
+    assert verification.submit_allowed is False
+    assert verification.failure_taxonomy == "FORM_ROUTE_MISMATCH"
+
+
+def test_qs04_committed_route_and_date_mismatch_blocks_submit() -> None:
+    verification = _verify_pre_submit_query_state(
+        _query_state(origin="北京", destination="上海", form_origin="广州", form_destination="杭州", form_date="2026-09-06")
+    )
+
+    assert verification.submit_allowed is False
+    assert verification.failure_taxonomy == "FORM_ROUTE_AND_DATE_MISMATCH"
+
+
+def test_qs05_unreadable_or_insufficient_form_state_blocks_submit() -> None:
+    unreadable = _verify_pre_submit_query_state(
+        _query_state(origin="北京", destination="上海", form_origin=None, form_destination="上海", form_date="2026-09-14")
+    )
+    insufficient = _verify_pre_submit_query_state(
+        _query_state(origin="北京", destination="上海", form_origin="北京", form_destination="上海", form_date="下周一")
+    )
+
+    assert unreadable.submit_allowed is False
+    assert unreadable.failure_taxonomy == "FORM_STATE_UNREADABLE"
+    assert insufficient.submit_allowed is False
+    assert insufficient.failure_taxonomy == "FORM_STATE_INSUFFICIENT"
+
+
+def test_qs06_pre_submit_match_and_post_submit_mismatch_is_propagation_failure() -> None:
+    diagnostics = {"pre_submit_query_verification": _verify_pre_submit_query_state(_query_state()).to_dict()}
+    handoff = {
+        "context_match": False,
+        "route_match": False,
+        "date_match": False,
+        "query_identity_decision": "insufficient",
+        "mismatch_dimension": "both",
+    }
+
+    _annotate_post_submit_query_propagation(diagnostics, handoff)
+
+    assert diagnostics["post_submit_propagation_failed"] is True
+    assert diagnostics["post_submit_failure_taxonomy"] == "RESULT_QUERY_MISMATCH"
+
+
+def test_qs07_pre_and_post_submit_match_advances_to_existing_result_matcher() -> None:
+    diagnostics = {"pre_submit_query_verification": _verify_pre_submit_query_state(_query_state()).to_dict()}
+    handoff = {
+        "context_match": True,
+        "route_match": True,
+        "date_match": True,
+        "query_identity_decision": "match",
+        "mismatch_dimension": "none",
+    }
+
+    _annotate_post_submit_query_propagation(diagnostics, handoff)
+
+    assert diagnostics["post_submit_propagation_failed"] is False
+    assert diagnostics["post_submit_query_identity_decision"] == "match"
+
+
+def test_qs08_result_query_mismatch_preserves_strict_result_matcher() -> None:
+    candidate = _result_context_candidate(
+        index=1,
+        url="https://sjipiao.fliggy.com/homeow/trip_flight_search.htm",
+        title="北京到杭州机票预订",
+        identity=FliggyPageIdentity.FLIGHT_RESULT_CANDIDATE,
+        is_current=False,
+        route_conflict=True,
+    )
+
+    assert choose_result_context_candidate((candidate,)) is None
+
+
+def test_qs09_matching_empty_result_identity_is_preserved() -> None:
+    evidence = summarize_search_plan_evidence(
+        title="北京到上海机票预订",
+        html="<main>2026-09-14 暂无航班</main>",
+        probe_input=ProbeInput("北京", "上海", date(2026, 9, 14)),
+        url="https://sjipiao.fliggy.com/homeow/trip_flight_search.htm",
+    )
+
+    assert evidence["explicit_empty"] is True
+    assert evidence["query_identity_decision"] == "match"
+
+
+def test_qs10_existing_challenge_classification_is_preserved() -> None:
+    assert classify_result_state("<main>北京到上海 2026-09-14 访问验证</main>") is BrowserProbeOutcome.ACCESS_CHALLENGE
+
+
+def test_qs11_query_state_payload_stays_sanitized() -> None:
+    payload = {
+        "pre_submit_query_state": {"form_origin_readback": "北京 Cookie: a=b"},
+        "full_dom": "<html>private</html>",
+        "session": "secret",
+    }
+
+    assert sanitize_probe_payload(payload) == {
+        "pre_submit_query_state": {"form_origin_readback": "[REDACTED]"},
+        "full_dom": "[REDACTED]",
+        "session": "[REDACTED]",
+    }
+
+
+def test_qs12_historical_requested_vs_result_date_cannot_be_accepted() -> None:
+    verification = _verify_pre_submit_query_state(
+        _query_state(origin="北京", destination="上海", form_origin="北京", form_destination="上海", form_date="2026-09-14")
+    )
+    diagnostics = {"pre_submit_query_verification": verification.to_dict()}
+    handoff = {
+        "context_match": False,
+        "route_match": False,
+        "date_match": False,
+        "query_identity_decision": "insufficient",
+        "mismatch_dimension": "both",
+        "submitted_date": "2026-09-14",
+        "normalized_observed_date": "2026-09-06",
+    }
+
+    _annotate_post_submit_query_propagation(diagnostics, handoff)
+
+    assert diagnostics["post_submit_propagation_failed"] is True
+    assert diagnostics["post_submit_date_match"] is False
+
+
 def test_navigation_source_ref_uses_stable_public_entry_and_sanitizes_tracking() -> None:
     result = ProbeRunResult(
         provider_identity="FLIGGY",
@@ -984,6 +1134,25 @@ def _result(outcome: BrowserProbeOutcome, *, headless: bool) -> ProbeRunResult:
         sanitized_source_ref="https://flights.alitrip.com/flight_search_result.htm",
         evidence=(),
         diagnostics={"headless": headless},
+    )
+
+
+def _query_state(
+    *,
+    origin: str = "北京",
+    destination: str = "上海",
+    departure_date: str = "2026-09-14",
+    form_origin: str | None = "北京",
+    form_destination: str | None = "上海",
+    form_date: str | None = "2026-09-14",
+) -> PublicSearchQueryState:
+    return PublicSearchQueryState(
+        requested_origin=origin,
+        requested_destination=destination,
+        requested_departure_date=departure_date,
+        form_origin_readback=form_origin,
+        form_destination_readback=form_destination,
+        form_date_readback=form_date,
     )
 
 
