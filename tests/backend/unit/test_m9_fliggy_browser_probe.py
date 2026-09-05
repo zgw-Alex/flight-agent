@@ -27,6 +27,10 @@ from flight_agent.adapters.flight_providers.fliggy.browser_probe import (
     _destination_commitment_result,
     _destination_commitment_status,
     _destination_readback_matches,
+    _destination_readback_transition_count,
+    _destination_stability_diagnostics,
+    _destination_stability_forward_progress,
+    _destination_stability_root_cause,
     _diag_context_inventory,
     _diag_u4_p0_p7,
     _diag_u4_root_cause,
@@ -879,26 +883,264 @@ def test_dst11_destination_diagnostics_stay_bounded_and_sanitized() -> None:
         failure_taxonomy=None,
     )
 
-    assert sanitize_probe_payload({"destination_commitment": commitment.to_dict()}) == {
-        "destination_commitment": {
-            "requested_destination": "上海",
-            "destination_control_ready": True,
-            "typed_destination": "上海",
-            "suggestion_surface_present": True,
-            "suggestion_candidate_count": 1,
-            "candidate_labels": ["[REDACTED]"],
-            "selected_candidate_label": "[REDACTED]",
-            "selection_method": "click",
-            "commit_readback": "[REDACTED]",
-            "destination_match": True,
-            "commitment_status": "confirmed",
-            "failure_taxonomy": None,
-        }
-    }
+    sanitized = sanitize_probe_payload({"destination_commitment": commitment.to_dict()})["destination_commitment"]
+
+    assert sanitized["candidate_labels"] == ["[REDACTED]"]
+    assert sanitized["selected_candidate_label"] == "[REDACTED]"
+    assert sanitized["commit_readback"] == "[REDACTED]"
+    assert sanitized["destination_match"] is True
+    assert sanitized["commitment_status"] == "confirmed"
+    assert sanitized["failure_taxonomy"] is None
+    assert sanitized["destination_stability_diagnostics"]["d4_option_inventory"]["candidate_labels"] == ["[REDACTED]"]
 
 
 def test_dst12_placeholder_destination_can_never_equal_shanghai() -> None:
     assert _destination_readback_matches("到达城市，可直接输入城市名称搜索", "上海") is False
+
+
+def test_ds01_write_shanghai_unique_suggestion_selects_stable_shanghai() -> None:
+    candidate = _destination_candidate("上海")
+    diagnostics = _destination_stability_diagnostics(
+        requested_destination="上海",
+        destination_control_ready=True,
+        input_text_after_write="上海",
+        candidates=(candidate,),
+        selected_candidate=candidate,
+        selection_method="click",
+        commit_readback="上海",
+        commitment_status="confirmed",
+        failure_taxonomy=None,
+        readback_sequence=("上海", "上海"),
+        extension_used=False,
+        extension_reason="none",
+    )
+
+    assert diagnostics["d5_option_match"]["match_decision"] == "unique"
+    assert diagnostics["d9_pre_submit_stability"]["stable_readback"] == "上海"
+    assert diagnostics["root_cause_class"] == "INCONCLUSIVE"
+
+
+def test_ds02_stale_history_suggestion_inventory_preserves_hangzhou_vs_shanghai() -> None:
+    candidates = (_destination_candidate("杭州"), _destination_candidate("上海", index=1))
+    diagnostics = _destination_stability_diagnostics(
+        requested_destination="上海",
+        destination_control_ready=True,
+        input_text_after_write="上海",
+        candidates=candidates,
+        selected_candidate=candidates[1],
+        selection_method="click",
+        commit_readback="上海",
+        commitment_status="confirmed",
+        failure_taxonomy=None,
+        readback_sequence=("上海",),
+        extension_used=False,
+        extension_reason="none",
+    )
+
+    labels = diagnostics["d4_option_inventory"]["candidate_labels"]
+    assert labels == ["杭州", "上海"]
+    assert diagnostics["d4_option_inventory"]["suggestion_classes"][0]["matches_requested"] is False
+    assert diagnostics["d4_option_inventory"]["suggestion_classes"][1]["matches_requested"] is True
+
+
+def test_ds03_matched_shanghai_action_lands_on_hangzhou_is_selection_misapplied() -> None:
+    candidate = _destination_candidate("上海")
+    assert (
+        _destination_stability_root_cause(
+            requested_destination="上海",
+            input_text_after_write="上海",
+            candidates=(candidate,),
+            selected_candidate=candidate,
+            selection_method="click",
+            commit_readback="杭州",
+            commitment_status="mismatch",
+            failure_taxonomy="FORM_DESTINATION_MISMATCH",
+            readback_sequence=("杭州",),
+            stable_readback="杭州",
+        )
+        == "DESTINATION_SELECTION_ACTION_MISAPPLIED"
+    )
+
+
+def test_ds04_first_shanghai_then_reset_hangzhou_is_post_commit_reset() -> None:
+    assert (
+        _destination_stability_root_cause(
+            requested_destination="上海",
+            input_text_after_write="上海",
+            candidates=(_destination_candidate("上海"),),
+            selected_candidate=_destination_candidate("上海"),
+            selection_method="click",
+            commit_readback="上海",
+            commitment_status="confirmed",
+            failure_taxonomy=None,
+            readback_sequence=("上海", "杭州"),
+            stable_readback="杭州",
+        )
+        == "DESTINATION_POST_COMMIT_RESET"
+    )
+
+
+def test_ds05_visible_committed_shanghai_but_readback_wrong_control_hangzhou_is_misapplied() -> None:
+    diagnostics = _destination_stability_diagnostics(
+        requested_destination="上海",
+        destination_control_ready=True,
+        input_text_after_write="上海",
+        candidates=(_destination_candidate("上海"),),
+        selected_candidate=_destination_candidate("上海"),
+        selection_method="click",
+        commit_readback="杭州",
+        commitment_status="mismatch",
+        failure_taxonomy="FORM_DESTINATION_MISMATCH",
+        readback_sequence=("杭州",),
+        extension_used=False,
+        extension_reason="none",
+    )
+
+    assert diagnostics["d8_control_readback"]["unexpected_value"] == "杭州"
+    assert diagnostics["root_cause_class"] == "DESTINATION_SELECTION_ACTION_MISAPPLIED"
+
+
+def test_ds06_multiple_shanghai_like_options_are_ambiguous() -> None:
+    candidates = (_destination_candidate("上海虹桥"), _destination_candidate("上海浦东", index=1))
+    resolution = _resolve_destination_candidate(candidates, "上海", suggestion_surface_present=True)
+
+    assert resolution.failure_taxonomy == "DESTINATION_OPTION_AMBIGUOUS"
+    assert (
+        _destination_stability_root_cause(
+            requested_destination="上海",
+            input_text_after_write="上海",
+            candidates=candidates,
+            selected_candidate=None,
+            selection_method="none",
+            commit_readback="上海",
+            commitment_status="mismatch",
+            failure_taxonomy="DESTINATION_OPTION_AMBIGUOUS",
+            readback_sequence=("上海",),
+            stable_readback="上海",
+        )
+        == "DESTINATION_OPTION_AMBIGUOUS"
+    )
+
+
+def test_ds07_no_shanghai_option_is_not_found() -> None:
+    assert (
+        _destination_stability_root_cause(
+            requested_destination="上海",
+            input_text_after_write="上海",
+            candidates=(_destination_candidate("杭州"),),
+            selected_candidate=None,
+            selection_method="none",
+            commit_readback="上海",
+            commitment_status="mismatch",
+            failure_taxonomy="DESTINATION_OPTION_NOT_FOUND",
+            readback_sequence=("上海",),
+            stable_readback="上海",
+        )
+        == "DESTINATION_OPTION_NOT_FOUND"
+    )
+
+
+def test_ds08_write_itself_becomes_hangzhou_before_suggestion() -> None:
+    assert (
+        _destination_stability_root_cause(
+            requested_destination="上海",
+            input_text_after_write="杭州",
+            candidates=(),
+            selected_candidate=None,
+            selection_method="none",
+            commit_readback="杭州",
+            commitment_status="mismatch",
+            failure_taxonomy="FORM_DESTINATION_MISMATCH",
+            readback_sequence=("杭州",),
+            stable_readback="杭州",
+        )
+        == "DESTINATION_INPUT_WRITE_DRIFT"
+    )
+
+
+def test_ds09_control_identity_changes_when_destination_control_not_ready() -> None:
+    assert (
+        _destination_stability_root_cause(
+            requested_destination="上海",
+            input_text_after_write=None,
+            candidates=(),
+            selected_candidate=None,
+            selection_method="none",
+            commit_readback=None,
+            commitment_status="failed",
+            failure_taxonomy="DESTINATION_CONTROL_NOT_READY",
+            readback_sequence=(),
+            stable_readback=None,
+        )
+        == "DESTINATION_CONTROL_IDENTITY_DRIFT"
+    )
+
+
+def test_ds10_stable_shanghai_after_progress_extension_records_timing_evidence() -> None:
+    sequence = ["上海", "杭州", "上海"]
+
+    assert _destination_stability_forward_progress(sequence) is True
+    assert _destination_readback_transition_count(tuple(sequence)) == 2
+
+
+def test_ds11_no_progress_means_no_extension_signal() -> None:
+    sequence = ["上海", "上海"]
+
+    assert _destination_stability_forward_progress(sequence) is False
+
+
+def test_ds12_hangzhou_never_equals_shanghai_and_q1_blocks() -> None:
+    verification = _verify_pre_submit_query_state(
+        _query_state(origin="北京", destination="上海", form_origin="北京", form_destination="杭州", form_date="2026-09-14")
+    )
+
+    assert _destination_readback_matches("杭州", "上海") is False
+    assert verification.submit_allowed is False
+    assert verification.failure_taxonomy == "FORM_ROUTE_MISMATCH"
+
+
+def test_ds13_headed_and_headless_timing_evidence_can_be_recorded_independently() -> None:
+    headed = _destination_stability_diagnostics(
+        requested_destination="上海",
+        destination_control_ready=True,
+        input_text_after_write="上海",
+        candidates=(),
+        selected_candidate=None,
+        selection_method="none",
+        commit_readback="杭州",
+        commitment_status="mismatch",
+        failure_taxonomy="DESTINATION_SUGGESTION_NOT_READY",
+        readback_sequence=("杭州",),
+        extension_used=False,
+        extension_reason="none",
+    )
+    headless = {**headed, "headless": True}
+
+    assert headed["d9_pre_submit_stability"]["tdest_ms"] == 1500
+    assert headless["headless"] is True
+
+
+def test_ds14_destination_diagnostics_sanitized_and_downstream_unchanged() -> None:
+    commitment = _destination_commitment_result(
+        requested_destination="上海",
+        destination_control_ready=True,
+        typed_destination="上海",
+        candidates=(_destination_candidate("上海 Cookie: a=b"),),
+        suggestion_surface_present=True,
+        selected_candidate=_destination_candidate("上海 Cookie: a=b"),
+        selection_method="click",
+        commit_readback="上海 Cookie: a=b",
+        failure_taxonomy=None,
+        readback_sequence=("上海 Cookie: a=b",),
+    )
+
+    sanitized = sanitize_probe_payload({"destination_commitment": commitment.to_dict()})
+
+    assert sanitized["destination_commitment"]["destination_stability_diagnostics"]["d4_option_inventory"]["candidate_labels"] == [
+        "[REDACTED]"
+    ]
+    assert "destination_stability_diagnostics" in sanitized["destination_commitment"]
+    assert _verify_pre_submit_query_state(_query_state()).submit_allowed is True
 
 
 def test_ps01_q1_verified_and_q3_q4_q5_match_is_preserved() -> None:

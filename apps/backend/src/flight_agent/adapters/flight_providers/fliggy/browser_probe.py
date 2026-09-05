@@ -11,8 +11,9 @@ import argparse
 import json
 import re
 import time
+from collections.abc import Sequence
 from contextlib import suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from enum import Enum
 from html.parser import HTMLParser
@@ -40,6 +41,8 @@ _SENSITIVE_KEY_FRAGMENTS = (
 )
 
 _FLIGGY_DESTINATION_INPUT_SELECTOR = ".rc-flight-searchbar input#form_arrCity"
+_FLIGGY_DESTINATION_SUGGESTION_ATTEMPTS = 5
+_FLIGGY_DESTINATION_SUGGESTION_WAIT_MS = 300
 _FLIGGY_DESTINATION_SUGGESTION_SELECTORS = (
     ".next-overlay-wrapper [role='option']",
     ".next-overlay-wrapper .next-menu-item",
@@ -409,6 +412,7 @@ class DestinationCommitmentResult:
     destination_match: bool | str
     commitment_status: str
     failure_taxonomy: str | None
+    destination_stability_diagnostics: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -424,6 +428,7 @@ class DestinationCommitmentResult:
             "destination_match": self.destination_match,
             "commitment_status": self.commitment_status,
             "failure_taxonomy": self.failure_taxonomy,
+            "destination_stability_diagnostics": self.destination_stability_diagnostics,
         }
 
 
@@ -2349,6 +2354,7 @@ async def _commit_public_destination(page: Any, requested_destination: str) -> D
         await field.click()
         await field.fill(requested_destination)
         await page.wait_for_timeout(300)
+        input_text_after_write = await _read_control_text(page, _FLIGGY_DESTINATION_INPUT_SELECTOR)
     except PlaywrightError:
         return _destination_commitment_result(
             requested_destination=requested_destination,
@@ -2370,16 +2376,19 @@ async def _commit_public_destination(page: Any, requested_destination: str) -> D
         suggestion_surface_present=suggestion_surface_present,
     )
     if resolution.selected_candidate is None:
+        commit_readback = await _read_control_text(page, _FLIGGY_DESTINATION_INPUT_SELECTOR)
         return _destination_commitment_result(
             requested_destination=requested_destination,
             destination_control_ready=True,
-            typed_destination=requested_destination,
+            typed_destination=input_text_after_write,
             candidates=candidates,
             suggestion_surface_present=suggestion_surface_present,
             selected_candidate=None,
             selection_method="none",
-            commit_readback=await _read_control_text(page, _FLIGGY_DESTINATION_INPUT_SELECTOR),
+            commit_readback=commit_readback,
             failure_taxonomy=resolution.failure_taxonomy,
+            readback_sequence=(commit_readback,),
+            input_text_after_write=input_text_after_write,
         )
 
     try:
@@ -2396,19 +2405,29 @@ async def _commit_public_destination(page: Any, requested_destination: str) -> D
             selection_method="click",
             commit_readback=await _read_control_text(page, _FLIGGY_DESTINATION_INPUT_SELECTOR),
             failure_taxonomy="DESTINATION_OPTION_SELECTION_FAILED",
+            input_text_after_write=input_text_after_write,
         )
 
     commit_readback = await _read_control_text(page, _FLIGGY_DESTINATION_INPUT_SELECTOR)
+    stability = await _observe_destination_readback_stability(
+        page,
+        requested_destination=requested_destination,
+        initial_readback=commit_readback,
+    )
     return _destination_commitment_result(
         requested_destination=requested_destination,
         destination_control_ready=True,
-        typed_destination=requested_destination,
+        typed_destination=input_text_after_write,
         candidates=candidates,
         suggestion_surface_present=suggestion_surface_present,
         selected_candidate=resolution.selected_candidate,
         selection_method="click",
         commit_readback=commit_readback,
         failure_taxonomy=None,
+        readback_sequence=tuple(stability["readback_sequence"]),
+        input_text_after_write=input_text_after_write,
+        extension_used=bool(stability["extension_used"]),
+        extension_reason=str(stability["extension_reason"]),
     )
 
 
@@ -2443,8 +2462,8 @@ async def _wait_for_destination_suggestion_candidates(
     page: Any,
     *,
     max_candidates: int = 8,
-    attempts: int = 5,
-    wait_ms: int = 300,
+    attempts: int = _FLIGGY_DESTINATION_SUGGESTION_ATTEMPTS,
+    wait_ms: int = _FLIGGY_DESTINATION_SUGGESTION_WAIT_MS,
 ) -> tuple[DestinationSuggestionCandidate, ...]:
     for attempt in range(attempts):
         candidates = await _collect_destination_suggestion_candidates(page, max_candidates=max_candidates)
@@ -2507,6 +2526,10 @@ def _destination_commitment_result(
     selection_method: str,
     commit_readback: str | None,
     failure_taxonomy: str | None,
+    readback_sequence: tuple[str | None, ...] = (),
+    input_text_after_write: str | None = None,
+    extension_used: bool = False,
+    extension_reason: str = "none",
 ) -> DestinationCommitmentResult:
     destination_match = _destination_readback_matches(commit_readback, requested_destination)
     commitment_status = _destination_commitment_status(
@@ -2520,6 +2543,20 @@ def _destination_commitment_result(
         effective_failure = None
     if effective_failure is None and commitment_status != "confirmed":
         effective_failure = "FORM_DESTINATION_MISMATCH" if destination_match is False else "DESTINATION_COMMIT_NOT_CONFIRMED"
+    stability_diagnostics = _destination_stability_diagnostics(
+        requested_destination=requested_destination,
+        destination_control_ready=destination_control_ready,
+        input_text_after_write=input_text_after_write if input_text_after_write is not None else typed_destination,
+        candidates=candidates,
+        selected_candidate=selected_candidate,
+        selection_method=selection_method,
+        commit_readback=commit_readback,
+        commitment_status=commitment_status,
+        failure_taxonomy=effective_failure,
+        readback_sequence=readback_sequence or ((commit_readback,) if commit_readback is not None else ()),
+        extension_used=extension_used,
+        extension_reason=extension_reason,
+    )
     return DestinationCommitmentResult(
         requested_destination=requested_destination,
         destination_control_ready=destination_control_ready,
@@ -2533,6 +2570,7 @@ def _destination_commitment_result(
         destination_match=destination_match,
         commitment_status=commitment_status,
         failure_taxonomy=effective_failure,
+        destination_stability_diagnostics=stability_diagnostics,
     )
 
 
@@ -2600,6 +2638,250 @@ async def _read_control_text(page: Any, selector: str) -> str | None:
         if isinstance(value, str) and value.strip():
             return _truncate_diagnostic_text(value)
     return None
+
+
+async def _observe_destination_readback_stability(
+    page: Any,
+    *,
+    requested_destination: str,
+    initial_readback: str | None,
+    attempts: int = _FLIGGY_DESTINATION_SUGGESTION_ATTEMPTS,
+    wait_ms: int = _FLIGGY_DESTINATION_SUGGESTION_WAIT_MS,
+) -> dict[str, Any]:
+    sequence: list[str | None] = [initial_readback]
+    if _destination_readback_matches(initial_readback, requested_destination) is not True:
+        return {
+            "readback_sequence": sequence,
+            "stable_readback": initial_readback,
+            "extension_used": False,
+            "extension_reason": "none",
+        }
+
+    for _ in range(max(0, attempts - 1)):
+        await page.wait_for_timeout(wait_ms)
+        sequence.append(await _read_control_text(page, _FLIGGY_DESTINATION_INPUT_SELECTOR))
+        if _destination_readback_matches(sequence[-1], requested_destination) is not True:
+            break
+
+    extension_used = False
+    extension_reason = "none"
+    if _destination_stability_forward_progress(sequence):
+        extension_used = True
+        extension_reason = "destination_readback_changed"
+        for _ in range(attempts):
+            await page.wait_for_timeout(wait_ms)
+            sequence.append(await _read_control_text(page, _FLIGGY_DESTINATION_INPUT_SELECTOR))
+            if _destination_readback_matches(sequence[-1], requested_destination) is True:
+                break
+
+    return {
+        "readback_sequence": sequence,
+        "stable_readback": _stable_destination_readback(tuple(sequence), requested_destination),
+        "extension_used": extension_used,
+        "extension_reason": extension_reason,
+    }
+
+
+def _destination_stability_diagnostics(
+    *,
+    requested_destination: str,
+    destination_control_ready: bool,
+    input_text_after_write: str | None,
+    candidates: tuple[DestinationSuggestionCandidate, ...],
+    selected_candidate: DestinationSuggestionCandidate | None,
+    selection_method: str,
+    commit_readback: str | None,
+    commitment_status: str,
+    failure_taxonomy: str | None,
+    readback_sequence: tuple[str | None, ...],
+    extension_used: bool,
+    extension_reason: str,
+) -> dict[str, Any]:
+    match_decision = _destination_option_match_decision(
+        candidates,
+        requested_destination,
+        selected_candidate=selected_candidate,
+        failure_taxonomy=failure_taxonomy,
+    )
+    stable_readback = _stable_destination_readback(readback_sequence, requested_destination)
+    unexpected_value = _unexpected_destination_value(readback_sequence, requested_destination)
+    root_cause = _destination_stability_root_cause(
+        requested_destination=requested_destination,
+        input_text_after_write=input_text_after_write,
+        candidates=candidates,
+        selected_candidate=selected_candidate,
+        selection_method=selection_method,
+        commit_readback=commit_readback,
+        commitment_status=commitment_status,
+        failure_taxonomy=failure_taxonomy,
+        readback_sequence=readback_sequence,
+        stable_readback=stable_readback,
+    )
+    return {
+        "d0_requested": {"requested_destination": requested_destination},
+        "d1_control_ready": {
+            "destination_control_ready": destination_control_ready,
+            "control_identity_class": "fliggy_destination_input" if destination_control_ready else "unready",
+        },
+        "d2_input_write": {
+            "input_text_after_write": input_text_after_write,
+            "input_write_match": _destination_readback_matches(input_text_after_write, requested_destination),
+        },
+        "d3_suggestion_ready": {
+            "suggestion_surface_present": bool(candidates),
+            "suggestion_count": len(candidates),
+        },
+        "d4_option_inventory": {
+            "suggestion_count": len(candidates),
+            "suggestion_classes": _destination_suggestion_classes(candidates, requested_destination),
+            "candidate_labels": [candidate.label for candidate in candidates],
+        },
+        "d5_option_match": {
+            "match_decision": match_decision,
+            "matched_option_text": selected_candidate.label if selected_candidate is not None else None,
+        },
+        "d6_selection_action": {
+            "selection_method": selection_method,
+            "action_target_text": selected_candidate.label if selected_candidate is not None else None,
+        },
+        "d7_commit_signal": {
+            "commit_signal": _destination_commit_signal(commitment_status, selected_candidate, commit_readback, requested_destination),
+        },
+        "d8_control_readback": {
+            "first_readback": commit_readback,
+            "readback_match": _destination_readback_matches(commit_readback, requested_destination),
+            "unexpected_value": unexpected_value,
+        },
+        "d9_pre_submit_stability": {
+            "tdest_ms": _FLIGGY_DESTINATION_SUGGESTION_ATTEMPTS * _FLIGGY_DESTINATION_SUGGESTION_WAIT_MS,
+            "max_observation_ms": _FLIGGY_DESTINATION_SUGGESTION_ATTEMPTS * _FLIGGY_DESTINATION_SUGGESTION_WAIT_MS * 2,
+            "readback_sequence": list(readback_sequence),
+            "stable_readback": stable_readback,
+            "transition_count": _destination_readback_transition_count(readback_sequence),
+            "extension_used": extension_used,
+            "extension_reason": extension_reason,
+        },
+        "root_cause_class": root_cause,
+    }
+
+
+def _destination_option_match_decision(
+    candidates: tuple[DestinationSuggestionCandidate, ...],
+    requested_destination: str,
+    *,
+    selected_candidate: DestinationSuggestionCandidate | None,
+    failure_taxonomy: str | None,
+) -> str:
+    if selected_candidate is not None:
+        return "unique"
+    if failure_taxonomy == "DESTINATION_OPTION_AMBIGUOUS":
+        return "ambiguous"
+    if failure_taxonomy in {"DESTINATION_OPTION_NOT_FOUND", "DESTINATION_SUGGESTION_NOT_READY"}:
+        return "not_found"
+    exact_matches = [
+        candidate
+        for candidate in candidates
+        if _normalize_destination_label(candidate.label) == _normalize_destination_label(requested_destination)
+    ]
+    if len(exact_matches) > 1:
+        return "ambiguous"
+    return "not_found"
+
+
+def _destination_suggestion_classes(
+    candidates: tuple[DestinationSuggestionCandidate, ...],
+    requested_destination: str,
+) -> list[dict[str, Any]]:
+    return [
+        {
+            "label": candidate.label,
+            "selector_class": _truncate_diagnostic_text(candidate.selector, limit=80),
+            "matches_requested": _destination_label_contains_requested(candidate.label, requested_destination),
+        }
+        for candidate in candidates
+    ]
+
+
+def _destination_commit_signal(
+    commitment_status: str,
+    selected_candidate: DestinationSuggestionCandidate | None,
+    commit_readback: str | None,
+    requested_destination: str,
+) -> str:
+    if commitment_status == "confirmed":
+        return "readback_matches_requested"
+    if selected_candidate is not None and _destination_readback_matches(commit_readback, requested_destination) is not True:
+        return "selection_without_matching_readback"
+    return "missing"
+
+
+def _destination_stability_forward_progress(sequence: Sequence[str | None]) -> bool:
+    return _destination_readback_transition_count(tuple(sequence)) > 0
+
+
+def _destination_readback_transition_count(sequence: tuple[str | None, ...]) -> int:
+    normalized = [_normalize_destination_label(value or "") for value in sequence]
+    return sum(1 for previous, current in pairwise(normalized) if previous != current)
+
+
+def _stable_destination_readback(sequence: tuple[str | None, ...], requested_destination: str) -> str | None:
+    if not sequence:
+        return None
+    last = sequence[-1]
+    if all(_destination_readback_matches(value, requested_destination) is True for value in sequence):
+        return last
+    if len(sequence) >= 2 and _normalize_destination_label(sequence[-1] or "") == _normalize_destination_label(sequence[-2] or ""):
+        return last
+    return last
+
+
+def _unexpected_destination_value(sequence: tuple[str | None, ...], requested_destination: str) -> str | None:
+    for value in sequence:
+        if value and _destination_readback_matches(value, requested_destination) is False:
+            return value
+    return None
+
+
+def _destination_stability_root_cause(
+    *,
+    requested_destination: str,
+    input_text_after_write: str | None,
+    candidates: tuple[DestinationSuggestionCandidate, ...],
+    selected_candidate: DestinationSuggestionCandidate | None,
+    selection_method: str,
+    commit_readback: str | None,
+    commitment_status: str,
+    failure_taxonomy: str | None,
+    readback_sequence: tuple[str | None, ...],
+    stable_readback: str | None,
+) -> str:
+    if _destination_readback_matches(input_text_after_write, requested_destination) is False:
+        return "DESTINATION_INPUT_WRITE_DRIFT"
+    if failure_taxonomy == "DESTINATION_CONTROL_NOT_READY":
+        return "DESTINATION_CONTROL_IDENTITY_DRIFT"
+    if failure_taxonomy == "DESTINATION_OPTION_AMBIGUOUS":
+        return "DESTINATION_OPTION_AMBIGUOUS"
+    if failure_taxonomy == "DESTINATION_OPTION_NOT_FOUND":
+        return "DESTINATION_OPTION_NOT_FOUND"
+    if failure_taxonomy == "DESTINATION_SUGGESTION_NOT_READY":
+        return "DESTINATION_SUGGESTION_STALE_OR_HISTORY"
+    if selected_candidate is not None and _destination_readback_matches(commit_readback, requested_destination) is False:
+        if _destination_label_contains_requested(selected_candidate.label, requested_destination):
+            return "DESTINATION_SELECTION_ACTION_MISAPPLIED"
+        return "DESTINATION_OPTION_MATCH_WRONG"
+    if (
+        len(readback_sequence) >= 2
+        and _destination_readback_matches(readback_sequence[0], requested_destination) is True
+        and _destination_readback_matches(readback_sequence[-1], requested_destination) is False
+    ):
+        return "DESTINATION_POST_COMMIT_RESET"
+    if commitment_status != "confirmed" and selection_method != "none":
+        return "DESTINATION_COMMIT_SIGNAL_MISSING"
+    if _destination_readback_matches(stable_readback, requested_destination) is not True:
+        return "DESTINATION_PRE_SUBMIT_STABILITY_GAP"
+    if candidates and selected_candidate is None:
+        return "MULTI_FACTOR_DESTINATION_GAP"
+    return "INCONCLUSIVE"
 
 
 def _verify_pre_submit_query_state(query_state: PublicSearchQueryState) -> PreSubmitQueryVerification:
