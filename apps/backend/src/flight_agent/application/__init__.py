@@ -1,5 +1,11 @@
 """Application layer for use-case orchestration."""
 
+from flight_agent.application.candidate_integration import (
+    ExecuteSingleProviderCandidateIntegration,
+    ProviderCanonicalEntry,
+    ProviderCanonicalEntryResult,
+    SingleProviderCandidateIntegrationResult,
+)
 from flight_agent.application.execution_guards import (
     ExecutionAuthorityRecord,
     GuardDecisionStatus,
@@ -243,6 +249,7 @@ __all__ = [
     "DeterministicPatchInterpreter",
     "ExecuteMinimalDecision",
     "ExecuteReadyRequirementSearch",
+    "ExecuteSingleProviderCandidateIntegration",
     "ExecutionAuthorityRecord",
     "ExplanationEvidenceBundle",
     "ExplanationGenerationSource",
@@ -301,6 +308,8 @@ __all__ = [
     "PendingPatchInterpretation",
     "PlanStageCapability",
     "PostCommitProcessingStatus",
+    "ProviderCanonicalEntry",
+    "ProviderCanonicalEntryResult",
     "PublicWorkflowOutcome",
     "PublicationAuthority",
     "PublicationDecision",
@@ -332,6 +341,7 @@ __all__ = [
     "SemanticResolverParserHybridInterpreter",
     "SemanticResolverPatchHybridInterpreter",
     "SemanticTarget",
+    "SingleProviderCandidateIntegrationResult",
     "SnapshotAssemblyInput",
     "SnapshotAssemblyIssue",
     "SnapshotAssemblyOutcome",
