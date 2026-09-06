@@ -14,7 +14,7 @@ import time
 from collections.abc import Sequence
 from contextlib import suppress
 from dataclasses import dataclass, field
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from enum import Enum
 from html.parser import HTMLParser
 from itertools import pairwise
@@ -28,6 +28,8 @@ FLIGGY_BROWSER_PROBE_VERSION = "m9-bp5-u1-fliggy-browser-probe-v0.1"
 FLIGGY_PROVIDER_ID = "FLIGGY"
 FLIGGY_ACQUISITION_MODE = "BROWSER"
 _FLIGGY_FLIGHT_ENTRY_URL = "https://www.fliggy.com/?tab=flight"
+_FLIGGY_DEFAULT_ORIGIN_TEXT = "北京"
+_FLIGGY_DEFAULT_DESTINATION_TEXT = "杭州"
 
 _SENSITIVE_KEY_FRAGMENTS = (
     "authorization",
@@ -128,6 +130,14 @@ class FliggyPageIdentity(str, Enum):
     ACCESS_CHALLENGE = "ACCESS_CHALLENGE"
     LOGIN_REQUIRED = "LOGIN_REQUIRED"
     UNKNOWN = "UNKNOWN"
+
+
+class PublicQueryClassification(str, Enum):
+    REQUESTED_QUERY = "REQUESTED_QUERY"
+    DEFAULT_QUERY = "DEFAULT_QUERY"
+    STALE_QUERY = "STALE_QUERY"
+    PARTIAL_QUERY = "PARTIAL_QUERY"
+    UNKNOWN_QUERY = "UNKNOWN_QUERY"
 
 
 class DomTraversalAssessment(str, Enum):
@@ -282,6 +292,7 @@ class ResultContextCandidate:
             "url_class": _url_class(self.sanitized_url),
             "result_like_surface": self.search_plan_evidence.get("result_surface_present") is True,
             "route_match": self.search_plan_evidence.get("route_match"),
+            "observed_route_text": self.search_plan_evidence.get("observed_route_text"),
             "date_match": self.search_plan_evidence.get("date_match"),
             "observed_date_text": self.search_plan_evidence.get("observed_date_text"),
             "observed_date_source": self.search_plan_evidence.get("observed_date_source"),
@@ -744,6 +755,8 @@ def summarize_search_plan_evidence(*, title: str, html: str, probe_input: ProbeI
         or _contains_any(text, ("航班查询", "特价机票", "最低价格", "机票价格", "起飞", "到达", "经济舱", "暂无航班"))
         or _contains_any(urlsplit(url).path, ("flight_search_result", "trip_flight_search"))
     )
+    observed_routes = _observed_route_pairs(text)
+    observed_route = observed_routes[0] if observed_routes else None
     route_conflict = _route_conflicts_with_query(text, probe_input)
     date_conflict = _date_conflicts_with_query(text, probe_input)
     origin_match = probe_input.origin_text in text or compact_route in text
@@ -754,6 +767,9 @@ def summarize_search_plan_evidence(*, title: str, html: str, probe_input: ProbeI
     return {
         "origin": origin_match,
         "destination": destination_match,
+        "observed_route_origin": observed_route[0] if observed_route is not None else None,
+        "observed_route_destination": observed_route[1] if observed_route is not None else None,
+        "observed_route_text": f"{observed_route[0]}到{observed_route[1]}" if observed_route is not None else None,
         "departure_date": date_match,
         "result_surface": result_surface,
         "explicit_empty": detector_state["explicit_empty"] is True,
@@ -904,8 +920,12 @@ def _truncate_diagnostic_text(value: str, *, limit: int = 48) -> str:
 
 def _route_conflicts_with_query(text: str, probe_input: ProbeInput) -> bool:
     expected_route = f"{probe_input.origin_text}到{probe_input.destination_text}"
-    observed_routes = set(re.findall(r"([\u4e00-\u9fff]{2,8}?)到([\u4e00-\u9fff]{2,8}?)(?:机票|航班|特价|预订|查询|$)", text))
+    observed_routes = set(_observed_route_pairs(text))
     return any(f"{origin}到{destination}" != expected_route for origin, destination in observed_routes)
+
+
+def _observed_route_pairs(text: str) -> tuple[tuple[str, str], ...]:
+    return tuple(re.findall(r"([\u4e00-\u9fff]{2,8}?)到([\u4e00-\u9fff]{2,8}?)(?:机票|航班|特价|预订|查询|$)", text))
 
 
 def _date_conflicts_with_query(text: str, probe_input: ProbeInput) -> bool:
@@ -1754,6 +1774,7 @@ async def run_fliggy_browser_probe(probe_input: ProbeInput) -> ProbeRunResult:
     recorder = _StageRecorder(started)
     diagnostics: dict[str, Any] = {
         "read_only": True,
+        "acquired_at": acquired_at.isoformat(),
         "clicked": False,
         "retries": 0,
         "headless": probe_input.headless,
@@ -3092,6 +3113,7 @@ def _build_post_submit_query_state_diagnostics(diagnostics: dict[str, Any], hand
     mismatch_dimension = _post_submit_mismatch_dimension(q3_nav_state, q4_result_state, q5_result_context)
     stale_source = _stale_destination_taxonomy_source(destination_commitment, diagnostics)
     diag_u6_h0_h8 = _diag_u6_h0_h8(diagnostics, handoff_diagnostics)
+    diag_u7_c0_c8 = _diag_u7_c0_c8(diagnostics, handoff_diagnostics)
     return {
         "q0_requested": _q0_requested_query(pre_submit_state),
         "q1_pre_submit": _q1_pre_submit_query(pre_submit_state, pre_submit_verification),
@@ -3111,6 +3133,8 @@ def _build_post_submit_query_state_diagnostics(diagnostics: dict[str, Any], hand
         "diag_u4_p0_p7": _diag_u4_p0_p7(diagnostics, handoff_diagnostics),
         "diag_u6_h0_h8": diag_u6_h0_h8,
         "diag_u6_root_cause_class": _diag_u6_root_cause_class(diag_u6_h0_h8),
+        "diag_u7_c0_c8": diag_u7_c0_c8,
+        "diag_u7_root_cause_class": _diag_u7_root_cause_class(diag_u7_c0_c8),
     }
 
 
@@ -3376,6 +3400,159 @@ def _q5_result_context(handoff_diagnostics: dict[str, Any]) -> dict[str, Any]:
         "selection_reason": handoff_diagnostics.get("selection_reason"),
         "mismatch_dimension": handoff_diagnostics.get("mismatch_dimension"),
     }
+
+
+def _diag_u7_c0_c8(diagnostics: dict[str, Any], handoff_diagnostics: dict[str, Any]) -> dict[str, Any]:
+    run_date = _coerce_run_local_date(diagnostics.get("acquired_at")) or datetime.now(UTC).date()
+    default_signature = _fliggy_default_query_signature(run_date)
+    pre_submit_state = diagnostics.get("pre_submit_query_state")
+    pre_submit_verification = diagnostics.get("pre_submit_query_verification")
+    candidates = tuple(handoff_diagnostics.get("candidate_pages") or ())
+    samples = tuple(handoff_diagnostics.get("result_state_samples") or ())
+    earliest_state = samples[0] if samples else None
+    settled_state = _public_query_classification_payload(
+        handoff_diagnostics,
+        requested_query=_q0_requested_query(pre_submit_state),
+        default_signature=default_signature,
+    )
+    return {
+        "c0_requested_query": {
+            "checkpoint": "C0_REQUESTED_QUERY",
+            "query": _q0_requested_query(pre_submit_state),
+        },
+        "c1_visible_pre_q1_state": {
+            "checkpoint": "C1_VISIBLE_PRE_Q1_STATE",
+            **_q1_pre_submit_query(pre_submit_state, pre_submit_verification),
+        },
+        "c2_public_commit_state": {
+            "checkpoint": "C2_PUBLIC_COMMIT_STATE",
+            "classification": PublicQueryClassification.UNKNOWN_QUERY.value,
+            "evidence": "public_commit_state_not_directly_exposed",
+        },
+        "c3_immediate_pre_click_state": {
+            "checkpoint": "C3_IMMEDIATE_PRE_CLICK_STATE",
+            "page_count_before_submit": handoff_diagnostics.get("page_count_before_submit"),
+            "page_count_after_input_before_submit": handoff_diagnostics.get("page_count_after_input_before_submit"),
+            "pre_submit_context_count_changed": handoff_diagnostics.get("pre_submit_context_count_changed"),
+        },
+        "c4_public_click": {
+            "checkpoint": "C4_PUBLIC_CLICK",
+            "submit_allowed": diagnostics.get("submit_allowed"),
+            "submit_executed": diagnostics.get("submit_executed"),
+            "public_submit_button_clicked_once": diagnostics.get("public_submit_button_clicked_once"),
+            "retries": diagnostics.get("retries", 0),
+        },
+        "c5_earliest_post_click_context": {
+            "checkpoint": "C5_EARLIEST_POST_CLICK_CONTEXT",
+            "state": earliest_state,
+            "classification": _public_query_classification_payload(
+                earliest_state if isinstance(earliest_state, dict) else {},
+                requested_query=_q0_requested_query(pre_submit_state),
+                default_signature=default_signature,
+            ),
+        },
+        "c6_context_lifecycle_transitions": {
+            "checkpoint": "C6_CONTEXT_LIFECYCLE_TRANSITIONS",
+            "context_candidates": candidates,
+            "samples": list(samples),
+        },
+        "c7_settled_result_classification": {
+            "checkpoint": "C7_SETTLED_RESULT_CLASSIFICATION",
+            "classification": settled_state,
+        },
+        "c8_strict_q5": {
+            "checkpoint": "C8_STRICT_Q5",
+            **_q5_result_context(handoff_diagnostics),
+        },
+        "provider_default_signature": default_signature,
+    }
+
+
+def _diag_u7_root_cause_class(diag_u7: dict[str, Any]) -> str:
+    c1 = diag_u7["c1_visible_pre_q1_state"]
+    c4 = diag_u7["c4_public_click"]
+    c7 = diag_u7["c7_settled_result_classification"]["classification"]
+    c8 = diag_u7["c8_strict_q5"]
+    if c1.get("verified") is not True:
+        return "VISIBLE_Q1_NOT_VERIFIED"
+    if c4.get("submit_executed") is not True:
+        return "PUBLIC_SUBMIT_NOT_EXECUTED"
+    if c7.get("classification") == PublicQueryClassification.DEFAULT_QUERY.value and c8.get("context_match") is not True:
+        return "DEFAULT_QUERY_FALLBACK_LOCALIZED"
+    if c7.get("classification") == PublicQueryClassification.STALE_QUERY.value and c8.get("context_match") is not True:
+        return "RESULT_CONTEXT_STALE_STATE_LOCALIZED"
+    if c7.get("classification") == PublicQueryClassification.PARTIAL_QUERY.value:
+        return "PARTIAL_PUBLIC_QUERY_COMMIT_LOCALIZED"
+    if c7.get("classification") == PublicQueryClassification.REQUESTED_QUERY.value and c8.get("context_match") is True:
+        return "REQUESTED_QUERY_REACHED_RESULT_CONTEXT"
+    return "DIAGNOSTIC_INSUFFICIENT"
+
+
+def _public_query_classification_payload(
+    evidence: dict[str, Any],
+    *,
+    requested_query: dict[str, Any],
+    default_signature: dict[str, str],
+) -> dict[str, Any]:
+    classification = _classify_public_query_state(evidence, requested_query=requested_query, default_signature=default_signature)
+    return {
+        "classification": classification.value,
+        "observed_route_origin": evidence.get("observed_route_origin"),
+        "observed_route_destination": evidence.get("observed_route_destination"),
+        "observed_route_text": evidence.get("observed_route_text"),
+        "normalized_observed_date": evidence.get("normalized_observed_date"),
+        "route_match": evidence.get("route_match"),
+        "date_match": evidence.get("date_match"),
+    }
+
+
+def _classify_public_query_state(
+    evidence: dict[str, Any],
+    *,
+    requested_query: dict[str, Any],
+    default_signature: dict[str, str],
+) -> PublicQueryClassification:
+    requested_route = (
+        evidence.get("route_match") is True
+        or (
+            evidence.get("observed_route_origin") == requested_query.get("origin")
+            and evidence.get("observed_route_destination") == requested_query.get("destination")
+        )
+    )
+    requested_date = evidence.get("date_match") is True or evidence.get("normalized_observed_date") == requested_query.get("departure_date")
+    default_route = (
+        evidence.get("observed_route_origin") == default_signature["origin"]
+        and evidence.get("observed_route_destination") == default_signature["destination"]
+    )
+    default_date = evidence.get("normalized_observed_date") == default_signature["departure_date"]
+    if requested_route and requested_date:
+        return PublicQueryClassification.REQUESTED_QUERY
+    if default_route and default_date:
+        return PublicQueryClassification.DEFAULT_QUERY
+    if requested_route or requested_date or default_route or default_date:
+        return PublicQueryClassification.PARTIAL_QUERY
+    has_route = isinstance(evidence.get("observed_route_origin"), str) and isinstance(evidence.get("observed_route_destination"), str)
+    has_date = isinstance(evidence.get("normalized_observed_date"), str)
+    if has_route or has_date:
+        return PublicQueryClassification.STALE_QUERY
+    return PublicQueryClassification.UNKNOWN_QUERY
+
+
+def _fliggy_default_query_signature(run_date: date) -> dict[str, str]:
+    return {
+        "origin": _FLIGGY_DEFAULT_ORIGIN_TEXT,
+        "destination": _FLIGGY_DEFAULT_DESTINATION_TEXT,
+        "departure_date": (run_date + timedelta(days=1)).isoformat(),
+    }
+
+
+def _coerce_run_local_date(value: Any) -> date | None:
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, str):
+        with suppress(ValueError):
+            return datetime.fromisoformat(value).date()
+    return None
 
 
 def _extract_public_route_date_params(url: str) -> dict[str, str | None]:
@@ -3749,6 +3926,9 @@ def _result_state_sample(
             }
         ),
         "route_match": evidence.get("route_match", "insufficient"),
+        "observed_route_origin": evidence.get("observed_route_origin"),
+        "observed_route_destination": evidence.get("observed_route_destination"),
+        "observed_route_text": evidence.get("observed_route_text"),
         "date_match": evidence.get("date_match", "insufficient"),
         "observed_date_text": evidence.get("observed_date_text"),
         "normalized_observed_date": evidence.get("normalized_observed_date"),
@@ -3770,6 +3950,7 @@ def _diag_context_inventory(candidates: tuple[ResultContextCandidate, ...]) -> l
             "document_ready_state": candidate.document_ready_state,
             "result_like_surface": candidate.search_plan_evidence.get("result_surface_present") is True,
             "route_match": candidate.search_plan_evidence.get("route_match"),
+            "observed_route_text": candidate.search_plan_evidence.get("observed_route_text"),
             "date_match": candidate.search_plan_evidence.get("date_match"),
             "observed_date_text": candidate.search_plan_evidence.get("observed_date_text"),
             "observed_date_source": candidate.search_plan_evidence.get("observed_date_source"),

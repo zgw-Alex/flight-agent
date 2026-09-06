@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import subprocess
 import time
 from datetime import UTC, date, datetime
 from pathlib import Path
@@ -20,12 +21,14 @@ from flight_agent.adapters.flight_providers.fliggy.browser_probe import (
     ProbeRunResult,
     ProviderMarketCompleteness,
     PublicSearchQueryState,
+    PublicQueryClassification,
     ResultContextCandidate,
     SearchFormReadiness,
     StageDiagnostic,
     _annotate_post_submit_query_propagation,
     _browser_failure_taxonomy,
     _build_post_submit_query_state_diagnostics,
+    _classify_public_query_state,
     _combine_destination_extension_reasons,
     _destination_commitment_result,
     _destination_commitment_status,
@@ -39,7 +42,9 @@ from flight_agent.adapters.flight_providers.fliggy.browser_probe import (
     _diag_u4_root_cause,
     _diag_u6_h0_h8,
     _diag_u6_root_cause_class,
+    _diag_u7_root_cause_class,
     _finalize_diagnostics,
+    _fliggy_default_query_signature,
     _marker_transition_count,
     _resolve_destination_candidate,
     _result_state_extension_reason,
@@ -2581,6 +2586,217 @@ def test_ru7_20_scope_remains_fliggy_provider_local_without_shared_changes() -> 
     assert "HAR" not in source
 
 
+def test_du7_01_requested_query_classifies_when_committed_and_result_matches() -> None:
+    evidence = _classification_evidence(route=("北京", "上海"), observed_date="2026-09-14", route_match=True, date_match=True)
+
+    assert _classify_public_query_state(evidence, requested_query=_requested_query(), default_signature=_default_signature()) is PublicQueryClassification.REQUESTED_QUERY
+
+
+def test_du7_02_default_query_classifies_beijing_hangzhou_run_local_tomorrow() -> None:
+    evidence = _classification_evidence(route=("北京", "杭州"), observed_date="2026-09-07", route_match=False, date_match=False)
+
+    assert _classify_public_query_state(evidence, requested_query=_requested_query(), default_signature=_default_signature()) is PublicQueryClassification.DEFAULT_QUERY
+
+
+def test_du7_03_historical_non_default_wrong_query_is_stale_not_default() -> None:
+    evidence = _classification_evidence(route=("广州", "深圳"), observed_date="2026-01-08", route_match=False, date_match=False)
+
+    assert _classify_public_query_state(evidence, requested_query=_requested_query(), default_signature=_default_signature()) is PublicQueryClassification.STALE_QUERY
+
+
+def test_du7_04_requested_route_default_date_is_partial_and_q5_fail() -> None:
+    evidence = _classification_evidence(route=("北京", "上海"), observed_date="2026-09-07", route_match=True, date_match=False)
+    handoff = _post_submit_handoff(route_match=True, date_match=False, context_match=False)
+
+    assert _classify_public_query_state(evidence, requested_query=_requested_query(), default_signature=_default_signature()) is PublicQueryClassification.PARTIAL_QUERY
+    assert _build_post_submit_query_state_diagnostics(_post_submit_base_diagnostics(), handoff)["q5_result_context"]["context_match"] is False
+
+
+def test_du7_05_insufficient_public_query_evidence_is_unknown() -> None:
+    assert _classify_public_query_state({}, requested_query=_requested_query(), default_signature=_default_signature()) is PublicQueryClassification.UNKNOWN_QUERY
+
+
+def test_du7_06_default_date_is_run_local_tomorrow_not_hard_coded() -> None:
+    assert _fliggy_default_query_signature(date(2026, 9, 6))["departure_date"] == "2026-09-07"
+    assert _fliggy_default_query_signature(date(2026, 9, 8))["departure_date"] == "2026-09-09"
+
+
+def test_du7_07_actual_public_click_remains_exactly_once(monkeypatch) -> None:
+    class FakeButton:
+        def __init__(self, page: FakePage) -> None:
+            self.page = page
+
+        def nth(self, index: int) -> FakeButton:
+            return self
+
+        async def click(self) -> None:
+            self.page.clicks += 1
+
+    class FakePage:
+        def __init__(self) -> None:
+            self.clicks = 0
+
+        def locator(self, selector: str) -> FakeButton:
+            return FakeButton(self)
+
+    class FakeContext:
+        pages = [object()]
+
+    async def fake_write(page: FakePage, probe_input: ProbeInput) -> dict[str, object]:
+        return {"destination_commitment": {"commitment_status": "confirmed"}}
+
+    async def fake_capture(page: FakePage, probe_input: ProbeInput) -> PublicSearchQueryState:
+        return _query_state()
+
+    page = FakePage()
+    monkeypatch.setattr(fliggy_browser_probe, "_write_public_flight_search_fields", fake_write)
+    monkeypatch.setattr(fliggy_browser_probe, "_capture_public_search_query_state", fake_capture)
+
+    allowed, diagnostics = asyncio.run(_submit_verified_public_flight_search(FakeContext(), page, ProbeInput("北京", "上海", date(2026, 9, 14))))
+
+    assert allowed is True
+    assert page.clicks == 1
+    assert diagnostics["public_submit_button_clicked_once"] is True
+
+
+def test_du7_08_context_created_during_input_does_not_count_as_executed_submit(monkeypatch) -> None:
+    class FakeButton:
+        def nth(self, index: int) -> FakeButton:
+            return self
+
+        async def click(self) -> None:
+            return None
+
+    class FakePage:
+        def locator(self, selector: str) -> FakeButton:
+            return FakeButton()
+
+    class FakeContext:
+        def __init__(self) -> None:
+            self.pages = [object()]
+
+    async def fake_write(page: FakePage, probe_input: ProbeInput) -> dict[str, object]:
+        context.pages.append(object())
+        return {"destination_commitment": {"commitment_status": "confirmed"}}
+
+    async def fake_capture(page: FakePage, probe_input: ProbeInput) -> PublicSearchQueryState:
+        return _query_state(form_date="2026-01-08")
+
+    context = FakeContext()
+    monkeypatch.setattr(fliggy_browser_probe, "_write_public_flight_search_fields", fake_write)
+    monkeypatch.setattr(fliggy_browser_probe, "_capture_public_search_query_state", fake_capture)
+
+    allowed, diagnostics = asyncio.run(_submit_verified_public_flight_search(context, FakePage(), ProbeInput("北京", "上海", date(2026, 9, 14))))
+
+    assert allowed is False
+    assert diagnostics["pre_submit_context_count_changed"] is True
+    assert diagnostics["submit_executed"] is False
+
+
+def test_du7_09_c0_c8_diagnostics_preserve_existing_p_and_h_layers() -> None:
+    payload = _build_post_submit_query_state_diagnostics(_post_submit_base_diagnostics(), _post_submit_handoff())
+
+    assert "diag_u4_p0_p7" in payload
+    assert "diag_u6_h0_h8" in payload
+    assert set(payload["diag_u7_c0_c8"]) >= {
+        "c0_requested_query",
+        "c1_visible_pre_q1_state",
+        "c2_public_commit_state",
+        "c3_immediate_pre_click_state",
+        "c4_public_click",
+        "c5_earliest_post_click_context",
+        "c6_context_lifecycle_transitions",
+        "c7_settled_result_classification",
+        "c8_strict_q5",
+    }
+
+
+def test_du7_10_strict_q1_and_q5_remain_unchanged() -> None:
+    q1 = _verify_pre_submit_query_state(_query_state())
+    q5 = _build_post_submit_query_state_diagnostics(_post_submit_base_diagnostics(), _post_submit_handoff(date_match=False, context_match=False))
+
+    assert q1.submit_allowed is True
+    assert q5["q5_result_context"]["context_match"] is False
+
+
+def test_du7_11_requested_identity_is_comparison_only_not_injected() -> None:
+    source = _fliggy_source_text()
+
+    assert "_classify_public_query_state" in source
+    assert "write_verified_source_query" not in source
+    assert "provider-state injection" not in source
+
+
+def test_du7_12_default_query_is_negative_evidence_and_cannot_satisfy_q5() -> None:
+    handoff = _post_submit_handoff(route_match=False, date_match=False, context_match=False)
+    handoff.update(_classification_evidence(route=("北京", "杭州"), observed_date="2026-09-07", route_match=False, date_match=False))
+    diagnostics = _post_submit_base_diagnostics()
+    diagnostics["acquired_at"] = "2026-09-06T08:00:00+00:00"
+
+    payload = _build_post_submit_query_state_diagnostics(diagnostics, handoff)
+
+    assert payload["diag_u7_c0_c8"]["c7_settled_result_classification"]["classification"]["classification"] == "DEFAULT_QUERY"
+    assert payload["q5_result_context"]["context_match"] is False
+
+
+def test_du7_13_context_replacement_remains_deterministic_no_newest_page_guess() -> None:
+    first = _result_context_candidate(
+        index=1,
+        url="https://sjipiao.fliggy.com/homeow/trip_flight_search.htm",
+        title="北京到上海机票预订",
+        identity=FliggyPageIdentity.FLIGHT_RESULT_CANDIDATE,
+        is_current=False,
+    )
+    second = _result_context_candidate(
+        index=2,
+        url="https://sjipiao.fliggy.com/alternate/trip_flight_search.htm",
+        title="北京到上海航班查询预订",
+        identity=FliggyPageIdentity.FLIGHT_RESULT_CANDIDATE,
+        is_current=False,
+    )
+
+    assert choose_result_context_candidate((first, second)) is None
+
+
+def test_du7_14_overlay_not_root_cause_without_evidence() -> None:
+    payload = _diag_u7_root_cause_class(_build_post_submit_query_state_diagnostics(_post_submit_base_diagnostics(), _post_submit_handoff())["diag_u7_c0_c8"])
+
+    assert payload != "MODAL_BLOCKS_QUERY_INITIALIZATION"
+
+
+def test_du7_15_no_forbidden_provider_state_manipulation() -> None:
+    source = _fliggy_source_text()
+
+    assert "localStorage" not in source
+    assert "sessionStorage" not in source
+    assert "document.cookie" not in source
+    assert "route(" not in source
+
+
+def test_du7_16_sanitization_redacts_sensitive_diagnostics() -> None:
+    payload = sanitize_probe_payload({"cookie": "secret", "authorization": "token", "safe": "visible"})
+
+    assert payload["cookie"] == "[REDACTED]"
+    assert payload["authorization"] == "[REDACTED]"
+    assert payload["safe"] == "visible"
+
+
+def test_du7_17_l1_l2_and_shared_contracts_untouched_by_diag_u7_scope() -> None:
+    changed_files = {path.replace("\\", "/") for path in _tracked_diff_names()}
+
+    assert "apps/backend/src/flight_agent/adapters/flight_providers/fliggy/mapper.py" not in changed_files
+    assert "apps/backend/src/flight_agent/adapters/flight_providers/fliggy/level2_mapper.py" not in changed_files
+    assert not any(path.startswith("apps/backend/src/flight_agent/domain/") for path in changed_files)
+
+
+def test_du7_18_live_capture_output_path_is_cwd_independent() -> None:
+    script = (REPO_ROOT / "scripts" / "ci" / "fliggy-browser-probe-smoke.ps1").read_text(encoding="utf-8")
+
+    assert "$OutputPath" in script
+    assert "GetUnresolvedProviderPathFromPSPath" in script
+    assert "Tee-Object -FilePath $ResolvedOutputPath" in script
+
+
 def test_hd6_01_h1_source_public_state_matches_q1_at_submit_boundary() -> None:
     payload = _diag_u6_h0_h8(_post_submit_base_diagnostics(), _post_submit_handoff())
 
@@ -3253,6 +3469,48 @@ def _query_state(
         form_destination_readback=form_destination,
         form_date_readback=form_date,
     )
+
+
+def _requested_query() -> dict[str, str]:
+    return {"origin": "北京", "destination": "上海", "departure_date": "2026-09-14"}
+
+
+def _default_signature() -> dict[str, str]:
+    return {"origin": "北京", "destination": "杭州", "departure_date": "2026-09-07"}
+
+
+def _classification_evidence(
+    *,
+    route: tuple[str, str] | None,
+    observed_date: str | None,
+    route_match: bool | str = "insufficient",
+    date_match: bool | str = "insufficient",
+) -> dict[str, object]:
+    return {
+        "observed_route_origin": route[0] if route is not None else None,
+        "observed_route_destination": route[1] if route is not None else None,
+        "observed_route_text": f"{route[0]}到{route[1]}" if route is not None else None,
+        "normalized_observed_date": observed_date,
+        "route_match": route_match,
+        "date_match": date_match,
+    }
+
+
+def _fliggy_source_text() -> str:
+    return (
+        REPO_ROOT / "apps" / "backend" / "src" / "flight_agent" / "adapters" / "flight_providers" / "fliggy" / "browser_probe.py"
+    ).read_text(encoding="utf-8")
+
+
+def _tracked_diff_names() -> tuple[str, ...]:
+    result = subprocess.run(
+        ["git", "diff", "--name-only"],
+        cwd=REPO_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return tuple(line.strip() for line in result.stdout.splitlines() if line.strip())
 
 
 def _destination_candidate(label: str, *, selector: str = ".next-overlay-wrapper li", index: int = 0) -> DestinationSuggestionCandidate:

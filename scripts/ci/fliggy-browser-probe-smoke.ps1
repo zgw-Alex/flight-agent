@@ -3,7 +3,8 @@ param(
     [string] $Destination = "上海",
     [string] $DepartureDate = "",
     [switch] $Headed,
-    [double] $DeadlineSeconds = 30
+    [double] $DeadlineSeconds = 30,
+    [string] $OutputPath = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -13,6 +14,15 @@ $BackendDir = Join-Path $RepoRoot "apps\backend"
 
 if ([string]::IsNullOrWhiteSpace($DepartureDate)) {
     $DepartureDate = (Get-Date).AddDays(14).ToString("yyyy-MM-dd")
+}
+
+$ResolvedOutputPath = $null
+if (-not [string]::IsNullOrWhiteSpace($OutputPath)) {
+    $OutputParent = Split-Path -Parent $OutputPath
+    if (-not [string]::IsNullOrWhiteSpace($OutputParent)) {
+        New-Item -ItemType Directory -Force -Path $OutputParent | Out-Null
+    }
+    $ResolvedOutputPath = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($OutputPath)
 }
 
 Push-Location $BackendDir
@@ -29,7 +39,12 @@ try {
     if ($Headed) {
         $Args += "--headed"
     }
-    uv run python @Args
+    if ($null -eq $ResolvedOutputPath) {
+        uv run python @Args
+    }
+    else {
+        uv run python @Args *>&1 | Tee-Object -FilePath $ResolvedOutputPath
+    }
     $ExitCode = $LASTEXITCODE
 }
 finally {
