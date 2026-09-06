@@ -4,7 +4,11 @@ param(
     [string] $DepartureDate = "",
     [switch] $Headed,
     [double] $DeadlineSeconds = 30,
-    [string] $OutputPath = ""
+    [string] $OutputPath = "",
+    [ValidateRange(0, 6)]
+    [int] $PlannedObservation = 0,
+    [ValidateRange(0, 300)]
+    [double] $HeadedObservationPauseSeconds = 0
 )
 
 $ErrorActionPreference = "Stop"
@@ -14,6 +18,17 @@ $BackendDir = Join-Path $RepoRoot "apps\backend"
 
 if ([string]::IsNullOrWhiteSpace($DepartureDate)) {
     $DepartureDate = (Get-Date).AddDays(14).ToString("yyyy-MM-dd")
+}
+
+$Utf8 = [System.Text.UTF8Encoding]::new($false)
+foreach ($Value in @($Origin, $Destination, $DepartureDate)) {
+    $RoundTrip = $Utf8.GetString($Utf8.GetBytes($Value))
+    if ($RoundTrip -cne $Value) {
+        throw "Unicode-safe preflight failed before provider access."
+    }
+}
+if ($PlannedObservation -gt 0 -and [string]::IsNullOrWhiteSpace($OutputPath)) {
+    throw "A planned diagnostic observation requires -OutputPath."
 }
 
 $ResolvedOutputPath = $null
@@ -38,6 +53,15 @@ try {
     )
     if ($Headed) {
         $Args += "--headed"
+    }
+    if ($PlannedObservation -gt 0) {
+        $Args += @("--planned-observation", "$PlannedObservation")
+    }
+    if ($null -ne $ResolvedOutputPath) {
+        $Args += @("--evidence-output-path", $ResolvedOutputPath)
+    }
+    if ($HeadedObservationPauseSeconds -gt 0) {
+        $Args += @("--headed-observation-pause-seconds", "$HeadedObservationPauseSeconds")
     }
     if ($null -eq $ResolvedOutputPath) {
         uv run python @Args

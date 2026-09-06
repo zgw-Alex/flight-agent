@@ -5,6 +5,9 @@ import subprocess
 import time
 from datetime import UTC, date, datetime
 from pathlib import Path
+from typing import ClassVar
+
+import pytest
 
 from flight_agent.adapters.flight_providers.fliggy import browser_probe as fliggy_browser_probe
 from flight_agent.adapters.flight_providers.fliggy.browser_probe import (
@@ -14,20 +17,24 @@ from flight_agent.adapters.flight_providers.fliggy.browser_probe import (
     BrowserProbeStage,
     ControlReadiness,
     DestinationSuggestionCandidate,
+    DestinationSuggestionSnapshot,
+    DestinationSuggestionSurfaceClassification,
     DomTraversalAssessment,
     ExperimentDiagnosis,
     FliggyPageIdentity,
     ProbeInput,
     ProbeRunResult,
     ProviderMarketCompleteness,
-    PublicSearchQueryState,
     PublicQueryClassification,
+    PublicSearchQueryState,
     ResultContextCandidate,
     SearchFormReadiness,
     StageDiagnostic,
+    _annotate_destination_s8,
     _annotate_post_submit_query_propagation,
     _browser_failure_taxonomy,
     _build_post_submit_query_state_diagnostics,
+    _classify_destination_suggestion_surface,
     _classify_public_query_state,
     _combine_destination_extension_reasons,
     _destination_commitment_result,
@@ -37,6 +44,7 @@ from flight_agent.adapters.flight_providers.fliggy.browser_probe import (
     _destination_stability_diagnostics,
     _destination_stability_forward_progress,
     _destination_stability_root_cause,
+    _destination_suggestion_lifecycle_diagnostics,
     _diag_context_inventory,
     _diag_u4_p0_p7,
     _diag_u4_root_cause,
@@ -45,9 +53,10 @@ from flight_agent.adapters.flight_providers.fliggy.browser_probe import (
     _diag_u7_root_cause_class,
     _finalize_diagnostics,
     _fliggy_default_query_signature,
-    _public_date_commitment,
+    _live_observation_preflight,
     _marker_transition_count,
     _public_commit_state_classification,
+    _public_date_commitment,
     _resolve_destination_candidate,
     _result_state_extension_reason,
     _result_state_failure_taxonomy,
@@ -56,11 +65,12 @@ from flight_agent.adapters.flight_providers.fliggy.browser_probe import (
     _result_state_sample,
     _settled_state_reached,
     _stable_stale_or_default_result_state,
-    _submit_verified_public_flight_search,
     _StageRecorder,
+    _submit_verified_public_flight_search,
     _verify_pre_submit_query_state,
     assess_dom_coverage,
     choose_result_context_candidate,
+    classify_destination_suggestion_mode,
     classify_experiment_diagnosis,
     classify_fliggy_page_identity,
     classify_result_state,
@@ -2323,7 +2333,7 @@ def test_ru7_02_verified_public_submit_does_not_click_when_q1_fails(monkeypatch)
             return FakeButton(self)
 
     class FakeContext:
-        pages = [object()]
+        pages: ClassVar[list[object]] = [object()]
 
     async def fake_write(page: FakePage, probe_input: ProbeInput) -> dict[str, object]:
         return _confirmed_public_write_diagnostics()
@@ -2642,7 +2652,7 @@ def test_du7_07_actual_public_click_remains_exactly_once(monkeypatch) -> None:
             return FakeButton(self)
 
     class FakeContext:
-        pages = [object()]
+        pages: ClassVar[list[object]] = [object()]
 
     async def fake_write(page: FakePage, probe_input: ProbeInput) -> dict[str, object]:
         return _confirmed_public_write_diagnostics()
@@ -3352,6 +3362,249 @@ def test_hd6_18_final_diag_u6_output_is_sanitized() -> None:
 
     assert sanitized["diag_u6_h0_h8"]["h8_strict_identity"]["context_match"] is False
     assert "Cookie: a=b" not in str(sanitized)
+
+
+def test_di8_01_s0_s8_timestamps_order_and_labels_are_sanitized() -> None:
+    snapshots = (
+        DestinationSuggestionSnapshot(120, (DestinationSuggestionCandidate(".city", 0, "上海"),)),
+        DestinationSuggestionSnapshot(420, (DestinationSuggestionCandidate(".city", 0, "Cookie: a=b"),)),
+    )
+    payload = _destination_suggestion_lifecycle_diagnostics(
+        requested_destination="上海",
+        destination_control_ready=True,
+        typed_destination="上海",
+        focused_elapsed_ms=0,
+        typed_elapsed_ms=80,
+        snapshots=snapshots,
+        selected_candidate=None,
+        selection_method="none",
+        commit_readback="上海",
+        commitment_status="insufficient",
+        failure_taxonomy="DESTINATION_COMMIT_NOT_CONFIRMED",
+        d9_stable_readback="上海",
+        headed_pause_ms=0,
+        overlay_evidence=(),
+    )
+    sanitized = sanitize_probe_payload(payload)
+
+    assert [key.split("_", 1)[0] for key in payload if key.startswith("s")] == [f"s{i}" for i in range(9)]
+    assert [item["elapsed_ms"] for item in payload["s3_surface_observation"]["observations"]] == [120, 420]
+    assert "Cookie: a=b" not in str(sanitized)
+
+
+def test_di8_02_no_surface_is_classified() -> None:
+    assert _classify_destination_suggestion_surface(
+        requested_destination="上海",
+        snapshots=(DestinationSuggestionSnapshot(0, ()), DestinationSuggestionSnapshot(300, ())),
+        selected_candidate=None,
+        commitment_status="insufficient",
+    ) is DestinationSuggestionSurfaceClassification.NO_SURFACE
+
+
+def test_di8_03_delayed_surface_is_classified() -> None:
+    assert _classify_destination_suggestion_surface(
+        requested_destination="上海",
+        snapshots=(
+            DestinationSuggestionSnapshot(0, ()),
+            DestinationSuggestionSnapshot(300, (_destination_candidate("北京"),)),
+        ),
+        selected_candidate=None,
+        commitment_status="insufficient",
+    ) is DestinationSuggestionSurfaceClassification.SURFACE_DELAYED
+
+
+def test_di8_04_transient_surface_is_classified() -> None:
+    assert _classify_destination_suggestion_surface(
+        requested_destination="上海",
+        snapshots=(
+            DestinationSuggestionSnapshot(0, (_destination_candidate("北京"),)),
+            DestinationSuggestionSnapshot(300, ()),
+        ),
+        selected_candidate=None,
+        commitment_status="insufficient",
+    ) is DestinationSuggestionSurfaceClassification.SURFACE_TRANSIENT
+
+
+def test_di8_05_ready_surface_without_requested_match_is_classified() -> None:
+    assert _classify_destination_suggestion_surface(
+        requested_destination="上海",
+        snapshots=(DestinationSuggestionSnapshot(0, (_destination_candidate("北京"),)),),
+        selected_candidate=None,
+        commitment_status="insufficient",
+    ) is DestinationSuggestionSurfaceClassification.SURFACE_READY_NO_MATCH
+
+
+def test_di8_06_visible_requested_match_without_selectability_is_classified() -> None:
+    candidate = DestinationSuggestionCandidate(".city", 0, "上海", selectable=False)
+    assert _classify_destination_suggestion_surface(
+        requested_destination="上海",
+        snapshots=(DestinationSuggestionSnapshot(0, (candidate,)),),
+        selected_candidate=candidate,
+        commitment_status="insufficient",
+    ) is DestinationSuggestionSurfaceClassification.MATCH_VISIBLE_NOT_SELECTABLE
+
+
+def test_di8_07_legitimate_selection_opportunity_is_classified() -> None:
+    candidate = DestinationSuggestionCandidate(".city", 0, "上海", selectable=True)
+    assert _classify_destination_suggestion_surface(
+        requested_destination="上海",
+        snapshots=(DestinationSuggestionSnapshot(0, (candidate,)),),
+        selected_candidate=candidate,
+        commitment_status="insufficient",
+    ) is DestinationSuggestionSurfaceClassification.COMMITTABLE_MATCH_FOUND
+
+
+def test_di8_08_existing_valid_commit_evidence_is_classified() -> None:
+    candidate = DestinationSuggestionCandidate(".city", 0, "上海", selectable=True)
+    assert _classify_destination_suggestion_surface(
+        requested_destination="上海",
+        snapshots=(DestinationSuggestionSnapshot(0, (candidate,)),),
+        selected_candidate=candidate,
+        commitment_status="confirmed",
+    ) is DestinationSuggestionSurfaceClassification.COMMIT_EVIDENCE_OBTAINED
+
+
+def test_di8_09_headed_headless_difference_is_mode_dependent() -> None:
+    def result(headless: bool, classification: str) -> dict[str, object]:
+        return {
+            "diagnostics": {
+                "headless": headless,
+                "destination_commitment": {
+                    "destination_suggestion_diagnostics": {"classification": classification}
+                },
+            }
+        }
+
+    assert classify_destination_suggestion_mode(
+        (
+            result(False, "COMMITTABLE_MATCH_FOUND"),
+            result(True, "NO_SURFACE"),
+        )
+    ) is DestinationSuggestionSurfaceClassification.MODE_DEPENDENT_SURFACE
+
+
+def test_di8_10_missing_observations_remain_unknown() -> None:
+    assert _classify_destination_suggestion_surface(
+        requested_destination="上海",
+        snapshots=(),
+        selected_candidate=None,
+        commitment_status="insufficient",
+    ) is DestinationSuggestionSurfaceClassification.UNKNOWN_SURFACE
+
+
+def test_di8_11_d9_q1_and_u8_commit_gate_are_preserved() -> None:
+    commitment = _destination_commitment_result(
+        requested_destination="上海",
+        destination_control_ready=True,
+        typed_destination="上海",
+        candidates=(),
+        suggestion_surface_present=False,
+        selected_candidate=None,
+        selection_method="none",
+        commit_readback="上海",
+        failure_taxonomy="DESTINATION_SUGGESTION_NOT_READY",
+        readback_sequence=("上海", "上海"),
+        suggestion_snapshots=(DestinationSuggestionSnapshot(0, ()),),
+    ).to_dict()
+    diagnostics = {
+        "destination_commitment": commitment,
+        "date_commitment": {"commitment_status": "confirmed"},
+        "submit_allowed": False,
+        "submit_executed": False,
+    }
+    _annotate_destination_s8(diagnostics, _verify_pre_submit_query_state(_query_state()))
+    s8 = commitment["destination_suggestion_diagnostics"]["s8_pre_submit_gate"]
+
+    assert commitment["destination_stability_diagnostics"]["d9_pre_submit_stability"]["stable_readback"] == "上海"
+    assert s8["q1_route_match"] is True
+    assert s8["q1_date_match"] is True
+    assert s8["destination_commit_gate"] is False
+
+
+def test_di8_12_submit_stays_blocked_without_destination_commit_evidence(monkeypatch) -> None:
+    async def fake_write(page: object, probe_input: ProbeInput) -> dict[str, object]:
+        return {
+            "destination_commitment": {"commitment_status": "insufficient"},
+            "date_commitment": {"commitment_status": "confirmed"},
+        }
+
+    async def fake_capture(page: object, probe_input: ProbeInput) -> PublicSearchQueryState:
+        return _query_state()
+
+    monkeypatch.setattr(fliggy_browser_probe, "_write_public_flight_search_fields", fake_write)
+    monkeypatch.setattr(fliggy_browser_probe, "_capture_public_search_query_state", fake_capture)
+    allowed, diagnostics = asyncio.run(
+        _submit_verified_public_flight_search(
+            _FakeContext(),
+            object(),
+            ProbeInput("北京", "上海", date(2026, 9, 14)),
+        )
+    )
+
+    assert allowed is False
+    assert diagnostics["submit_executed"] is False
+
+
+def test_di8_13_unicode_and_output_preflight_precedes_planned_provider_access() -> None:
+    output_path = REPO_ROOT / "apps" / "backend" / ".tmp-pytest" / "diag-u8.json"
+    payload = _live_observation_preflight(
+        ProbeInput(
+            "北京",
+            "上海",
+            date(2026, 9, 14),
+            planned_observation=1,
+            evidence_output_path=str(output_path),
+        )
+    )
+
+    assert payload["unicode_safe"] is True
+    assert payload["output_path_absolute"] is True
+    assert payload["provider_access_started"] is False
+    with pytest.raises(ValueError, match="absolute evidence output path"):
+        _live_observation_preflight(
+            ProbeInput("北京", "上海", date(2026, 9, 14), planned_observation=1)
+        )
+
+
+def test_di8_14_planned_observation_is_not_a_retry_counter() -> None:
+    payload = _live_observation_preflight(
+        ProbeInput(
+            "北京",
+            "上海",
+            date(2026, 9, 14),
+            planned_observation=6,
+            evidence_output_path=str(REPO_ROOT / "apps" / "backend" / ".tmp-pytest" / "observation.json"),
+        )
+    )
+
+    assert payload["planned_observation"] == 6
+    assert payload["retries"] == 0
+
+
+def test_di8_15_headed_pause_is_local_only_and_adds_no_interaction() -> None:
+    script = (REPO_ROOT / "scripts" / "ci" / "fliggy-browser-probe-smoke.ps1").read_text(encoding="utf-8")
+
+    assert "HeadedObservationPauseSeconds" in script
+    assert "--headed-observation-pause-seconds" in script
+    assert '"--evidence-output-path", $ResolvedOutputPath' in script
+    assert "keyboard.press" not in script.lower()
+    assert "mouse.click" not in script.lower()
+
+
+def test_di8_16_forbidden_private_state_is_not_added_and_payload_is_sanitized() -> None:
+    source = _fliggy_source_text()
+    sanitized = sanitize_probe_payload(
+        {"candidate": "上海", "cookie": "a=b", "authorization": "Bearer secret"}
+    )
+
+    assert sanitized == {
+        "candidate": "上海",
+        "cookie": "[REDACTED]",
+        "authorization": "[REDACTED]",
+    }
+    assert "document.cookie" not in source
+    assert "localStorage" not in source
+    assert "sessionStorage" not in source
 
 
 def test_navigation_source_ref_uses_stable_public_entry_and_sanitizes_tracking() -> None:

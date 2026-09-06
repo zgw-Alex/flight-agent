@@ -140,6 +140,18 @@ class PublicQueryClassification(str, Enum):
     UNKNOWN_QUERY = "UNKNOWN_QUERY"
 
 
+class DestinationSuggestionSurfaceClassification(str, Enum):
+    NO_SURFACE = "NO_SURFACE"
+    SURFACE_DELAYED = "SURFACE_DELAYED"
+    SURFACE_TRANSIENT = "SURFACE_TRANSIENT"
+    SURFACE_READY_NO_MATCH = "SURFACE_READY_NO_MATCH"
+    MATCH_VISIBLE_NOT_SELECTABLE = "MATCH_VISIBLE_NOT_SELECTABLE"
+    COMMITTABLE_MATCH_FOUND = "COMMITTABLE_MATCH_FOUND"
+    COMMIT_EVIDENCE_OBTAINED = "COMMIT_EVIDENCE_OBTAINED"
+    MODE_DEPENDENT_SURFACE = "MODE_DEPENDENT_SURFACE"
+    UNKNOWN_SURFACE = "UNKNOWN_SURFACE"
+
+
 class DomTraversalAssessment(str, Enum):
     COMPLETE_OBSERVED = "COMPLETE_OBSERVED"
     PARTIAL_OBSERVED = "PARTIAL_OBSERVED"
@@ -160,6 +172,9 @@ class ProbeInput:
     execution_id: str | None = None
     overall_deadline_seconds: float = 30.0
     headless: bool = True
+    planned_observation: int | None = None
+    evidence_output_path: str | None = None
+    headed_observation_pause_seconds: float = 0.0
 
     def __post_init__(self) -> None:
         if self.origin_text.strip() == "":
@@ -168,9 +183,14 @@ class ProbeInput:
             raise ValueError("ProbeInput destination_text is required")
         if self.overall_deadline_seconds <= 0:
             raise ValueError("ProbeInput overall_deadline_seconds must be positive")
+        if self.planned_observation is not None and not 1 <= self.planned_observation <= 6:
+            raise ValueError("ProbeInput planned_observation must be between 1 and 6")
+        if self.headed_observation_pause_seconds < 0:
+            raise ValueError("ProbeInput headed_observation_pause_seconds must be non-negative")
 
     @classmethod
     def from_args(cls, args: argparse.Namespace) -> Self:
+        evidence_output = args.evidence_output_path or args.output_json
         return cls(
             origin_text=args.origin,
             destination_text=args.destination,
@@ -180,6 +200,9 @@ class ProbeInput:
             execution_id=args.execution_id,
             overall_deadline_seconds=args.deadline_seconds,
             headless=not args.headed,
+            planned_observation=args.planned_observation,
+            evidence_output_path=str(evidence_output.resolve()) if evidence_output is not None else None,
+            headed_observation_pause_seconds=args.headed_observation_pause_seconds,
         )
 
 
@@ -394,12 +417,27 @@ class DestinationSuggestionCandidate:
     selector: str
     index: int
     label: str
+    selectable: bool | str = "unknown"
 
     def to_dict(self) -> dict[str, str | int]:
         return {
             "selector": self.selector,
             "index": self.index,
             "label": self.label,
+            "selectable": self.selectable,
+        }
+
+
+@dataclass(frozen=True)
+class DestinationSuggestionSnapshot:
+    elapsed_ms: int
+    candidates: tuple[DestinationSuggestionCandidate, ...]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "elapsed_ms": self.elapsed_ms,
+            "surface_present": bool(self.candidates),
+            "candidates": [candidate.to_dict() for candidate in self.candidates],
         }
 
 
@@ -424,6 +462,7 @@ class DestinationCommitmentResult:
     commitment_status: str
     failure_taxonomy: str | None
     destination_stability_diagnostics: dict[str, Any] = field(default_factory=dict)
+    destination_suggestion_diagnostics: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -440,6 +479,7 @@ class DestinationCommitmentResult:
             "commitment_status": self.commitment_status,
             "failure_taxonomy": self.failure_taxonomy,
             "destination_stability_diagnostics": self.destination_stability_diagnostics,
+            "destination_suggestion_diagnostics": self.destination_suggestion_diagnostics,
         }
 
 
@@ -1765,9 +1805,37 @@ def classify_experiment_diagnosis(results: tuple[ProbeRunResult, ...]) -> Experi
     return ExperimentDiagnosis.EVIDENCE_INSUFFICIENT
 
 
+def _live_observation_preflight(probe_input: ProbeInput) -> dict[str, Any]:
+    unicode_values = (
+        probe_input.origin_text,
+        probe_input.destination_text,
+        probe_input.departure_date.isoformat(),
+    )
+    unicode_safe = all(value.encode("utf-8").decode("utf-8") == value for value in unicode_values)
+    output_path = Path(probe_input.evidence_output_path).resolve() if probe_input.evidence_output_path else None
+    output_path_absolute = output_path is not None and output_path.is_absolute()
+    if not unicode_safe:
+        raise ValueError("Unicode-safe live preflight failed before provider access")
+    if probe_input.planned_observation is not None and not output_path_absolute:
+        raise ValueError("A planned diagnostic observation requires an absolute evidence output path")
+    return {
+        "unicode_safe": True,
+        "origin": probe_input.origin_text,
+        "destination": probe_input.destination_text,
+        "departure_date": probe_input.departure_date.isoformat(),
+        "planned_observation": probe_input.planned_observation,
+        "mode": "headless" if probe_input.headless else "headed",
+        "retries": 0,
+        "output_path_absolute": output_path_absolute,
+        "output_path": str(output_path) if output_path is not None else None,
+        "provider_access_started": False,
+    }
+
+
 async def run_fliggy_browser_probe(probe_input: ProbeInput) -> ProbeRunResult:
     """Run the opt-in live browser probe without persisting browser session state."""
 
+    live_preflight = _live_observation_preflight(probe_input)
     started = time.monotonic()
     acquired_at = datetime.now(UTC)
     url = _build_fliggy_search_url(probe_input)
@@ -1778,6 +1846,8 @@ async def run_fliggy_browser_probe(probe_input: ProbeInput) -> ProbeRunResult:
         "clicked": False,
         "retries": 0,
         "headless": probe_input.headless,
+        "planned_observation": probe_input.planned_observation,
+        "live_preflight": live_preflight,
         "entry_url_strategy": "public_fliggy_flight_entry_tab",
         "stage_diagnostics": [],
         "last_stage": None,
@@ -1829,6 +1899,7 @@ async def run_fliggy_browser_probe(probe_input: ProbeInput) -> ProbeRunResult:
 
     try:
         async with async_playwright() as playwright:
+            live_preflight["provider_access_started"] = True
             browser = await playwright.chromium.launch(headless=probe_input.headless)
             context = await browser.new_context(storage_state=None)
             page = await context.new_page()
@@ -2062,7 +2133,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--deadline-seconds", type=float, default=30.0)
     parser.add_argument("--headed", action="store_true")
     parser.add_argument("--output-json", type=Path)
+    parser.add_argument("--evidence-output-path", type=Path)
+    parser.add_argument("--planned-observation", type=int)
+    parser.add_argument("--headed-observation-pause-seconds", type=float, default=0.0)
     args = parser.parse_args(argv)
+    if args.output_json is not None:
+        args.output_json = args.output_json.resolve()
+    if args.evidence_output_path is not None:
+        args.evidence_output_path = args.evidence_output_path.resolve()
 
     import asyncio
 
@@ -2330,7 +2408,13 @@ async def _write_public_flight_search_fields(page: Any, probe_input: ProbeInput)
     await page.wait_for_selector(".rc-flight-searchbar input#form_depCity")
     await fill_input(".rc-flight-searchbar input#form_depCity", probe_input.origin_text)
     date_readback = await fill_input(".rc-flight-searchbar input#form_depDate", probe_input.departure_date.isoformat(), force=True)
-    destination_commitment = await _commit_public_destination(page, probe_input.destination_text)
+    destination_commitment = await _commit_public_destination(
+        page,
+        probe_input.destination_text,
+        headed_observation_pause_seconds=(
+            probe_input.headed_observation_pause_seconds if not probe_input.headless else 0.0
+        ),
+    )
     return {
         "destination_commitment": destination_commitment.to_dict(),
         "date_commitment": _public_date_commitment(
@@ -2371,15 +2455,23 @@ async def _submit_verified_public_flight_search(context: Any, page: Any, probe_i
         "submit_executed": False,
         "public_submit_button_clicked_once": False,
     }
+    _annotate_destination_s8(diagnostics, verification)
     if diagnostics["submit_allowed"] is not True:
         return False, diagnostics
     await page.locator(".rc-flight-searchbar button.search-button").nth(0).click()
     diagnostics["submit_executed"] = True
     diagnostics["public_submit_button_clicked_once"] = True
+    _annotate_destination_s8(diagnostics, verification)
     return True, diagnostics
 
 
-async def _commit_public_destination(page: Any, requested_destination: str) -> DestinationCommitmentResult:
+async def _commit_public_destination(
+    page: Any,
+    requested_destination: str,
+    *,
+    headed_observation_pause_seconds: float = 0.0,
+) -> DestinationCommitmentResult:
+    observation_started = time.monotonic()
     control = page.locator(_FLIGGY_DESTINATION_INPUT_SELECTOR)
     destination_control_ready = False
     try:
@@ -2400,6 +2492,7 @@ async def _commit_public_destination(page: Any, requested_destination: str) -> D
             )
         write_result = await _write_destination_input_text(page, field, requested_destination)
         input_text_after_write = write_result.input_text_after_write
+        typed_elapsed_ms = int((time.monotonic() - observation_started) * 1000)
     except PlaywrightError:
         return _destination_commitment_result(
             requested_destination=requested_destination,
@@ -2430,7 +2523,10 @@ async def _commit_public_destination(page: Any, requested_destination: str) -> D
             extension_reason=write_result.extension_reason,
         )
 
-    candidates = await _wait_for_destination_suggestion_candidates(page)
+    candidates, suggestion_snapshots = await _wait_for_destination_suggestion_candidates(
+        page,
+        observation_started=observation_started,
+    )
     suggestion_surface_present = bool(candidates)
     resolution = _resolve_destination_candidate(
         candidates,
@@ -2438,6 +2534,14 @@ async def _commit_public_destination(page: Any, requested_destination: str) -> D
         suggestion_surface_present=suggestion_surface_present,
     )
     if resolution.selected_candidate is None:
+        if candidates and len(suggestion_snapshots) < _FLIGGY_DESTINATION_SUGGESTION_ATTEMPTS:
+            suggestion_snapshots += await _observe_destination_suggestion_tail(
+                page,
+                observation_started=observation_started,
+                attempts=_FLIGGY_DESTINATION_SUGGESTION_ATTEMPTS - len(suggestion_snapshots),
+            )
+        if headed_observation_pause_seconds > 0:
+            await page.wait_for_timeout(int(headed_observation_pause_seconds * 1000))
         commit_readback = await _read_control_text(page, _FLIGGY_DESTINATION_INPUT_SELECTOR)
         return _destination_commitment_result(
             requested_destination=requested_destination,
@@ -2453,8 +2557,15 @@ async def _commit_public_destination(page: Any, requested_destination: str) -> D
             input_text_after_write=input_text_after_write,
             extension_used=write_result.extension_used,
             extension_reason=write_result.extension_reason,
+            suggestion_snapshots=suggestion_snapshots,
+            focused_elapsed_ms=0,
+            typed_elapsed_ms=typed_elapsed_ms,
+            headed_pause_ms=int(headed_observation_pause_seconds * 1000),
+            overlay_evidence=await _overlay_evidence(page),
         )
 
+    if headed_observation_pause_seconds > 0:
+        await page.wait_for_timeout(int(headed_observation_pause_seconds * 1000))
     try:
         await page.locator(resolution.selected_candidate.selector).nth(resolution.selected_candidate.index).click()
         await page.wait_for_timeout(300)
@@ -2473,6 +2584,11 @@ async def _commit_public_destination(page: Any, requested_destination: str) -> D
             input_text_after_write=input_text_after_write,
             extension_used=write_result.extension_used,
             extension_reason=write_result.extension_reason,
+            suggestion_snapshots=suggestion_snapshots,
+            focused_elapsed_ms=0,
+            typed_elapsed_ms=typed_elapsed_ms,
+            headed_pause_ms=int(headed_observation_pause_seconds * 1000),
+            overlay_evidence=await _overlay_evidence(page),
         )
 
     commit_readback = await _read_control_text(page, _FLIGGY_DESTINATION_INPUT_SELECTOR)
@@ -2498,6 +2614,11 @@ async def _commit_public_destination(page: Any, requested_destination: str) -> D
             write_result.extension_reason,
             str(stability["extension_reason"]),
         ),
+        suggestion_snapshots=suggestion_snapshots,
+        focused_elapsed_ms=0,
+        typed_elapsed_ms=typed_elapsed_ms,
+        headed_pause_ms=int(headed_observation_pause_seconds * 1000),
+        overlay_evidence=await _overlay_evidence(page),
     )
 
 
@@ -2540,7 +2661,17 @@ async def _collect_destination_suggestion_candidates(page: Any, *, max_candidate
             if normalized_label in seen_labels:
                 continue
             seen_labels.add(normalized_label)
-            candidates.append(DestinationSuggestionCandidate(selector=selector, index=index, label=label))
+            selectable: bool | str = "unknown"
+            with suppress(PlaywrightError):
+                selectable = await item.is_enabled()
+            candidates.append(
+                DestinationSuggestionCandidate(
+                    selector=selector,
+                    index=index,
+                    label=label,
+                    selectable=selectable,
+                )
+            )
             if len(candidates) >= max_candidates:
                 return tuple(candidates)
     return tuple(candidates)
@@ -2552,13 +2683,42 @@ async def _wait_for_destination_suggestion_candidates(
     max_candidates: int = 8,
     attempts: int = _FLIGGY_DESTINATION_SUGGESTION_ATTEMPTS,
     wait_ms: int = _FLIGGY_DESTINATION_SUGGESTION_WAIT_MS,
-) -> tuple[DestinationSuggestionCandidate, ...]:
+    observation_started: float | None = None,
+) -> tuple[tuple[DestinationSuggestionCandidate, ...], tuple[DestinationSuggestionSnapshot, ...]]:
+    started = observation_started if observation_started is not None else time.monotonic()
+    snapshots: list[DestinationSuggestionSnapshot] = []
     for attempt in range(attempts):
         candidates = await _collect_destination_suggestion_candidates(page, max_candidates=max_candidates)
+        snapshots.append(
+            DestinationSuggestionSnapshot(
+                elapsed_ms=max(0, int((time.monotonic() - started) * 1000)),
+                candidates=candidates,
+            )
+        )
         if candidates or attempt == attempts - 1:
-            return candidates
+            return candidates, tuple(snapshots)
         await page.wait_for_timeout(wait_ms)
-    return ()
+    return (), tuple(snapshots)
+
+
+async def _observe_destination_suggestion_tail(
+    page: Any,
+    *,
+    observation_started: float,
+    attempts: int,
+    wait_ms: int = _FLIGGY_DESTINATION_SUGGESTION_WAIT_MS,
+) -> tuple[DestinationSuggestionSnapshot, ...]:
+    snapshots: list[DestinationSuggestionSnapshot] = []
+    for _ in range(max(0, attempts)):
+        await page.wait_for_timeout(wait_ms)
+        candidates = await _collect_destination_suggestion_candidates(page)
+        snapshots.append(
+            DestinationSuggestionSnapshot(
+                elapsed_ms=max(0, int((time.monotonic() - observation_started) * 1000)),
+                candidates=candidates,
+            )
+        )
+    return tuple(snapshots)
 
 
 async def _read_locator_text(locator: Any) -> str | None:
@@ -2618,6 +2778,11 @@ def _destination_commitment_result(
     input_text_after_write: str | None = None,
     extension_used: bool = False,
     extension_reason: str = "none",
+    suggestion_snapshots: tuple[DestinationSuggestionSnapshot, ...] = (),
+    focused_elapsed_ms: int | None = None,
+    typed_elapsed_ms: int | None = None,
+    headed_pause_ms: int = 0,
+    overlay_evidence: tuple[str, ...] = (),
 ) -> DestinationCommitmentResult:
     destination_match = _destination_readback_matches(commit_readback, requested_destination)
     commitment_status = _destination_commitment_status(
@@ -2645,6 +2810,22 @@ def _destination_commitment_result(
         extension_used=extension_used,
         extension_reason=extension_reason,
     )
+    suggestion_diagnostics = _destination_suggestion_lifecycle_diagnostics(
+        requested_destination=requested_destination,
+        destination_control_ready=destination_control_ready,
+        typed_destination=typed_destination,
+        focused_elapsed_ms=focused_elapsed_ms,
+        typed_elapsed_ms=typed_elapsed_ms,
+        snapshots=suggestion_snapshots,
+        selected_candidate=selected_candidate,
+        selection_method=selection_method,
+        commit_readback=commit_readback,
+        commitment_status=commitment_status,
+        failure_taxonomy=effective_failure,
+        d9_stable_readback=stability_diagnostics["d9_pre_submit_stability"]["stable_readback"],
+        headed_pause_ms=headed_pause_ms,
+        overlay_evidence=overlay_evidence,
+    )
     return DestinationCommitmentResult(
         requested_destination=requested_destination,
         destination_control_ready=destination_control_ready,
@@ -2659,6 +2840,7 @@ def _destination_commitment_result(
         commitment_status=commitment_status,
         failure_taxonomy=effective_failure,
         destination_stability_diagnostics=stability_diagnostics,
+        destination_suggestion_diagnostics=suggestion_diagnostics,
     )
 
 
@@ -2938,6 +3120,190 @@ def _destination_stability_diagnostics(
         },
         "root_cause_class": root_cause,
     }
+
+
+def _destination_suggestion_lifecycle_diagnostics(
+    *,
+    requested_destination: str,
+    destination_control_ready: bool,
+    typed_destination: str | None,
+    focused_elapsed_ms: int | None,
+    typed_elapsed_ms: int | None,
+    snapshots: tuple[DestinationSuggestionSnapshot, ...],
+    selected_candidate: DestinationSuggestionCandidate | None,
+    selection_method: str,
+    commit_readback: str | None,
+    commitment_status: str,
+    failure_taxonomy: str | None,
+    d9_stable_readback: str | None,
+    headed_pause_ms: int,
+    overlay_evidence: tuple[str, ...],
+) -> dict[str, Any]:
+    inventory: list[DestinationSuggestionCandidate] = []
+    seen: set[tuple[str, int, str]] = set()
+    for snapshot in snapshots:
+        for candidate in snapshot.candidates:
+            key = (candidate.selector, candidate.index, _normalize_destination_label(candidate.label))
+            if key not in seen:
+                seen.add(key)
+                inventory.append(candidate)
+    matches = tuple(
+        candidate
+        for candidate in inventory
+        if _destination_label_contains_requested(candidate.label, requested_destination)
+    )
+    first_surface_elapsed_ms = next(
+        (snapshot.elapsed_ms for snapshot in snapshots if snapshot.candidates),
+        None,
+    )
+    classification = _classify_destination_suggestion_surface(
+        requested_destination=requested_destination,
+        snapshots=snapshots,
+        selected_candidate=selected_candidate,
+        commitment_status=commitment_status,
+    )
+    return {
+        "classification": classification.value,
+        "s0_focus": {
+            "destination_control_ready": destination_control_ready,
+            "elapsed_ms": focused_elapsed_ms,
+        },
+        "s1_type": {
+            "typed_destination": typed_destination,
+            "typed_destination_matches": _destination_readback_matches(typed_destination, requested_destination),
+            "elapsed_ms": typed_elapsed_ms,
+            "extra_repair_action": False,
+        },
+        "s2_visible_readback": {
+            "readback": typed_destination,
+            "readback_matches": _destination_readback_matches(typed_destination, requested_destination),
+            "elapsed_ms": typed_elapsed_ms,
+        },
+        "s3_surface_observation": {
+            "first_surface_elapsed_ms": first_surface_elapsed_ms,
+            "observations": [snapshot.to_dict() for snapshot in snapshots],
+        },
+        "s4_candidate_inventory": {
+            "candidate_count": len(inventory),
+            "candidates": [candidate.to_dict() for candidate in inventory],
+        },
+        "s5_requested_match": {
+            "match_visible": bool(matches),
+            "matching_labels": [candidate.label for candidate in matches],
+        },
+        "s6_selection_opportunity": {
+            "legitimate_selection_opportunity": selected_candidate is not None,
+            "selected_candidate_label": selected_candidate.label if selected_candidate is not None else None,
+            "selection_method": selection_method,
+            "matching_candidate_selectability": [candidate.selectable for candidate in matches],
+        },
+        "s7_commit_evidence": {
+            "commitment_status": commitment_status,
+            "commit_readback": commit_readback,
+            "failure_taxonomy": failure_taxonomy,
+        },
+        "s8_pre_submit_gate": {
+            "d9_stable_readback": d9_stable_readback,
+            "q1_route_match": "not_observed",
+            "q1_date_match": "not_observed",
+            "destination_commit_gate": commitment_status == "confirmed",
+            "date_commit_gate": "not_observed",
+            "submit_allowed": False,
+            "submit_executed": False,
+        },
+        "headed_observation_pause_ms": headed_pause_ms,
+        "overlay_evidence": list(overlay_evidence),
+        "timestamps_are_relative": True,
+        "retries": 0,
+    }
+
+
+def _classify_destination_suggestion_surface(
+    *,
+    requested_destination: str,
+    snapshots: tuple[DestinationSuggestionSnapshot, ...],
+    selected_candidate: DestinationSuggestionCandidate | None,
+    commitment_status: str,
+) -> DestinationSuggestionSurfaceClassification:
+    if commitment_status == "confirmed":
+        return DestinationSuggestionSurfaceClassification.COMMIT_EVIDENCE_OBTAINED
+    if selected_candidate is not None and selected_candidate.selectable is False:
+        return DestinationSuggestionSurfaceClassification.MATCH_VISIBLE_NOT_SELECTABLE
+    if selected_candidate is not None:
+        return DestinationSuggestionSurfaceClassification.COMMITTABLE_MATCH_FOUND
+    if not snapshots:
+        return DestinationSuggestionSurfaceClassification.UNKNOWN_SURFACE
+    surface_indexes = [index for index, snapshot in enumerate(snapshots) if snapshot.candidates]
+    if not surface_indexes:
+        return DestinationSuggestionSurfaceClassification.NO_SURFACE
+    matching = [
+        candidate
+        for snapshot in snapshots
+        for candidate in snapshot.candidates
+        if _destination_label_contains_requested(candidate.label, requested_destination)
+    ]
+    if matching:
+        if all(candidate.selectable is False for candidate in matching):
+            return DestinationSuggestionSurfaceClassification.MATCH_VISIBLE_NOT_SELECTABLE
+        if any(candidate.selectable is True for candidate in matching):
+            return DestinationSuggestionSurfaceClassification.COMMITTABLE_MATCH_FOUND
+        return DestinationSuggestionSurfaceClassification.UNKNOWN_SURFACE
+    first_surface = surface_indexes[0]
+    if any(not snapshot.candidates for snapshot in snapshots[first_surface + 1 :]):
+        return DestinationSuggestionSurfaceClassification.SURFACE_TRANSIENT
+    if first_surface > 0:
+        return DestinationSuggestionSurfaceClassification.SURFACE_DELAYED
+    return DestinationSuggestionSurfaceClassification.SURFACE_READY_NO_MATCH
+
+
+def _annotate_destination_s8(
+    diagnostics: dict[str, Any],
+    verification: PreSubmitQueryVerification,
+) -> None:
+    commitment = diagnostics.get("destination_commitment")
+    if not isinstance(commitment, dict):
+        return
+    suggestion = commitment.get("destination_suggestion_diagnostics")
+    if not isinstance(suggestion, dict):
+        return
+    s8 = suggestion.get("s8_pre_submit_gate")
+    if not isinstance(s8, dict):
+        return
+    date_commitment = diagnostics.get("date_commitment")
+    s8.update(
+        {
+            "q1_route_match": verification.pre_submit_route_match,
+            "q1_date_match": verification.pre_submit_date_match,
+            "q1_decision": verification.query_state_decision,
+            "date_commit_gate": isinstance(date_commitment, dict)
+            and date_commitment.get("commitment_status") == "confirmed",
+            "submit_allowed": diagnostics.get("submit_allowed") is True,
+            "submit_executed": diagnostics.get("submit_executed") is True,
+        }
+    )
+
+
+def classify_destination_suggestion_mode(
+    results: Sequence[dict[str, Any]],
+) -> DestinationSuggestionSurfaceClassification:
+    by_mode: dict[bool, set[str]] = {True: set(), False: set()}
+    for result in results:
+        diagnostics = result.get("diagnostics") if isinstance(result, dict) else None
+        if not isinstance(diagnostics, dict) or not isinstance(diagnostics.get("headless"), bool):
+            continue
+        commitment = diagnostics.get("destination_commitment")
+        suggestion = commitment.get("destination_suggestion_diagnostics") if isinstance(commitment, dict) else None
+        classification = suggestion.get("classification") if isinstance(suggestion, dict) else None
+        if isinstance(classification, str):
+            by_mode[diagnostics["headless"]].add(classification)
+    if by_mode[True] and by_mode[False] and by_mode[True] != by_mode[False]:
+        return DestinationSuggestionSurfaceClassification.MODE_DEPENDENT_SURFACE
+    observed = by_mode[True] | by_mode[False]
+    if len(observed) == 1:
+        value = next(iter(observed))
+        with suppress(ValueError):
+            return DestinationSuggestionSurfaceClassification(value)
+    return DestinationSuggestionSurfaceClassification.UNKNOWN_SURFACE
 
 
 def _destination_option_match_decision(
