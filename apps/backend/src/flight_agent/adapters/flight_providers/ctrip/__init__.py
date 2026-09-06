@@ -18,6 +18,7 @@ from flight_agent.adapters.flight_providers.ctrip.browser_probe import (
     BrowserAcquisitionMode,
     BrowserProbeOutcome,
     BrowserProbeStage,
+    CapturedPayload,
     CtripLevel1Evidence,
     CtripLevel2OfferEvidence,
     CtripProbeInput,
@@ -41,6 +42,12 @@ from flight_agent.adapters.flight_providers.ctrip.mapper import (
     CTRIP_PROVIDER_MAPPER_VERSION,
     CtripProviderMapper,
 )
+from flight_agent.adapters.flight_providers.ctrip.provider import (
+    CTRIP_RUNTIME_ADAPTER_VERSION,
+    CtripAcquisition,
+    CtripFlightProvider,
+    ctrip_probe_input_for_search_plan,
+)
 
 __all__ = [
     "CTRIP_ASSISTED_ACQUISITION_STRATEGY",
@@ -48,6 +55,7 @@ __all__ = [
     "CTRIP_BROWSER_PROBE_VERSION",
     "CTRIP_PROVIDER_ID",
     "CTRIP_PROVIDER_MAPPER_VERSION",
+    "CTRIP_RUNTIME_ADAPTER_VERSION",
     "AssistedCaptureClassification",
     "AssistedCaptureInput",
     "AssistedCaptureMode",
@@ -56,8 +64,11 @@ __all__ = [
     "BrowserAcquisitionMode",
     "BrowserProbeOutcome",
     "BrowserProbeStage",
+    "CapturedPayload",
+    "CtripAcquisition",
     "CtripCanonicalEntry",
     "CtripCanonicalEntryResult",
+    "CtripFlightProvider",
     "CtripLevel1Evidence",
     "CtripLevel2OfferEvidence",
     "CtripProbeInput",
@@ -69,6 +80,7 @@ __all__ = [
     "StageDiagnostic",
     "UnsafeAssistedEvidenceError",
     "classify_ctrip_result_state",
+    "ctrip_probe_input_for_search_plan",
     "extract_level1_evidence_from_payloads",
     "extract_level2_offer_evidence",
     "import_ctrip_assisted_capture",

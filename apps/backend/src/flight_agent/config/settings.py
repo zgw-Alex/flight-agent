@@ -40,6 +40,17 @@ class Settings(BaseSettings):
     llm_requirement_interpreter_provider: str = Field(
         default="fake", alias="LLM_REQUIREMENT_INTERPRETER_PROVIDER"
     )
+    flight_provider: str = Field(default="mock", alias="FLIGHT_PROVIDER")
+    ctrip_browser_deadline_seconds: float = Field(
+        default=45.0,
+        alias="CTRIP_BROWSER_DEADLINE_SECONDS",
+        gt=0,
+    )
+    ctrip_browser_max_attempts: int = Field(
+        default=1,
+        alias="CTRIP_BROWSER_MAX_ATTEMPTS",
+        ge=1,
+    )
 
     @field_validator(
         "app_env",
@@ -51,6 +62,7 @@ class Settings(BaseSettings):
         "deepseek_base_url",
         "deepseek_default_model",
         "llm_requirement_interpreter_provider",
+        "flight_provider",
     )
     @classmethod
     def reject_blank_strings(cls, value: str) -> str:

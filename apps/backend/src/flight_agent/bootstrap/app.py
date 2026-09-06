@@ -6,6 +6,12 @@ from uuid import uuid4
 
 from fastapi import FastAPI
 
+from flight_agent.adapters.flight_providers.ctrip import (
+    CtripAcquisition,
+    CtripCanonicalEntry,
+    CtripFlightProvider,
+    CtripProviderMapper,
+)
 from flight_agent.adapters.flight_providers.mock import MockFlightProvider, MockProviderMapper
 from flight_agent.adapters.publication_repository_memory import InMemoryPublicationRepository
 from flight_agent.adapters.requirement_repository_memory import InMemoryRequirementRepository
@@ -16,6 +22,7 @@ from flight_agent.application import (
     CandidateSnapshotAssembler,
     ExecuteMinimalDecision,
     ExecuteReadyRequirementSearch,
+    ExecuteSingleProviderCandidateIntegration,
     FixtureSchemaVersion,
     PublicWorkflowOutcome,
     PublishRecommendation,
@@ -28,14 +35,17 @@ from flight_agent.application import (
     NormalizationContext as RequirementNormalizationContext,
 )
 from flight_agent.application.structured_entry import StartStructuredRequirement
+from flight_agent.config.settings import Settings
 from flight_agent.domain.decision import LowerPriceRanking, MaxPriceFilter, RecommendationSelector
 from flight_agent.domain.shared import DomainInstant
 from flight_agent.domain.workflow import ExecutionId
 from flight_agent.ports import (
     CandidateMerger,
     CommonNormalizer,
+    FlightProvider,
     MergerVersion,
     NormalizerVersion,
+    ProviderMapper,
     ReferenceData,
     ReferenceDataVersion,
 )
@@ -47,10 +57,15 @@ REPO_ROOT = Path(__file__).resolve().parents[5]
 MOCK_FIXTURE_PATH = REPO_ROOT / "fixtures" / "providers" / "mock_flight_provider_cases.json"
 
 
-def create_app() -> FastAPI:
+def create_app(
+    settings: Settings | None = None,
+    *,
+    ctrip_acquisition: CtripAcquisition | None = None,
+) -> FastAPI:
     """Create the backend ASGI application and wire outer transport routes."""
+    settings = settings or Settings()
     app = FastAPI(title="Flight Agent Backend")
-    search_execution = _build_search_execution()
+    search_execution = _build_search_execution(settings=settings, ctrip_acquisition=ctrip_acquisition)
     minimal_decision = _build_minimal_decision()
     publication_repository = InMemoryPublicationRepository()
     publisher = PublishRecommendation(
@@ -139,20 +154,91 @@ def create_app() -> FastAPI:
     return app
 
 
-def _build_search_execution() -> ExecuteReadyRequirementSearch:
+def _build_search_execution(
+    settings: Settings | None = None,
+    *,
+    ctrip_acquisition: CtripAcquisition | None = None,
+) -> ExecuteReadyRequirementSearch:
+    settings = settings or Settings()
     assembler_version = AssemblerVersion("candidate-snapshot-assembler-v1")
-    return ExecuteReadyRequirementSearch(
-        flight_provider=MockFlightProvider(MOCK_FIXTURE_PATH),
-        provider_mapper=MockProviderMapper(),
-        common_normalizer=CommonNormalizer(),
-        normalization_context=_candidate_normalization_context(),
-        candidate_merger=CandidateMerger(MergerVersion("candidate-merger-v1")),
-        snapshot_assembler=CandidateSnapshotAssembler(assembler_version),
+    common_normalizer = CommonNormalizer()
+    normalization_context = _candidate_normalization_context()
+    candidate_merger = CandidateMerger(MergerVersion("candidate-merger-v1"))
+    snapshot_assembler = CandidateSnapshotAssembler(assembler_version)
+    flight_provider, provider_mapper, candidate_integration, fixture_schema_versions = _provider_runtime_components(
+        settings=settings,
+        common_normalizer=common_normalizer,
+        normalization_context=normalization_context,
+        candidate_merger=candidate_merger,
+        snapshot_assembler=snapshot_assembler,
         assembler_version=assembler_version,
-        fixture_schema_versions=(FixtureSchemaVersion("m4-u2-v1"),),
+        ctrip_acquisition=ctrip_acquisition,
+    )
+    return ExecuteReadyRequirementSearch(
+        flight_provider=flight_provider,
+        provider_mapper=provider_mapper,
+        common_normalizer=common_normalizer,
+        normalization_context=normalization_context,
+        candidate_merger=candidate_merger,
+        snapshot_assembler=snapshot_assembler,
+        assembler_version=assembler_version,
+        fixture_schema_versions=fixture_schema_versions,
         id_factory=lambda: str(uuid4()),
         created_at=lambda: DomainInstant(datetime.now(UTC)),
+        candidate_integration=candidate_integration,
     )
+
+
+def _provider_runtime_components(
+    *,
+    settings: Settings,
+    common_normalizer: CommonNormalizer,
+    normalization_context: CandidateNormalizationContext,
+    candidate_merger: CandidateMerger,
+    snapshot_assembler: CandidateSnapshotAssembler,
+    assembler_version: AssemblerVersion,
+    ctrip_acquisition: CtripAcquisition | None,
+) -> tuple[
+    FlightProvider,
+    ProviderMapper,
+    ExecuteSingleProviderCandidateIntegration | None,
+    tuple[FixtureSchemaVersion, ...],
+]:
+    provider_name = settings.flight_provider.strip().lower()
+    if provider_name == "mock":
+        return (
+            MockFlightProvider(MOCK_FIXTURE_PATH),
+            MockProviderMapper(),
+            None,
+            (FixtureSchemaVersion("m4-u2-v1"),),
+        )
+    if provider_name == "ctrip":
+        ctrip_mapper = CtripProviderMapper()
+        ctrip_canonical_entry = CtripCanonicalEntry(
+            common_normalizer=common_normalizer,
+            normalization_context=normalization_context,
+        )
+        fixture_schema_versions = (FixtureSchemaVersion("ctrip-sanitized-evidence-v1"),)
+        return (
+            CtripFlightProvider(
+                acquisition=ctrip_acquisition,
+                overall_deadline_seconds=settings.ctrip_browser_deadline_seconds,
+                max_attempts=settings.ctrip_browser_max_attempts,
+            ),
+            ctrip_mapper,
+            ExecuteSingleProviderCandidateIntegration(
+                provider_mapper=ctrip_mapper,
+                canonical_entry=ctrip_canonical_entry,
+                candidate_merger=candidate_merger,
+                snapshot_assembler=snapshot_assembler,
+                assembler_version=assembler_version,
+                fixture_schema_versions=fixture_schema_versions,
+                id_factory=lambda: str(uuid4()),
+                created_at=lambda: DomainInstant(datetime.now(UTC)),
+            ),
+            fixture_schema_versions,
+        )
+    raise ValueError(f"Unsupported FLIGHT_PROVIDER: {settings.flight_provider}")
 
 
 def _build_minimal_decision() -> ExecuteMinimalDecision:

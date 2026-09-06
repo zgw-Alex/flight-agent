@@ -6,6 +6,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum
 
+from flight_agent.application.candidate_integration import ExecuteSingleProviderCandidateIntegration
 from flight_agent.application.requirement_normalization import (
     RequirementValidationResult,
     SearchReadinessStatus,
@@ -89,6 +90,7 @@ class ExecuteReadyRequirementSearch:
         fixture_schema_versions: tuple[FixtureSchemaVersion, ...],
         id_factory: IdFactory,
         created_at: Callable[[], DomainInstant],
+        candidate_integration: ExecuteSingleProviderCandidateIntegration | None = None,
     ) -> None:
         self._flight_provider = flight_provider
         self._provider_mapper = provider_mapper
@@ -100,6 +102,7 @@ class ExecuteReadyRequirementSearch:
         self._fixture_schema_versions = fixture_schema_versions
         self._id_factory = id_factory
         self._created_at = created_at
+        self._candidate_integration = candidate_integration
 
     def execute(
         self,
@@ -120,6 +123,18 @@ class ExecuteReadyRequirementSearch:
 
         search_plan = plan_search(requirement, search_plan_id=SearchPlanId(self._id_factory()))
         provider_result = self._flight_provider.search(search_plan)
+        if self._candidate_integration is not None:
+            integration_result = self._candidate_integration.execute(
+                search_plan=search_plan,
+                provider_result=provider_result,
+            )
+            return SearchExecutionResult(
+                status=_search_execution_status(integration_result.snapshot_outcome),
+                search_plan=search_plan,
+                provider_result=provider_result,
+                mapping_result=integration_result.mapping_result,
+                snapshot_outcome=integration_result.snapshot_outcome,
+            )
         mapping_result = self._provider_mapper.map(provider_result)
         normalization_result = self._common_normalizer.normalize(
             mapping_result,
