@@ -433,6 +433,14 @@ class DestinationCommitmentResult:
 
 
 @dataclass(frozen=True)
+class DestinationInputWriteResult:
+    input_text_after_write: str | None
+    readback_sequence: tuple[str | None, ...]
+    extension_used: bool
+    extension_reason: str
+
+
+@dataclass(frozen=True)
 class FliggyFlightEvidence:
     evidence_index: int
     raw_displayed_flight_identity: FieldEvidence
@@ -2351,10 +2359,8 @@ async def _commit_public_destination(page: Any, requested_destination: str) -> D
                 commit_readback=None,
                 failure_taxonomy="DESTINATION_CONTROL_NOT_READY",
             )
-        await field.click()
-        await field.fill(requested_destination)
-        await page.wait_for_timeout(300)
-        input_text_after_write = await _read_control_text(page, _FLIGGY_DESTINATION_INPUT_SELECTOR)
+        write_result = await _write_destination_input_text(page, field, requested_destination)
+        input_text_after_write = write_result.input_text_after_write
     except PlaywrightError:
         return _destination_commitment_result(
             requested_destination=requested_destination,
@@ -2366,6 +2372,23 @@ async def _commit_public_destination(page: Any, requested_destination: str) -> D
             selection_method="none",
             commit_readback=None,
             failure_taxonomy="DESTINATION_INPUT_WRITE_FAILED",
+        )
+
+    if _destination_readback_matches(input_text_after_write, requested_destination) is not True:
+        return _destination_commitment_result(
+            requested_destination=requested_destination,
+            destination_control_ready=True,
+            typed_destination=input_text_after_write,
+            candidates=(),
+            suggestion_surface_present=False,
+            selected_candidate=None,
+            selection_method="none",
+            commit_readback=input_text_after_write,
+            failure_taxonomy="FORM_DESTINATION_MISMATCH",
+            readback_sequence=write_result.readback_sequence,
+            input_text_after_write=input_text_after_write,
+            extension_used=write_result.extension_used,
+            extension_reason=write_result.extension_reason,
         )
 
     candidates = await _wait_for_destination_suggestion_candidates(page)
@@ -2387,8 +2410,10 @@ async def _commit_public_destination(page: Any, requested_destination: str) -> D
             selection_method="none",
             commit_readback=commit_readback,
             failure_taxonomy=resolution.failure_taxonomy,
-            readback_sequence=(commit_readback,),
+            readback_sequence=write_result.readback_sequence + (commit_readback,),
             input_text_after_write=input_text_after_write,
+            extension_used=write_result.extension_used,
+            extension_reason=write_result.extension_reason,
         )
 
     try:
@@ -2405,7 +2430,10 @@ async def _commit_public_destination(page: Any, requested_destination: str) -> D
             selection_method="click",
             commit_readback=await _read_control_text(page, _FLIGGY_DESTINATION_INPUT_SELECTOR),
             failure_taxonomy="DESTINATION_OPTION_SELECTION_FAILED",
+            readback_sequence=write_result.readback_sequence,
             input_text_after_write=input_text_after_write,
+            extension_used=write_result.extension_used,
+            extension_reason=write_result.extension_reason,
         )
 
     commit_readback = await _read_control_text(page, _FLIGGY_DESTINATION_INPUT_SELECTOR)
@@ -2424,8 +2452,29 @@ async def _commit_public_destination(page: Any, requested_destination: str) -> D
         selection_method="click",
         commit_readback=commit_readback,
         failure_taxonomy=None,
-        readback_sequence=tuple(stability["readback_sequence"]),
+        readback_sequence=write_result.readback_sequence + tuple(stability["readback_sequence"]),
         input_text_after_write=input_text_after_write,
+        extension_used=write_result.extension_used or bool(stability["extension_used"]),
+        extension_reason=_combine_destination_extension_reasons(
+            write_result.extension_reason,
+            str(stability["extension_reason"]),
+        ),
+    )
+
+
+async def _write_destination_input_text(page: Any, field: Any, requested_destination: str) -> DestinationInputWriteResult:
+    await field.click()
+    await field.fill("")
+    await field.press_sequentially(requested_destination, delay=25)
+    first_readback = await _read_control_text(page, _FLIGGY_DESTINATION_INPUT_SELECTOR)
+    stability = await _observe_destination_input_write_stability(
+        page,
+        requested_destination=requested_destination,
+        initial_readback=first_readback,
+    )
+    return DestinationInputWriteResult(
+        input_text_after_write=stability["stable_readback"],
+        readback_sequence=tuple(stability["readback_sequence"]),
         extension_used=bool(stability["extension_used"]),
         extension_reason=str(stability["extension_reason"]),
     )
@@ -2640,6 +2689,53 @@ async def _read_control_text(page: Any, selector: str) -> str | None:
     return None
 
 
+async def _observe_destination_input_write_stability(
+    page: Any,
+    *,
+    requested_destination: str,
+    initial_readback: str | None,
+    attempts: int = _FLIGGY_DESTINATION_SUGGESTION_ATTEMPTS,
+    wait_ms: int = _FLIGGY_DESTINATION_SUGGESTION_WAIT_MS,
+) -> dict[str, Any]:
+    sequence: list[str | None] = [initial_readback]
+    if _destination_readback_matches(initial_readback, requested_destination) is True:
+        return {
+            "readback_sequence": sequence,
+            "stable_readback": initial_readback,
+            "extension_used": False,
+            "extension_reason": "none",
+        }
+
+    for _ in range(max(0, attempts - 1)):
+        await page.wait_for_timeout(wait_ms)
+        sequence.append(await _read_control_text(page, _FLIGGY_DESTINATION_INPUT_SELECTOR))
+        if _destination_readback_matches(sequence[-1], requested_destination) is True:
+            return {
+                "readback_sequence": sequence,
+                "stable_readback": sequence[-1],
+                "extension_used": False,
+                "extension_reason": "none",
+            }
+
+    extension_used = False
+    extension_reason = "none"
+    if _destination_stability_forward_progress(sequence):
+        extension_used = True
+        extension_reason = "destination_input_write_changed"
+        for _ in range(attempts):
+            await page.wait_for_timeout(wait_ms)
+            sequence.append(await _read_control_text(page, _FLIGGY_DESTINATION_INPUT_SELECTOR))
+            if _destination_readback_matches(sequence[-1], requested_destination) is True:
+                break
+
+    return {
+        "readback_sequence": sequence,
+        "stable_readback": _stable_destination_readback(tuple(sequence), requested_destination),
+        "extension_used": extension_used,
+        "extension_reason": extension_reason,
+    }
+
+
 async def _observe_destination_readback_stability(
     page: Any,
     *,
@@ -2680,6 +2776,13 @@ async def _observe_destination_readback_stability(
         "extension_used": extension_used,
         "extension_reason": extension_reason,
     }
+
+
+def _combine_destination_extension_reasons(first: str, second: str) -> str:
+    reasons = [reason for reason in (first, second) if reason != "none"]
+    if not reasons:
+        return "none"
+    return "+".join(dict.fromkeys(reasons))
 
 
 def _destination_stability_diagnostics(

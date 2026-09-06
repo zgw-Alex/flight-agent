@@ -24,6 +24,7 @@ from flight_agent.adapters.flight_providers.fliggy.browser_probe import (
     _annotate_post_submit_query_propagation,
     _browser_failure_taxonomy,
     _build_post_submit_query_state_diagnostics,
+    _combine_destination_extension_reasons,
     _destination_commitment_result,
     _destination_commitment_status,
     _destination_readback_matches,
@@ -55,6 +56,7 @@ from flight_agent.adapters.flight_providers.fliggy.browser_probe import (
     summarize_detector_state,
     summarize_search_plan_evidence,
 )
+from flight_agent.adapters.flight_providers.fliggy import browser_probe as fliggy_browser_probe
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -1141,6 +1143,100 @@ def test_ds14_destination_diagnostics_sanitized_and_downstream_unchanged() -> No
     ]
     assert "destination_stability_diagnostics" in sanitized["destination_commitment"]
     assert _verify_pre_submit_query_state(_query_state()).submit_allowed is True
+
+
+def test_hu5_01_stable_wrong_destination_write_blocks_before_suggestions() -> None:
+    commitment = _destination_commitment_result(
+        requested_destination="上海",
+        destination_control_ready=True,
+        typed_destination="杭州",
+        candidates=(),
+        suggestion_surface_present=False,
+        selected_candidate=None,
+        selection_method="none",
+        commit_readback="杭州",
+        failure_taxonomy="FORM_DESTINATION_MISMATCH",
+        readback_sequence=("杭州", "杭州"),
+        input_text_after_write="杭州",
+    )
+
+    diagnostics = commitment.destination_stability_diagnostics
+
+    assert commitment.commitment_status == "mismatch"
+    assert commitment.failure_taxonomy == "FORM_DESTINATION_MISMATCH"
+    assert diagnostics["d2_input_write"]["input_write_match"] is False
+    assert diagnostics["d3_suggestion_ready"]["suggestion_count"] == 0
+    assert diagnostics["root_cause_class"] == "DESTINATION_INPUT_WRITE_DRIFT"
+
+
+def test_hu5_02_destination_write_can_settle_to_shanghai_without_stale_failure() -> None:
+    commitment = _destination_commitment_result(
+        requested_destination="上海",
+        destination_control_ready=True,
+        typed_destination="上海",
+        candidates=(),
+        suggestion_surface_present=False,
+        selected_candidate=None,
+        selection_method="none",
+        commit_readback="上海",
+        failure_taxonomy="DESTINATION_SUGGESTION_NOT_READY",
+        readback_sequence=("杭州", "上海", "上海"),
+        input_text_after_write="上海",
+        extension_used=True,
+        extension_reason="destination_input_write_changed",
+    )
+
+    diagnostics = commitment.destination_stability_diagnostics
+
+    assert commitment.commitment_status == "confirmed"
+    assert commitment.failure_taxonomy is None
+    assert diagnostics["d2_input_write"]["input_write_match"] is True
+    assert diagnostics["d9_pre_submit_stability"]["stable_readback"] == "上海"
+    assert diagnostics["d9_pre_submit_stability"]["extension_reason"] == "destination_input_write_changed"
+
+
+def test_hu5_03_destination_write_repair_keeps_tdest_and_two_window_bound() -> None:
+    diagnostics = _destination_stability_diagnostics(
+        requested_destination="上海",
+        destination_control_ready=True,
+        input_text_after_write="上海",
+        candidates=(),
+        selected_candidate=None,
+        selection_method="none",
+        commit_readback="上海",
+        commitment_status="confirmed",
+        failure_taxonomy=None,
+        readback_sequence=("上海",),
+        extension_used=False,
+        extension_reason="none",
+    )
+
+    assert diagnostics["d9_pre_submit_stability"]["tdest_ms"] == 1500
+    assert diagnostics["d9_pre_submit_stability"]["max_observation_ms"] == 3000
+    assert (
+        fliggy_browser_probe._FLIGGY_DESTINATION_SUGGESTION_ATTEMPTS
+        * fliggy_browser_probe._FLIGGY_DESTINATION_SUGGESTION_WAIT_MS
+        * 2
+        <= 3000
+    )
+
+
+def test_hu5_04_extension_reasons_preserve_write_and_post_commit_evidence() -> None:
+    assert (
+        _combine_destination_extension_reasons("destination_input_write_changed", "destination_readback_changed")
+        == "destination_input_write_changed+destination_readback_changed"
+    )
+    assert _combine_destination_extension_reasons("none", "destination_readback_changed") == "destination_readback_changed"
+    assert _combine_destination_extension_reasons("none", "none") == "none"
+
+
+def test_hu5_05_repair_preserves_u2_pre_submit_route_date_strictness() -> None:
+    verification = _verify_pre_submit_query_state(
+        _query_state(origin="北京", destination="上海", form_origin="北京", form_destination="杭州", form_date="2026-09-14")
+    )
+
+    assert verification.submit_allowed is False
+    assert verification.failure_taxonomy == "FORM_ROUTE_MISMATCH"
 
 
 def test_ps01_q1_verified_and_q3_q4_q5_match_is_preserved() -> None:
