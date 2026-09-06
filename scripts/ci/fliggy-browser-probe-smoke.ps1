@@ -30,6 +30,17 @@ foreach ($Value in @($Origin, $Destination, $DepartureDate)) {
 if ($PlannedObservation -gt 0 -and [string]::IsNullOrWhiteSpace($OutputPath)) {
     throw "A planned diagnostic observation requires -OutputPath."
 }
+if ($PlannedObservation -gt 0) {
+    $ExpectedOrigin = -join ([char]0x5317, [char]0x4EAC)
+    $ExpectedDestination = -join ([char]0x4E0A, [char]0x6D77)
+    if (
+        $Origin -cne $ExpectedOrigin -or
+        $Destination -cne $ExpectedDestination -or
+        $DepartureDate -cne "2026-09-14"
+    ) {
+        throw "DIAG-U8 query identity preflight failed before provider access."
+    }
+}
 
 $ResolvedOutputPath = $null
 if (-not [string]::IsNullOrWhiteSpace($OutputPath)) {

@@ -3564,6 +3564,16 @@ def test_di8_13_unicode_and_output_preflight_precedes_planned_provider_access() 
         _live_observation_preflight(
             ProbeInput("北京", "上海", date(2026, 9, 14), planned_observation=1)
         )
+    with pytest.raises(ValueError, match="query identity preflight"):
+        _live_observation_preflight(
+            ProbeInput(
+                "����",
+                "�Ϻ�",
+                date(2026, 9, 14),
+                planned_observation=1,
+                evidence_output_path=str(output_path),
+            )
+        )
 
 
 def test_di8_14_planned_observation_is_not_a_retry_counter() -> None:

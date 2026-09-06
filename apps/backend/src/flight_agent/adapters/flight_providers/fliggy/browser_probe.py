@@ -1816,6 +1816,12 @@ def _live_observation_preflight(probe_input: ProbeInput) -> dict[str, Any]:
     output_path_absolute = output_path is not None and output_path.is_absolute()
     if not unicode_safe:
         raise ValueError("Unicode-safe live preflight failed before provider access")
+    if probe_input.planned_observation is not None and (
+        probe_input.origin_text != "\u5317\u4eac"
+        or probe_input.destination_text != "\u4e0a\u6d77"
+        or probe_input.departure_date != date(2026, 9, 14)
+    ):
+        raise ValueError("DIAG-U8 planned observation query identity preflight failed before provider access")
     if probe_input.planned_observation is not None and not output_path_absolute:
         raise ValueError("A planned diagnostic observation requires an absolute evidence output path")
     return {
