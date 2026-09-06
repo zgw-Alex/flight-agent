@@ -45,7 +45,9 @@ from flight_agent.adapters.flight_providers.fliggy.browser_probe import (
     _diag_u7_root_cause_class,
     _finalize_diagnostics,
     _fliggy_default_query_signature,
+    _public_date_commitment,
     _marker_transition_count,
+    _public_commit_state_classification,
     _resolve_destination_candidate,
     _result_state_extension_reason,
     _result_state_failure_taxonomy,
@@ -1179,7 +1181,7 @@ def test_hu5_01_stable_wrong_destination_write_blocks_before_suggestions() -> No
     assert diagnostics["root_cause_class"] == "DESTINATION_INPUT_WRITE_DRIFT"
 
 
-def test_hu5_02_destination_write_can_settle_to_shanghai_without_stale_failure() -> None:
+def test_hu5_02_destination_write_can_settle_to_shanghai_without_stale_failure_but_not_commit() -> None:
     commitment = _destination_commitment_result(
         requested_destination="上海",
         destination_control_ready=True,
@@ -1198,8 +1200,8 @@ def test_hu5_02_destination_write_can_settle_to_shanghai_without_stale_failure()
 
     diagnostics = commitment.destination_stability_diagnostics
 
-    assert commitment.commitment_status == "confirmed"
-    assert commitment.failure_taxonomy is None
+    assert commitment.commitment_status == "insufficient"
+    assert commitment.failure_taxonomy == "DESTINATION_SUGGESTION_NOT_READY"
     assert diagnostics["d2_input_write"]["input_write_match"] is True
     assert diagnostics["d9_pre_submit_stability"]["stable_readback"] == "上海"
     assert diagnostics["d9_pre_submit_stability"]["extension_reason"] == "destination_input_write_changed"
@@ -2281,7 +2283,7 @@ def test_ru7_01_verified_public_submit_clicks_once_after_input_context_growth(mo
     async def fake_write(page: FakePage, probe_input: ProbeInput) -> dict[str, object]:
         assert probe_input.destination_text == "上海"
         context.pages.append(object())
-        return {"destination_commitment": {"commitment_status": "confirmed"}}
+        return _confirmed_public_write_diagnostics()
 
     async def fake_capture(page: FakePage, probe_input: ProbeInput) -> PublicSearchQueryState:
         return _query_state()
@@ -2324,7 +2326,7 @@ def test_ru7_02_verified_public_submit_does_not_click_when_q1_fails(monkeypatch)
         pages = [object()]
 
     async def fake_write(page: FakePage, probe_input: ProbeInput) -> dict[str, object]:
-        return {"destination_commitment": {"commitment_status": "confirmed"}}
+        return _confirmed_public_write_diagnostics()
 
     async def fake_capture(page: FakePage, probe_input: ProbeInput) -> PublicSearchQueryState:
         return _query_state(form_destination="杭州")
@@ -2643,7 +2645,7 @@ def test_du7_07_actual_public_click_remains_exactly_once(monkeypatch) -> None:
         pages = [object()]
 
     async def fake_write(page: FakePage, probe_input: ProbeInput) -> dict[str, object]:
-        return {"destination_commitment": {"commitment_status": "confirmed"}}
+        return _confirmed_public_write_diagnostics()
 
     async def fake_capture(page: FakePage, probe_input: ProbeInput) -> PublicSearchQueryState:
         return _query_state()
@@ -2677,7 +2679,7 @@ def test_du7_08_context_created_during_input_does_not_count_as_executed_submit(m
 
     async def fake_write(page: FakePage, probe_input: ProbeInput) -> dict[str, object]:
         context.pages.append(object())
-        return {"destination_commitment": {"commitment_status": "confirmed"}}
+        return _confirmed_public_write_diagnostics()
 
     async def fake_capture(page: FakePage, probe_input: ProbeInput) -> PublicSearchQueryState:
         return _query_state(form_date="2026-01-08")
@@ -2795,6 +2797,312 @@ def test_du7_18_live_capture_output_path_is_cwd_independent() -> None:
     assert "$OutputPath" in script
     assert "GetUnresolvedProviderPathFromPSPath" in script
     assert "Tee-Object -FilePath $ResolvedOutputPath" in script
+
+
+def test_ru8_01_confirmed_public_write_path_preserves_requested_query() -> None:
+    diagnostics = _confirmed_public_write_diagnostics()
+    diagnostics["pre_submit_query_state"] = _query_state().to_dict()
+    diagnostics["pre_submit_query_verification"] = _verify_pre_submit_query_state(_query_state()).to_dict()
+
+    assert _public_commit_state_classification(
+        diagnostics,
+        diagnostics["pre_submit_query_state"],
+        diagnostics["pre_submit_query_verification"],
+    ) is PublicQueryClassification.REQUESTED_QUERY
+
+
+def test_ru8_02_visible_destination_without_option_selection_is_not_commit_success() -> None:
+    commitment = _destination_commitment_result(
+        requested_destination="上海",
+        destination_control_ready=True,
+        typed_destination="上海",
+        candidates=(),
+        suggestion_surface_present=False,
+        selected_candidate=None,
+        selection_method="none",
+        commit_readback="上海",
+        failure_taxonomy="DESTINATION_SUGGESTION_NOT_READY",
+    )
+
+    assert commitment.commitment_status == "insufficient"
+    assert commitment.failure_taxonomy == "DESTINATION_SUGGESTION_NOT_READY"
+
+
+def test_ru8_03_visible_date_without_commit_action_is_not_commit_success() -> None:
+    commitment = _public_date_commitment(
+        requested_date="2026-09-14",
+        typed_date="2026-09-14",
+        commit_readback="2026-09-14",
+        action_performed=False,
+    )
+
+    assert commitment["commitment_status"] == "insufficient"
+    assert commitment["failure_taxonomy"] == "DATE_COMMIT_NOT_CONFIRMED"
+
+
+def test_ru8_04_destination_option_click_is_the_only_confirming_destination_action() -> None:
+    candidate = _destination_candidate("上海")
+    commitment = _destination_commitment_result(
+        requested_destination="上海",
+        destination_control_ready=True,
+        typed_destination="上海",
+        candidates=(candidate,),
+        suggestion_surface_present=True,
+        selected_candidate=candidate,
+        selection_method="click",
+        commit_readback="上海",
+        failure_taxonomy=None,
+    )
+
+    assert commitment.commitment_status == "confirmed"
+    assert commitment.destination_stability_diagnostics["d6_selection_action"]["selection_method"] == "click"
+
+
+def test_ru8_05_date_enter_commit_records_public_commit_evidence() -> None:
+    commitment = _public_date_commitment(
+        requested_date="2026-09-14",
+        typed_date="2026-09-14",
+        commit_readback="2026-09-14",
+        action_performed=True,
+    )
+
+    assert commitment["commitment_status"] == "confirmed"
+    assert commitment["selection_method"] == "keyboard_enter_after_public_date_fill"
+
+
+def test_ru8_06_q1_is_revalidated_after_public_commit_before_submit(monkeypatch) -> None:
+    class FakeButton:
+        def __init__(self, page: FakePage) -> None:
+            self.page = page
+
+        def nth(self, index: int) -> FakeButton:
+            return self
+
+        async def click(self) -> None:
+            self.page.clicks += 1
+
+    class FakePage:
+        def __init__(self) -> None:
+            self.clicks = 0
+
+        def locator(self, selector: str) -> FakeButton:
+            return FakeButton(self)
+
+    async def fake_write(page: FakePage, probe_input: ProbeInput) -> dict[str, object]:
+        return _confirmed_public_write_diagnostics()
+
+    async def fake_capture(page: FakePage, probe_input: ProbeInput) -> PublicSearchQueryState:
+        return _query_state(form_date="2026-01-08")
+
+    monkeypatch.setattr(fliggy_browser_probe, "_write_public_flight_search_fields", fake_write)
+    monkeypatch.setattr(fliggy_browser_probe, "_capture_public_search_query_state", fake_capture)
+
+    page = FakePage()
+    allowed, diagnostics = asyncio.run(_submit_verified_public_flight_search(_FakeContext(), page, ProbeInput("北京", "上海", date(2026, 9, 14))))
+
+    assert allowed is False
+    assert page.clicks == 0
+    assert diagnostics["pre_submit_query_verification"]["failure_taxonomy"] == "FORM_DATE_MISMATCH"
+
+
+def test_ru8_07_public_search_button_is_clicked_once_when_commit_and_q1_pass(monkeypatch) -> None:
+    class FakeButton:
+        def __init__(self, page: FakePage) -> None:
+            self.page = page
+
+        def nth(self, index: int) -> FakeButton:
+            return self
+
+        async def click(self) -> None:
+            self.page.clicks += 1
+
+    class FakePage:
+        def __init__(self) -> None:
+            self.clicks = 0
+
+        def locator(self, selector: str) -> FakeButton:
+            return FakeButton(self)
+
+    async def fake_write(page: FakePage, probe_input: ProbeInput) -> dict[str, object]:
+        return _confirmed_public_write_diagnostics()
+
+    async def fake_capture(page: FakePage, probe_input: ProbeInput) -> PublicSearchQueryState:
+        return _query_state()
+
+    monkeypatch.setattr(fliggy_browser_probe, "_write_public_flight_search_fields", fake_write)
+    monkeypatch.setattr(fliggy_browser_probe, "_capture_public_search_query_state", fake_capture)
+
+    page = FakePage()
+    allowed, diagnostics = asyncio.run(_submit_verified_public_flight_search(_FakeContext(), page, ProbeInput("北京", "上海", date(2026, 9, 14))))
+
+    assert allowed is True
+    assert page.clicks == 1
+    assert diagnostics["public_submit_button_clicked_once"] is True
+
+
+def test_ru8_08_input_stage_context_change_does_not_substitute_for_submit(monkeypatch) -> None:
+    async def fake_write(page: object, probe_input: ProbeInput) -> dict[str, object]:
+        context.pages.append(object())
+        return {"destination_commitment": {"commitment_status": "insufficient"}}
+
+    async def fake_capture(page: object, probe_input: ProbeInput) -> PublicSearchQueryState:
+        return _query_state()
+
+    context = _FakeContext()
+    monkeypatch.setattr(fliggy_browser_probe, "_write_public_flight_search_fields", fake_write)
+    monkeypatch.setattr(fliggy_browser_probe, "_capture_public_search_query_state", fake_capture)
+
+    allowed, diagnostics = asyncio.run(_submit_verified_public_flight_search(context, object(), ProbeInput("北京", "上海", date(2026, 9, 14))))
+
+    assert allowed is False
+    assert diagnostics["pre_submit_context_count_changed"] is True
+    assert diagnostics["submit_executed"] is False
+
+
+def test_ru8_09_default_query_remains_terminal_negative_evidence_for_q5() -> None:
+    handoff = _post_submit_handoff(route_match=False, date_match=False, context_match=False)
+    handoff.update(_classification_evidence(route=("北京", "杭州"), observed_date="2026-09-07", route_match=False, date_match=False))
+    diagnostics = _confirmed_public_write_diagnostics()
+    diagnostics.update(_post_submit_base_diagnostics())
+    diagnostics["acquired_at"] = "2026-09-06T08:00:00+00:00"
+
+    payload = _build_post_submit_query_state_diagnostics(diagnostics, handoff)
+
+    assert payload["diag_u7_c0_c8"]["c7_settled_result_classification"]["classification"]["classification"] == "DEFAULT_QUERY"
+    assert payload["q5_result_context"]["context_match"] is False
+
+
+def test_ru8_10_partial_query_remains_q5_fail() -> None:
+    handoff = _post_submit_handoff(route_match=True, date_match=False, context_match=False)
+    handoff.update(_classification_evidence(route=("北京", "上海"), observed_date="2026-09-07", route_match=True, date_match=False))
+
+    payload = _build_post_submit_query_state_diagnostics(_post_submit_base_diagnostics(), handoff)
+
+    assert payload["diag_u7_c0_c8"]["c7_settled_result_classification"]["classification"]["classification"] == "PARTIAL_QUERY"
+    assert payload["q5_result_context"]["context_match"] is False
+
+
+def test_ru8_11_stale_query_remains_q5_fail() -> None:
+    handoff = _post_submit_handoff(route_match=False, date_match=False, context_match=False)
+    handoff.update(_classification_evidence(route=("广州", "深圳"), observed_date="2026-01-08", route_match=False, date_match=False))
+
+    payload = _build_post_submit_query_state_diagnostics(_post_submit_base_diagnostics(), handoff)
+
+    assert payload["diag_u7_c0_c8"]["c7_settled_result_classification"]["classification"]["classification"] == "STALE_QUERY"
+    assert payload["q5_result_context"]["context_match"] is False
+
+
+def test_ru8_12_requested_result_context_selection_remains_deterministic() -> None:
+    correct = _result_context_candidate(
+        index=1,
+        url="https://sjipiao.fliggy.com/homeow/trip_flight_search.htm",
+        title="北京到上海机票预订",
+        identity=FliggyPageIdentity.FLIGHT_RESULT_CANDIDATE,
+        is_current=False,
+    )
+
+    assert choose_result_context_candidate((correct,)) == correct
+
+
+def test_ru8_13_context_replacement_successor_tracking_remains_available() -> None:
+    source = _result_context_candidate(
+        index=0,
+        url="https://www.fliggy.com/?tab=flight",
+        title="飞猪",
+        identity=FliggyPageIdentity.EXPECTED_FLIGHT_SEARCH,
+        is_current=True,
+        result_surface=False,
+    )
+    successor = _result_context_candidate(
+        index=1,
+        url="https://sjipiao.fliggy.com/homeow/trip_flight_search.htm",
+        title="北京到上海机票预订",
+        identity=FliggyPageIdentity.FLIGHT_RESULT_CANDIDATE,
+        is_current=False,
+    )
+
+    assert choose_result_context_candidate((source, successor)) == successor
+
+
+def test_ru8_14_requested_identity_is_comparison_only() -> None:
+    source = _fliggy_source_text()
+
+    assert "_q0_requested_query" in source
+    assert "write_verified_source_query" not in source
+    assert "route_url = " not in source
+
+
+def test_ru8_15_existing_d_p_h_c_diagnostics_remain_available() -> None:
+    payload = _build_post_submit_query_state_diagnostics(_post_submit_base_diagnostics(), _post_submit_handoff())
+
+    assert "diag_u4_p0_p7" in payload
+    assert "diag_u6_h0_h8" in payload
+    assert "diag_u7_c0_c8" in payload
+
+
+def test_ru8_16_existing_2t_and_retries_zero_are_preserved() -> None:
+    handoff = _post_submit_handoff()
+    handoff["result_state_base_window_ms"] = 5000
+    handoff["result_state_max_observation_ms"] = 10000
+    handoff["result_state_extension_used"] = True
+
+    payload = _diag_u6_h0_h8(_post_submit_base_diagnostics(), handoff)
+
+    assert payload["h5_initialization_transitions"]["base_window_ms"] == 5000
+    assert payload["h5_initialization_transitions"]["max_observation_ms"] == 10000
+    assert payload["h5_initialization_transitions"]["retries"] == 0
+
+
+def test_ru8_17_overlay_presence_does_not_trigger_improvised_interaction() -> None:
+    diagnostics = _post_submit_base_diagnostics()
+    diagnostics["search_form_readiness"] = {"overlay_evidence": ["location-permission:1"]}
+    payload = _diag_u6_h0_h8(diagnostics, _post_submit_handoff())
+
+    assert payload["public_overlay_evidence"]["permission_prompt_presence"] is True
+    assert payload["public_overlay_evidence"]["blocking_evidence"] == "not_proven"
+
+
+def test_ru8_18_no_forbidden_state_or_url_workaround() -> None:
+    source = _fliggy_source_text()
+
+    assert "localStorage" not in source
+    assert "sessionStorage" not in source
+    assert "document.cookie" not in source
+    assert "depCityName=北京&arrCityName=上海&depDate=2026-09-14" not in source
+
+
+def test_ru8_19_sanitization_prevents_sensitive_artifacts() -> None:
+    sanitized = sanitize_probe_payload({"token": "abc", "session_id": "xyz", "visible": "北京"})
+
+    assert sanitized["token"] == "[REDACTED]"
+    assert sanitized["session_id"] == "[REDACTED]"
+    assert sanitized["visible"] == "北京"
+
+
+def test_ru8_20_l1_l2_and_shared_contracts_are_untouched() -> None:
+    changed_files = {path.replace("\\", "/") for path in _tracked_diff_names()}
+
+    assert all("level2" not in path for path in changed_files)
+    assert not any(path.startswith("apps/backend/src/flight_agent/domain/") for path in changed_files)
+    assert not any(path.startswith("apps/backend/src/flight_agent/adapters/flight_providers/fliggy/mapper") for path in changed_files)
+
+
+def test_ru8_21_default_signature_remains_run_local_date_derived() -> None:
+    assert _fliggy_default_query_signature(date(2026, 9, 6))["departure_date"] == "2026-09-07"
+    assert _fliggy_default_query_signature(date(2026, 9, 13))["departure_date"] == "2026-09-14"
+
+
+def test_ru8_22_unestablished_public_commit_returns_blocker_not_false_pass() -> None:
+    classification = _public_commit_state_classification(
+        {
+            "destination_commitment": {"commitment_status": "insufficient"},
+            "date_commitment": {"commitment_status": "confirmed"},
+        },
+        _query_state().to_dict(),
+        _verify_pre_submit_query_state(_query_state()).to_dict(),
+    )
+
+    assert classification is PublicQueryClassification.PARTIAL_QUERY
 
 
 def test_hd6_01_h1_source_public_state_matches_q1_at_submit_boundary() -> None:
@@ -3502,6 +3810,11 @@ def _fliggy_source_text() -> str:
     ).read_text(encoding="utf-8")
 
 
+class _FakeContext:
+    def __init__(self) -> None:
+        self.pages = [object()]
+
+
 def _tracked_diff_names() -> tuple[str, ...]:
     result = subprocess.run(
         ["git", "diff", "--name-only"],
@@ -3522,7 +3835,25 @@ def _post_submit_base_diagnostics(*, submit_executed: bool = True) -> dict[str, 
         "pre_submit_query_state": _query_state().to_dict(),
         "pre_submit_query_verification": _verify_pre_submit_query_state(_query_state()).to_dict(),
         "destination_commitment": {"commitment_status": "confirmed", "failure_taxonomy": None},
+        "date_commitment": {
+            "commitment_status": "confirmed",
+            "failure_taxonomy": None,
+            "date_match": True,
+            "selection_method": "keyboard_enter_after_public_date_fill",
+        },
         "submit_executed": submit_executed,
+    }
+
+
+def _confirmed_public_write_diagnostics() -> dict[str, object]:
+    return {
+        "destination_commitment": {"commitment_status": "confirmed", "failure_taxonomy": None},
+        "date_commitment": {
+            "commitment_status": "confirmed",
+            "failure_taxonomy": None,
+            "date_match": True,
+            "selection_method": "keyboard_enter_after_public_date_fill",
+        },
     }
 
 

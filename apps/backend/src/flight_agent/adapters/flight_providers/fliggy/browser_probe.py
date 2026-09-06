@@ -2315,7 +2315,7 @@ def _parse_price_currency(raw_text: str | None) -> str | None:
 
 
 async def _write_public_flight_search_fields(page: Any, probe_input: ProbeInput) -> dict[str, Any]:
-    async def fill_input(selector: str, value: str, *, force: bool = False, press_enter: bool = True) -> None:
+    async def fill_input(selector: str, value: str, *, force: bool = False, press_enter: bool = True) -> str | None:
         field = page.locator(selector).nth(0)
         if force:
             await field.fill(value, force=True)
@@ -2325,12 +2325,21 @@ async def _write_public_flight_search_fields(page: Any, probe_input: ProbeInput)
         if press_enter:
             await page.keyboard.press("Enter")
         await page.wait_for_timeout(300)
+        return await _read_control_text(page, selector)
 
     await page.wait_for_selector(".rc-flight-searchbar input#form_depCity")
     await fill_input(".rc-flight-searchbar input#form_depCity", probe_input.origin_text)
-    await fill_input(".rc-flight-searchbar input#form_depDate", probe_input.departure_date.isoformat(), force=True)
+    date_readback = await fill_input(".rc-flight-searchbar input#form_depDate", probe_input.departure_date.isoformat(), force=True)
     destination_commitment = await _commit_public_destination(page, probe_input.destination_text)
-    return {"destination_commitment": destination_commitment.to_dict()}
+    return {
+        "destination_commitment": destination_commitment.to_dict(),
+        "date_commitment": _public_date_commitment(
+            requested_date=probe_input.departure_date.isoformat(),
+            typed_date=probe_input.departure_date.isoformat(),
+            commit_readback=date_readback,
+            action_performed=True,
+        ),
+    }
 
 
 async def _submit_public_flight_search(context: Any, page: Any, probe_input: ProbeInput) -> None:
@@ -2349,6 +2358,8 @@ async def _submit_verified_public_flight_search(context: Any, page: Any, probe_i
     verification = _verify_pre_submit_query_state(query_state)
     destination_commitment = write_diagnostics.get("destination_commitment")
     destination_committed = isinstance(destination_commitment, dict) and destination_commitment.get("commitment_status") == "confirmed"
+    date_commitment = write_diagnostics.get("date_commitment")
+    date_committed = isinstance(date_commitment, dict) and date_commitment.get("commitment_status") == "confirmed"
     diagnostics: dict[str, Any] = {
         **write_diagnostics,
         "pre_submit_query_state": query_state.to_dict(),
@@ -2356,7 +2367,7 @@ async def _submit_verified_public_flight_search(context: Any, page: Any, probe_i
         "page_count_before_submit": page_count_before_submit,
         "page_count_after_input_before_submit": page_count_after_input_before_submit,
         "pre_submit_context_count_changed": page_count_after_input_before_submit != page_count_before_submit,
-        "submit_allowed": verification.submit_allowed and destination_committed,
+        "submit_allowed": verification.submit_allowed and destination_committed and date_committed,
         "submit_executed": False,
         "public_submit_button_clicked_once": False,
     }
@@ -2659,8 +2670,10 @@ def _destination_commitment_status(
     failure_taxonomy: str | None,
 ) -> str:
     destination_match = _destination_readback_matches(readback, requested_destination)
-    if destination_match is True:
+    if destination_match is True and action_performed:
         return "confirmed"
+    if destination_match is True:
+        return "insufficient"
     if failure_taxonomy in {"DESTINATION_CONTROL_NOT_READY", "DESTINATION_INPUT_WRITE_FAILED", "DESTINATION_OPTION_SELECTION_FAILED"}:
         return "failed"
     if destination_match == "insufficient":
@@ -2676,6 +2689,37 @@ def _destination_readback_matches(readback: str | None, requested_destination: s
     if _is_destination_placeholder(readback):
         return False
     return _normalize_destination_label(requested_destination) in _normalize_destination_label(readback)
+
+
+def _public_date_commitment(
+    *,
+    requested_date: str,
+    typed_date: str | None,
+    commit_readback: str | None,
+    action_performed: bool,
+) -> dict[str, str | bool | None]:
+    date_match = commit_readback == requested_date
+    if date_match and action_performed:
+        status = "confirmed"
+        failure_taxonomy = None
+    elif date_match:
+        status = "insufficient"
+        failure_taxonomy = "DATE_COMMIT_NOT_CONFIRMED"
+    elif commit_readback:
+        status = "mismatch"
+        failure_taxonomy = "FORM_DATE_MISMATCH"
+    else:
+        status = "insufficient"
+        failure_taxonomy = "DATE_COMMIT_READBACK_MISSING"
+    return {
+        "requested_date": requested_date,
+        "typed_date": typed_date,
+        "selection_method": "keyboard_enter_after_public_date_fill" if action_performed else "none",
+        "commit_readback": commit_readback,
+        "date_match": date_match,
+        "commitment_status": status,
+        "failure_taxonomy": failure_taxonomy,
+    }
 
 
 def _destination_label_contains_requested(label: str, requested_destination: str) -> bool:
@@ -3407,6 +3451,7 @@ def _diag_u7_c0_c8(diagnostics: dict[str, Any], handoff_diagnostics: dict[str, A
     default_signature = _fliggy_default_query_signature(run_date)
     pre_submit_state = diagnostics.get("pre_submit_query_state")
     pre_submit_verification = diagnostics.get("pre_submit_query_verification")
+    public_commit_classification = _public_commit_state_classification(diagnostics, pre_submit_state, pre_submit_verification)
     candidates = tuple(handoff_diagnostics.get("candidate_pages") or ())
     samples = tuple(handoff_diagnostics.get("result_state_samples") or ())
     earliest_state = samples[0] if samples else None
@@ -3426,8 +3471,9 @@ def _diag_u7_c0_c8(diagnostics: dict[str, Any], handoff_diagnostics: dict[str, A
         },
         "c2_public_commit_state": {
             "checkpoint": "C2_PUBLIC_COMMIT_STATE",
-            "classification": PublicQueryClassification.UNKNOWN_QUERY.value,
-            "evidence": "public_commit_state_not_directly_exposed",
+            "classification": public_commit_classification.value,
+            "destination_commitment": diagnostics.get("destination_commitment"),
+            "date_commitment": diagnostics.get("date_commitment"),
         },
         "c3_immediate_pre_click_state": {
             "checkpoint": "C3_IMMEDIATE_PRE_CLICK_STATE",
@@ -3466,6 +3512,25 @@ def _diag_u7_c0_c8(diagnostics: dict[str, Any], handoff_diagnostics: dict[str, A
         },
         "provider_default_signature": default_signature,
     }
+
+
+def _public_commit_state_classification(
+    diagnostics: dict[str, Any],
+    pre_submit_state: Any,
+    pre_submit_verification: Any,
+) -> PublicQueryClassification:
+    destination_commitment = diagnostics.get("destination_commitment")
+    date_commitment = diagnostics.get("date_commitment")
+    destination_confirmed = isinstance(destination_commitment, dict) and destination_commitment.get("commitment_status") == "confirmed"
+    date_confirmed = isinstance(date_commitment, dict) and date_commitment.get("commitment_status") == "confirmed"
+    q1_verified = isinstance(pre_submit_verification, dict) and pre_submit_verification.get("submit_allowed") is True
+    if destination_confirmed and date_confirmed and q1_verified:
+        return PublicQueryClassification.REQUESTED_QUERY
+    if destination_confirmed or date_confirmed or q1_verified:
+        return PublicQueryClassification.PARTIAL_QUERY
+    if isinstance(pre_submit_state, dict) and any(pre_submit_state.get(key) for key in ("form_origin_readback", "form_destination_readback", "form_date_readback")):
+        return PublicQueryClassification.STALE_QUERY
+    return PublicQueryClassification.UNKNOWN_QUERY
 
 
 def _diag_u7_root_cause_class(diag_u7: dict[str, Any]) -> str:
