@@ -45,7 +45,21 @@ _SENSITIVE_KEY_FRAGMENTS = (
 _FLIGGY_DESTINATION_INPUT_SELECTOR = ".rc-flight-searchbar input#form_arrCity"
 _FLIGGY_DESTINATION_SUGGESTION_ATTEMPTS = 5
 _FLIGGY_DESTINATION_SUGGESTION_WAIT_MS = 300
+_FLIGGY_DESTINATION_CITY_SELECTOR_SURFACES = (
+    ".next-overlay-wrapper .citys-flight",
+    ".next-overlay-wrapper .city-list",
+    ".next-overlay-wrapper .J_CityList",
+    ".next-overlay-wrapper [class*='city-list']",
+    ".next-overlay-wrapper [class*='cityList']",
+)
 _FLIGGY_DESTINATION_SUGGESTION_SELECTORS = (
+    ".next-overlay-wrapper [data-city]",
+    ".next-overlay-wrapper [class*='city-item']",
+    ".next-overlay-wrapper .citys-flight li",
+    ".next-overlay-wrapper .city-list li",
+    ".next-overlay-wrapper .J_CityList li",
+    ".next-overlay-wrapper [class*='city-list'] li",
+    ".next-overlay-wrapper [class*='cityList'] li",
     ".next-overlay-wrapper [role='option']",
     ".next-overlay-wrapper .next-menu-item",
     ".next-overlay-wrapper li",
@@ -2480,10 +2494,11 @@ async def _commit_public_destination(
     observation_started = time.monotonic()
     control = page.locator(_FLIGGY_DESTINATION_INPUT_SELECTOR)
     destination_control_ready = False
+    initial_readback: str | None = None
     try:
         if await control.count() > 0:
             field = control.nth(0)
-            destination_control_ready = await field.is_visible() and await field.is_enabled() and await field.is_editable()
+            destination_control_ready = await field.is_visible() and await field.is_enabled()
         if not destination_control_ready:
             return _destination_commitment_result(
                 requested_destination=requested_destination,
@@ -2496,9 +2511,9 @@ async def _commit_public_destination(
                 commit_readback=None,
                 failure_taxonomy="DESTINATION_CONTROL_NOT_READY",
             )
-        write_result = await _write_destination_input_text(page, field, requested_destination)
-        input_text_after_write = write_result.input_text_after_write
-        typed_elapsed_ms = int((time.monotonic() - observation_started) * 1000)
+        initial_readback = await _read_control_text(page, _FLIGGY_DESTINATION_INPUT_SELECTOR)
+        await field.click()
+        selector_opened_elapsed_ms = int((time.monotonic() - observation_started) * 1000)
     except PlaywrightError:
         return _destination_commitment_result(
             requested_destination=requested_destination,
@@ -2508,36 +2523,20 @@ async def _commit_public_destination(
             suggestion_surface_present=False,
             selected_candidate=None,
             selection_method="none",
-            commit_readback=None,
-            failure_taxonomy="DESTINATION_INPUT_WRITE_FAILED",
-        )
-
-    if _destination_readback_matches(input_text_after_write, requested_destination) is not True:
-        return _destination_commitment_result(
-            requested_destination=requested_destination,
-            destination_control_ready=True,
-            typed_destination=input_text_after_write,
-            candidates=(),
-            suggestion_surface_present=False,
-            selected_candidate=None,
-            selection_method="none",
-            commit_readback=input_text_after_write,
-            failure_taxonomy="FORM_DESTINATION_MISMATCH",
-            readback_sequence=write_result.readback_sequence,
-            input_text_after_write=input_text_after_write,
-            extension_used=write_result.extension_used,
-            extension_reason=write_result.extension_reason,
+            commit_readback=initial_readback,
+            failure_taxonomy="DESTINATION_CITY_SELECTOR_OPEN_FAILED",
         )
 
     candidates, suggestion_snapshots = await _wait_for_destination_suggestion_candidates(
         page,
+        max_candidates=64,
         observation_started=observation_started,
     )
-    suggestion_surface_present = bool(candidates)
-    resolution = _resolve_destination_candidate(
+    suggestion_surface_present = bool(candidates) or await _public_destination_city_selector_surface_present(page)
+    resolution = _resolve_public_destination_city_candidate(
         candidates,
         requested_destination,
-        suggestion_surface_present=suggestion_surface_present,
+        selector_surface_present=suggestion_surface_present,
     )
     if resolution.selected_candidate is None:
         if candidates and len(suggestion_snapshots) < _FLIGGY_DESTINATION_SUGGESTION_ATTEMPTS:
@@ -2552,22 +2551,22 @@ async def _commit_public_destination(
         return _destination_commitment_result(
             requested_destination=requested_destination,
             destination_control_ready=True,
-            typed_destination=input_text_after_write,
+            typed_destination=None,
             candidates=candidates,
             suggestion_surface_present=suggestion_surface_present,
             selected_candidate=None,
             selection_method="none",
             commit_readback=commit_readback,
             failure_taxonomy=resolution.failure_taxonomy,
-            readback_sequence=write_result.readback_sequence + (commit_readback,),
-            input_text_after_write=input_text_after_write,
-            extension_used=write_result.extension_used,
-            extension_reason=write_result.extension_reason,
+            readback_sequence=(initial_readback, commit_readback),
+            input_text_after_write=None,
             suggestion_snapshots=suggestion_snapshots,
-            focused_elapsed_ms=0,
-            typed_elapsed_ms=typed_elapsed_ms,
+            focused_elapsed_ms=selector_opened_elapsed_ms,
+            typed_elapsed_ms=None,
             headed_pause_ms=int(headed_observation_pause_seconds * 1000),
             overlay_evidence=await _overlay_evidence(page),
+            city_selector_opened=suggestion_surface_present,
+            initial_destination_readback=initial_readback,
         )
 
     if headed_observation_pause_seconds > 0:
@@ -2579,22 +2578,22 @@ async def _commit_public_destination(
         return _destination_commitment_result(
             requested_destination=requested_destination,
             destination_control_ready=True,
-            typed_destination=requested_destination,
+            typed_destination=None,
             candidates=candidates,
             suggestion_surface_present=suggestion_surface_present,
             selected_candidate=resolution.selected_candidate,
             selection_method="click",
             commit_readback=await _read_control_text(page, _FLIGGY_DESTINATION_INPUT_SELECTOR),
             failure_taxonomy="DESTINATION_OPTION_SELECTION_FAILED",
-            readback_sequence=write_result.readback_sequence,
-            input_text_after_write=input_text_after_write,
-            extension_used=write_result.extension_used,
-            extension_reason=write_result.extension_reason,
+            readback_sequence=(initial_readback,),
+            input_text_after_write=None,
             suggestion_snapshots=suggestion_snapshots,
-            focused_elapsed_ms=0,
-            typed_elapsed_ms=typed_elapsed_ms,
+            focused_elapsed_ms=selector_opened_elapsed_ms,
+            typed_elapsed_ms=None,
             headed_pause_ms=int(headed_observation_pause_seconds * 1000),
             overlay_evidence=await _overlay_evidence(page),
+            city_selector_opened=suggestion_surface_present,
+            initial_destination_readback=initial_readback,
         )
 
     commit_readback = await _read_control_text(page, _FLIGGY_DESTINATION_INPUT_SELECTOR)
@@ -2606,25 +2605,24 @@ async def _commit_public_destination(
     return _destination_commitment_result(
         requested_destination=requested_destination,
         destination_control_ready=True,
-        typed_destination=input_text_after_write,
+        typed_destination=None,
         candidates=candidates,
         suggestion_surface_present=suggestion_surface_present,
         selected_candidate=resolution.selected_candidate,
         selection_method="click",
         commit_readback=commit_readback,
         failure_taxonomy=None,
-        readback_sequence=write_result.readback_sequence + tuple(stability["readback_sequence"]),
-        input_text_after_write=input_text_after_write,
-        extension_used=write_result.extension_used or bool(stability["extension_used"]),
-        extension_reason=_combine_destination_extension_reasons(
-            write_result.extension_reason,
-            str(stability["extension_reason"]),
-        ),
+        readback_sequence=(initial_readback,) + tuple(stability["readback_sequence"]),
+        input_text_after_write=None,
+        extension_used=bool(stability["extension_used"]),
+        extension_reason=str(stability["extension_reason"]),
         suggestion_snapshots=suggestion_snapshots,
-        focused_elapsed_ms=0,
-        typed_elapsed_ms=typed_elapsed_ms,
+        focused_elapsed_ms=selector_opened_elapsed_ms,
+        typed_elapsed_ms=None,
         headed_pause_ms=int(headed_observation_pause_seconds * 1000),
         overlay_evidence=await _overlay_evidence(page),
+        city_selector_opened=suggestion_surface_present,
+        initial_destination_readback=initial_readback,
     )
 
 
@@ -2646,7 +2644,7 @@ async def _write_destination_input_text(page: Any, field: Any, requested_destina
     )
 
 
-async def _collect_destination_suggestion_candidates(page: Any, *, max_candidates: int = 8) -> tuple[DestinationSuggestionCandidate, ...]:
+async def _collect_destination_suggestion_candidates(page: Any, *, max_candidates: int = 64) -> tuple[DestinationSuggestionCandidate, ...]:
     candidates: list[DestinationSuggestionCandidate] = []
     seen_labels: set[str] = set()
     for selector in _FLIGGY_DESTINATION_SUGGESTION_SELECTORS:
@@ -2681,6 +2679,15 @@ async def _collect_destination_suggestion_candidates(page: Any, *, max_candidate
             if len(candidates) >= max_candidates:
                 return tuple(candidates)
     return tuple(candidates)
+
+
+async def _public_destination_city_selector_surface_present(page: Any) -> bool:
+    for selector in _FLIGGY_DESTINATION_CITY_SELECTOR_SURFACES:
+        locator = page.locator(selector)
+        with suppress(PlaywrightError):
+            if await locator.count() > 0 and await locator.nth(0).is_visible():
+                return True
+    return False
 
 
 async def _wait_for_destination_suggestion_candidates(
@@ -2769,6 +2776,29 @@ def _resolve_destination_candidate(
     return DestinationOptionResolution(selected_candidate=None, failure_taxonomy="DESTINATION_OPTION_NOT_FOUND")
 
 
+def _resolve_public_destination_city_candidate(
+    candidates: tuple[DestinationSuggestionCandidate, ...],
+    requested_destination: str,
+    *,
+    selector_surface_present: bool,
+) -> DestinationOptionResolution:
+    if not selector_surface_present:
+        return DestinationOptionResolution(selected_candidate=None, failure_taxonomy="DESTINATION_CITY_SELECTOR_NOT_READY")
+    exact_matches = tuple(
+        candidate for candidate in candidates if _normalize_destination_label(candidate.label) == _normalize_destination_label(requested_destination)
+    )
+    matches = exact_matches or tuple(
+        candidate for candidate in candidates if _destination_label_contains_requested(candidate.label, requested_destination)
+    )
+    if len(matches) > 1:
+        return DestinationOptionResolution(selected_candidate=None, failure_taxonomy="DESTINATION_CITY_SELECTOR_AMBIGUOUS")
+    if not matches:
+        return DestinationOptionResolution(selected_candidate=None, failure_taxonomy="DESTINATION_CITY_NOT_FOUND")
+    if matches[0].selectable is False:
+        return DestinationOptionResolution(selected_candidate=None, failure_taxonomy="DESTINATION_CITY_CANDIDATE_NOT_SELECTABLE")
+    return DestinationOptionResolution(selected_candidate=matches[0], failure_taxonomy=None)
+
+
 def _destination_commitment_result(
     *,
     requested_destination: str,
@@ -2789,6 +2819,8 @@ def _destination_commitment_result(
     typed_elapsed_ms: int | None = None,
     headed_pause_ms: int = 0,
     overlay_evidence: tuple[str, ...] = (),
+    city_selector_opened: bool = False,
+    initial_destination_readback: str | None = None,
 ) -> DestinationCommitmentResult:
     destination_match = _destination_readback_matches(commit_readback, requested_destination)
     commitment_status = _destination_commitment_status(
@@ -2831,6 +2863,8 @@ def _destination_commitment_result(
         d9_stable_readback=stability_diagnostics["d9_pre_submit_stability"]["stable_readback"],
         headed_pause_ms=headed_pause_ms,
         overlay_evidence=overlay_evidence,
+        city_selector_opened=city_selector_opened,
+        initial_destination_readback=initial_destination_readback,
     )
     return DestinationCommitmentResult(
         requested_destination=requested_destination,
@@ -3144,6 +3178,8 @@ def _destination_suggestion_lifecycle_diagnostics(
     d9_stable_readback: str | None,
     headed_pause_ms: int,
     overlay_evidence: tuple[str, ...],
+    city_selector_opened: bool = False,
+    initial_destination_readback: str | None = None,
 ) -> dict[str, Any]:
     inventory: list[DestinationSuggestionCandidate] = []
     seen: set[tuple[str, int, str]] = set()
@@ -3169,6 +3205,18 @@ def _destination_suggestion_lifecycle_diagnostics(
         commitment_status=commitment_status,
     )
     return {
+        "u9_public_city_selector": {
+            "selector_opened": city_selector_opened,
+            "commit_evidence_source": "public_destination_city_selector",
+            "initial_destination_readback": initial_destination_readback,
+            "candidate_count": len(inventory),
+            "candidate_labels": [candidate.label for candidate in inventory],
+            "selected_candidate_label": selected_candidate.label if selected_candidate is not None else None,
+            "selection_method": selection_method,
+            "commit_readback": commit_readback,
+            "commitment_status": commitment_status,
+            "failure_taxonomy": failure_taxonomy,
+        },
         "classification": classification.value,
         "s0_focus": {
             "destination_control_ready": destination_control_ready,
