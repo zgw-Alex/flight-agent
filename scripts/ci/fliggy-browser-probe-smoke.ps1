@@ -21,6 +21,9 @@ if ([string]::IsNullOrWhiteSpace($DepartureDate)) {
 }
 
 $Utf8 = [System.Text.UTF8Encoding]::new($false)
+$env:PYTHONIOENCODING = "utf-8"
+$OutputEncoding = $Utf8
+[Console]::OutputEncoding = $Utf8
 foreach ($Value in @($Origin, $Destination, $DepartureDate)) {
     $RoundTrip = $Utf8.GetString($Utf8.GetBytes($Value))
     if ($RoundTrip -cne $Value) {
@@ -70,6 +73,7 @@ try {
     }
     if ($null -ne $ResolvedOutputPath) {
         $Args += @("--evidence-output-path", $ResolvedOutputPath)
+        $Args += @("--output-json", $ResolvedOutputPath)
     }
     if ($HeadedObservationPauseSeconds -gt 0) {
         $Args += @("--headed-observation-pause-seconds", "$HeadedObservationPauseSeconds")
@@ -78,7 +82,8 @@ try {
         uv run python @Args
     }
     else {
-        uv run python @Args *>&1 | Tee-Object -FilePath $ResolvedOutputPath
+        $ConsoleOutputPath = "$ResolvedOutputPath.console.log"
+        uv run python @Args *>&1 | Tee-Object -FilePath $ConsoleOutputPath
     }
     $ExitCode = $LASTEXITCODE
 }

@@ -2806,7 +2806,8 @@ def test_du7_18_live_capture_output_path_is_cwd_independent() -> None:
 
     assert "$OutputPath" in script
     assert "GetUnresolvedProviderPathFromPSPath" in script
-    assert "Tee-Object -FilePath $ResolvedOutputPath" in script
+    assert '"--output-json", $ResolvedOutputPath' in script
+    assert "Tee-Object -FilePath $ConsoleOutputPath" in script
 
 
 def test_ru8_01_confirmed_public_write_path_preserves_requested_query() -> None:
