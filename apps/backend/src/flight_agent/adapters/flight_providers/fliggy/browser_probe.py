@@ -3420,6 +3420,7 @@ async def _select_result_context_page(
         if attempt == max_attempts - 1:
             break
     query_diagnostics = _query_identity_diagnostics(selected, tuple(candidates))
+    stale_or_default_stabilized = _stable_stale_or_default_result_state(tuple(samples))
     root_cause_class = _diag_u4_root_cause(
         candidates=tuple(candidates),
         selected=selected,
@@ -3439,6 +3440,8 @@ async def _select_result_context_page(
         "result_state_extension_used": extension_used,
         "result_state_extension_reason": extension_reason,
         "result_state_samples": samples,
+        "stale_or_default_result_stabilized": stale_or_default_stabilized,
+        "query_specific_result_context_ready": selected is not None,
         "result_state_failure_taxonomy": None if selected is not None else result_state_failure_taxonomy,
         "diagnostic_root_cause_class": root_cause_class,
         "candidate_pages": [candidate.to_dict() for candidate in candidates],
@@ -3624,8 +3627,14 @@ def _marker_transition_count(samples: tuple[dict[str, Any], ...]) -> int:
 
 
 def _result_state_forward_progress(samples: list[dict[str, Any]]) -> bool:
+    if _stable_stale_or_default_result_state(tuple(samples)):
+        return False
     if len(samples) < 2:
-        return bool(samples and samples[-1].get("result_surface_present") is True)
+        return bool(
+            samples
+            and samples[-1].get("result_surface_present") is True
+            and samples[-1].get("failure_taxonomy") != "RESULT_STATE_STALE_OR_DEFAULT"
+        )
     previous = samples[-2]
     current = samples[-1]
     return (
@@ -3634,6 +3643,21 @@ def _result_state_forward_progress(samples: list[dict[str, Any]]) -> bool:
         or previous.get("result_surface_present") != current.get("result_surface_present")
         or previous.get("marker_signature") != current.get("marker_signature")
         or previous.get("document_ready_states") != current.get("document_ready_states")
+    )
+
+
+def _stable_stale_or_default_result_state(samples: tuple[dict[str, Any], ...]) -> bool:
+    if len(samples) < 2:
+        return False
+    previous = samples[-2]
+    current = samples[-1]
+    return (
+        previous.get("failure_taxonomy") == "RESULT_STATE_STALE_OR_DEFAULT"
+        and current.get("failure_taxonomy") == "RESULT_STATE_STALE_OR_DEFAULT"
+        and previous.get("result_surface_present") is True
+        and current.get("result_surface_present") is True
+        and previous.get("marker_signature") == current.get("marker_signature")
+        and current.get("alive_context_count", 0) > 0
     )
 
 
@@ -3693,7 +3717,7 @@ def _diag_u4_root_cause(
     if _has_correct_alternate_candidate(candidates):
         return "WRONG_PAGE_CONTEXT_SELECTED"
     if result_state_failure_taxonomy == "RESULT_STATE_STALE_OR_DEFAULT":
-        return "STALE_DEFAULT_CONTEXT_PERSISTED" if extension_used else "RESULT_STATE_SETTLING_GAP"
+        return "STALE_DEFAULT_CONTEXT_PERSISTED" if extension_used or _stable_stale_or_default_result_state(samples) else "RESULT_STATE_SETTLING_GAP"
     if result_state_failure_taxonomy in {
         "RESULT_STATE_QUERY_MISMATCH",
         "RESULT_STATE_ROUTE_MISMATCH",
