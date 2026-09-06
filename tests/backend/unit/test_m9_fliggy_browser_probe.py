@@ -36,6 +36,8 @@ from flight_agent.adapters.flight_providers.fliggy.browser_probe import (
     _diag_context_inventory,
     _diag_u4_p0_p7,
     _diag_u4_root_cause,
+    _diag_u6_h0_h8,
+    _diag_u6_root_cause_class,
     _finalize_diagnostics,
     _marker_transition_count,
     _resolve_destination_candidate,
@@ -2245,6 +2247,255 @@ def test_ru6_18_scope_remains_provider_local_without_downstream_or_shared_change
     assert "CandidateMerger" not in source
 
 
+def test_hd6_01_h1_source_public_state_matches_q1_at_submit_boundary() -> None:
+    payload = _diag_u6_h0_h8(_post_submit_base_diagnostics(), _post_submit_handoff())
+
+    assert payload["h0_verified_source_query"]["verified"] is True
+    assert payload["h1_source_public_state"]["matches_h0"] is True
+    assert _diag_u6_root_cause_class(payload) == "INCONCLUSIVE"
+
+
+def test_hd6_02_source_state_reset_on_submit_is_classified() -> None:
+    diagnostics = _post_submit_base_diagnostics()
+    diagnostics["pre_submit_query_state"] = _query_state(form_destination="杭州").to_dict()
+    diagnostics["pre_submit_query_verification"] = {"query_state_decision": "match"}
+    payload = _diag_u6_h0_h8(diagnostics, _post_submit_handoff())
+
+    assert payload["h2_submit_trigger"]["source_state_changed_at_submit"] is True
+    assert _diag_u6_root_cause_class(payload) == "SOURCE_STATE_RESET_ON_SUBMIT"
+
+
+def test_hd6_03_new_context_initial_state_already_stale_is_classified() -> None:
+    sample = _stale_default_sample(attempt=1)
+    handoff = _post_submit_handoff(route_match=False, date_match=False, context_match=False, mismatch_dimension="both")
+    handoff["result_state_samples"] = [sample]
+    handoff["result_state_failure_taxonomy"] = "RESULT_STATE_STALE_OR_DEFAULT"
+    handoff["stale_or_default_result_stabilized"] = True
+    payload = _diag_u6_h0_h8(_post_submit_base_diagnostics(), handoff)
+
+    assert payload["h6_stale_default_introduction"]["first_stale_default"]["attempt"] == 1
+    assert _diag_u6_root_cause_class(payload) == "NEW_CONTEXT_INITIALIZED_STALE"
+
+
+def test_hd6_04_loading_then_stale_default_is_classified_as_restoration() -> None:
+    loading = _result_context_candidate(
+        index=1,
+        url="https://sjipiao.fliggy.com/homeow/trip_flight_search.htm",
+        title="航班查询",
+        identity=FliggyPageIdentity.FLIGHT_RESULT_CANDIDATE,
+        is_current=False,
+    )
+    loading.search_plan_evidence["date_match"] = "insufficient"
+    first = _result_state_sample(
+        attempt=1,
+        window="base",
+        candidates=(loading,),
+        selected=None,
+        failure_taxonomy="RESULT_STATE_QUERY_UNREADABLE",
+    )
+    second = _stale_default_sample(attempt=2)
+    handoff = _post_submit_handoff(route_match=False, date_match=False, context_match=False, mismatch_dimension="both")
+    handoff["result_state_samples"] = [first, second]
+    handoff["result_state_failure_taxonomy"] = "RESULT_STATE_STALE_OR_DEFAULT"
+    payload = _diag_u6_h0_h8(_post_submit_base_diagnostics(), handoff)
+
+    assert payload["h6_stale_default_introduction"]["first_stale_default"]["attempt"] == 2
+    assert _diag_u6_root_cause_class(payload) == "STALE_DEFAULT_RESTORED_DURING_INITIALIZATION"
+
+
+def test_hd6_05_correct_context_exists_but_not_selected_is_classified() -> None:
+    correct = _result_context_candidate(
+        index=1,
+        url="https://sjipiao.fliggy.com/homeow/trip_flight_search.htm",
+        title="北京到上海机票预订",
+        identity=FliggyPageIdentity.FLIGHT_RESULT_CANDIDATE,
+        is_current=False,
+    )
+    sample = _result_state_sample(attempt=1, window="base", candidates=(correct,), selected=None, failure_taxonomy=None)
+    handoff = _post_submit_handoff(route_match=True, date_match=True, context_match=False, mismatch_dimension="none")
+    handoff["result_state_samples"] = [sample]
+    payload = _diag_u6_h0_h8(_post_submit_base_diagnostics(), handoff)
+
+    assert payload["h6_stale_default_introduction"]["first_correct_identity"]["attempt"] == 1
+    assert _diag_u6_root_cause_class(payload) == "CORRECT_CONTEXT_EXISTS_BUT_NOT_SELECTED"
+
+
+def test_hd6_06_correct_intermediate_context_replaced_stays_lifecycle_gap() -> None:
+    closed = _result_context_candidate(
+        index=1,
+        url="<unavailable>",
+        title="<unavailable>",
+        identity=FliggyPageIdentity.UNKNOWN,
+        is_current=False,
+        alive=False,
+    )
+
+    assert (
+        _diag_u4_root_cause(
+            candidates=(closed,),
+            selected=None,
+            result_state_failure_taxonomy="RESULT_TRANSITION_NOT_OBSERVED",
+            extension_used=False,
+            samples=(),
+        )
+        == "PAGE_CLOSED_OR_REPLACED_DURING_TRANSITION"
+    )
+
+
+def test_hd6_07_reader_observes_stale_context_while_correct_identity_exists() -> None:
+    correct_sample = _stale_default_sample(attempt=1)
+    correct_sample["route_match"] = True
+    correct_sample["date_match"] = True
+    correct_sample["result_surface_present"] = True
+    handoff = _post_submit_handoff(route_match=False, date_match=False, context_match=False, mismatch_dimension="both")
+    handoff["result_state_samples"] = [correct_sample]
+    handoff["result_state_failure_taxonomy"] = "RESULT_STATE_STALE_OR_DEFAULT"
+    payload = _diag_u6_h0_h8(_post_submit_base_diagnostics(), handoff)
+
+    assert _diag_u6_root_cause_class(payload) == "RESULT_STATE_READER_OBSERVES_WRONG_CONTEXT"
+
+
+def test_hd6_08_multiple_equally_plausible_contexts_remain_ambiguous_no_guess() -> None:
+    first = _result_context_candidate(
+        index=1,
+        url="https://sjipiao.fliggy.com/homeow/trip_flight_search.htm",
+        title="北京到上海机票预订",
+        identity=FliggyPageIdentity.FLIGHT_RESULT_CANDIDATE,
+        is_current=False,
+    )
+    second = _result_context_candidate(
+        index=2,
+        url="https://sjipiao.fliggy.com/alternate/trip_flight_search.htm",
+        title="北京到上海航班查询预订",
+        identity=FliggyPageIdentity.FLIGHT_RESULT_CANDIDATE,
+        is_current=False,
+    )
+
+    assert choose_result_context_candidate((first, second)) is None
+    assert (
+        _diag_u4_root_cause(
+            candidates=(first, second),
+            selected=None,
+            result_state_failure_taxonomy="SUBMIT_STATE_PROPAGATION_FAILED",
+            extension_used=False,
+            samples=(),
+        )
+        == "PAGE_CONTEXT_SELECTION_AMBIGUOUS"
+    )
+
+
+def test_hd6_09_modal_presence_alone_does_not_classify_blocking() -> None:
+    diagnostics = _post_submit_base_diagnostics()
+    diagnostics["search_form_readiness"] = {"overlay_evidence": ["modal:1"]}
+    payload = _diag_u6_h0_h8(diagnostics, _post_submit_handoff())
+
+    assert payload["public_overlay_evidence"]["modal_presence"] is True
+    assert payload["public_overlay_evidence"]["blocking_evidence"] == "not_proven"
+    assert _diag_u6_root_cause_class(payload) == "INCONCLUSIVE"
+
+
+def test_hd6_10_modal_demonstrably_preventing_initialization_has_root_vocabulary() -> None:
+    payload = _diag_u6_h0_h8(_post_submit_base_diagnostics(), _post_submit_handoff())
+    payload["public_overlay_evidence"]["blocking_evidence"] = "modal"
+
+    assert _diag_u6_root_cause_class(payload) == "MODAL_BLOCKS_QUERY_INITIALIZATION"
+
+
+def test_hd6_11_permission_prompt_presence_alone_does_not_classify_blocking() -> None:
+    diagnostics = _post_submit_base_diagnostics()
+    diagnostics["search_form_readiness"] = {"overlay_evidence": ["location-permission:1"]}
+    payload = _diag_u6_h0_h8(diagnostics, _post_submit_handoff())
+
+    assert payload["public_overlay_evidence"]["permission_prompt_presence"] is True
+    assert payload["public_overlay_evidence"]["blocking_evidence"] == "not_proven"
+    assert _diag_u6_root_cause_class(payload) == "INCONCLUSIVE"
+
+
+def test_hd6_12_permission_prompt_demonstrably_blocking_has_root_vocabulary() -> None:
+    payload = _diag_u6_h0_h8(_post_submit_base_diagnostics(), _post_submit_handoff())
+    payload["public_overlay_evidence"]["blocking_evidence"] = "permission"
+
+    assert _diag_u6_root_cause_class(payload) == "PERMISSION_PROMPT_BLOCKS_QUERY_INITIALIZATION"
+
+
+def test_hd6_13_20260108_stale_default_never_passes_requested_20260914() -> None:
+    stale = _result_context_candidate(
+        index=1,
+        url="https://sjipiao.fliggy.com/homeow/trip_flight_search.htm",
+        title="北京到上海机票预订",
+        identity=FliggyPageIdentity.FLIGHT_RESULT_CANDIDATE,
+        is_current=False,
+        date_conflict=True,
+    )
+    stale.search_plan_evidence["normalized_expected_date"] = "2026-09-14"
+    stale.search_plan_evidence["normalized_observed_date"] = "2026-01-08"
+    stale.search_plan_evidence["date_parse_status"] = "ambiguous"
+
+    assert choose_result_context_candidate((stale,)) is None
+    assert _result_state_failure_taxonomy((stale,), None) == "RESULT_STATE_STALE_OR_DEFAULT"
+
+
+def test_hd6_14_strict_q1_and_q5_remain_unchanged() -> None:
+    assert _verify_pre_submit_query_state(_query_state()).submit_allowed is True
+    mismatch = _build_post_submit_query_state_diagnostics(
+        _post_submit_base_diagnostics(),
+        _post_submit_handoff(route_match=False, date_match=False, context_match=False, mismatch_dimension="both"),
+    )
+
+    assert mismatch["q5_result_context"]["context_match"] is False
+    assert mismatch["q5_result_context"]["query_identity_decision"] == "match"
+
+
+def test_hd6_15_diag_u6_does_not_use_private_network_or_session_evidence() -> None:
+    payload = _diag_u6_h0_h8(_post_submit_base_diagnostics(), _post_submit_handoff())
+    rendered = str(payload).lower()
+
+    assert "cookie" not in rendered
+    assert "authorization" not in rendered
+    assert "localstorage" not in rendered
+    assert "har" not in rendered
+    assert "signature" not in rendered
+
+
+def test_hd6_16_diag_u6_preserves_2t_and_retries_zero() -> None:
+    handoff = _post_submit_handoff()
+    handoff["result_state_base_window_ms"] = 5000
+    handoff["result_state_max_observation_ms"] = 10000
+    payload = _diag_u6_h0_h8(_post_submit_base_diagnostics(), handoff)
+
+    assert payload["h5_initialization_transitions"]["base_window_ms"] == 5000
+    assert payload["h5_initialization_transitions"]["max_observation_ms"] == 10000
+    assert payload["h5_initialization_transitions"]["retries"] == 0
+
+
+def test_hd6_17_p0_p7_and_d0_d9_diagnostics_are_preserved() -> None:
+    diagnostics = _post_submit_base_diagnostics()
+    diagnostics["destination_commitment"] = _destination_commitment_result(
+        requested_destination="上海",
+        destination_control_ready=True,
+        typed_destination="上海",
+        candidates=(_destination_candidate("上海"),),
+        suggestion_surface_present=True,
+        selected_candidate=_destination_candidate("上海"),
+        selection_method="click",
+        commit_readback="上海",
+        failure_taxonomy=None,
+    ).to_dict()
+    payload = _build_post_submit_query_state_diagnostics(diagnostics, _post_submit_handoff())
+
+    assert "diag_u4_p0_p7" in payload
+    assert diagnostics["destination_commitment"]["destination_stability_diagnostics"]["d9_pre_submit_stability"]["stable_readback"] == "上海"
+
+
+def test_hd6_18_final_diag_u6_output_is_sanitized() -> None:
+    handoff = _post_submit_handoff(observed_date_text="2026-01-08 Cookie: a=b", date_match=False, context_match=False)
+    payload = _build_post_submit_query_state_diagnostics(_post_submit_base_diagnostics(), handoff)
+    sanitized = sanitize_probe_payload({"payload": payload})["payload"]
+
+    assert sanitized["diag_u6_h0_h8"]["h8_strict_identity"]["context_match"] is False
+    assert "Cookie: a=b" not in str(sanitized)
+
+
 def test_navigation_source_ref_uses_stable_public_entry_and_sanitizes_tracking() -> None:
     result = ProbeRunResult(
         provider_identity="FLIGGY",
@@ -2709,6 +2960,27 @@ def _post_submit_handoff(
         "normalized_observed_date": "2026-09-14" if date_match else "2026-09-06",
         "date_parse_status": "parsed",
     }
+
+
+def _stale_default_sample(*, attempt: int) -> dict[str, object]:
+    stale = _result_context_candidate(
+        index=1,
+        url="https://sjipiao.fliggy.com/homeow/trip_flight_search.htm",
+        title="北京到上海机票预订",
+        identity=FliggyPageIdentity.FLIGHT_RESULT_CANDIDATE,
+        is_current=False,
+        date_conflict=True,
+    )
+    stale.search_plan_evidence["normalized_expected_date"] = "2026-09-14"
+    stale.search_plan_evidence["normalized_observed_date"] = "2026-01-08"
+    stale.search_plan_evidence["date_parse_status"] = "ambiguous"
+    return _result_state_sample(
+        attempt=attempt,
+        window="base",
+        candidates=(stale,),
+        selected=None,
+        failure_taxonomy="RESULT_STATE_STALE_OR_DEFAULT",
+    )
 
 
 def _result_context_candidate(

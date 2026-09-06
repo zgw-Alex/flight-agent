@@ -3084,6 +3084,7 @@ def _build_post_submit_query_state_diagnostics(diagnostics: dict[str, Any], hand
     first_mismatch = _first_post_submit_mismatch_checkpoint(q3_nav_state, q4_result_state, q5_result_context)
     mismatch_dimension = _post_submit_mismatch_dimension(q3_nav_state, q4_result_state, q5_result_context)
     stale_source = _stale_destination_taxonomy_source(destination_commitment, diagnostics)
+    diag_u6_h0_h8 = _diag_u6_h0_h8(diagnostics, handoff_diagnostics)
     return {
         "q0_requested": _q0_requested_query(pre_submit_state),
         "q1_pre_submit": _q1_pre_submit_query(pre_submit_state, pre_submit_verification),
@@ -3101,6 +3102,8 @@ def _build_post_submit_query_state_diagnostics(diagnostics: dict[str, Any], hand
         "stale_taxonomy_source": stale_source,
         "root_cause_class": _post_submit_root_cause_class(first_mismatch, stale_source, diagnostics),
         "diag_u4_p0_p7": _diag_u4_p0_p7(diagnostics, handoff_diagnostics),
+        "diag_u6_h0_h8": diag_u6_h0_h8,
+        "diag_u6_root_cause_class": _diag_u6_root_cause_class(diag_u6_h0_h8),
     }
 
 
@@ -3166,6 +3169,168 @@ def _diag_u4_p0_p7(diagnostics: dict[str, Any], handoff_diagnostics: dict[str, A
         },
         "p7_query_identity": _q4_result_state_init(handoff_diagnostics),
     }
+
+
+def _diag_u6_h0_h8(diagnostics: dict[str, Any], handoff_diagnostics: dict[str, Any]) -> dict[str, Any]:
+    pre_submit_state = diagnostics.get("pre_submit_query_state")
+    pre_submit_verification = diagnostics.get("pre_submit_query_verification")
+    samples = tuple(handoff_diagnostics.get("result_state_samples") or ())
+    context_candidates = handoff_diagnostics.get("context_candidates") or []
+    h0_query = _q0_requested_query(pre_submit_state)
+    h1_query = _q1_pre_submit_query(pre_submit_state, pre_submit_verification)
+    h2_state = {
+        "submit_action_observed": diagnostics.get("submit_executed") is True,
+        "method": "public_search_button" if diagnostics.get("submit_executed") is True else "none",
+        "source_state_after_trigger": h1_query["query"],
+        "source_state_changed_at_submit": _source_state_changed_at_submit(h0_query, h1_query["query"]),
+    }
+    h3_event = {
+        "page_count_before_submit": handoff_diagnostics.get("page_count_before_submit"),
+        "page_count_after_submit": handoff_diagnostics.get("page_count_after_submit"),
+        "popup_or_new_page_event": handoff_diagnostics.get("popup_or_new_page_event"),
+        "context_inventory": context_candidates,
+    }
+    return {
+        "h0_verified_source_query": {
+            "checkpoint": "H0_VERIFIED_SOURCE_QUERY",
+            "query": h0_query,
+            "verified": h1_query["verified"],
+        },
+        "h1_source_public_state": {
+            "checkpoint": "H1_SOURCE_PUBLIC_STATE",
+            "query": h1_query["query"],
+            "matches_h0": h1_query["verified"],
+        },
+        "h2_submit_trigger": {
+            "checkpoint": "H2_SUBMIT_TRIGGER",
+            **h2_state,
+        },
+        "h3_handoff_event": {
+            "checkpoint": "H3_HANDOFF_EVENT",
+            **h3_event,
+        },
+        "h4_new_context_initial_state": {
+            "checkpoint": "H4_NEW_CONTEXT_INITIAL_STATE",
+            "first_sample": samples[0] if samples else None,
+            "earliest_candidate_states": context_candidates,
+        },
+        "h5_initialization_transitions": {
+            "checkpoint": "H5_INITIALIZATION_TRANSITIONS",
+            "samples": list(samples),
+            "marker_transition_count": _marker_transition_count(samples),
+            "extension_used": handoff_diagnostics.get("result_state_extension_used"),
+            "extension_reason": handoff_diagnostics.get("result_state_extension_reason"),
+            "base_window_ms": handoff_diagnostics.get("result_state_base_window_ms"),
+            "max_observation_ms": handoff_diagnostics.get("result_state_max_observation_ms"),
+            "retries": 0,
+        },
+        "h6_stale_default_introduction": {
+            "checkpoint": "H6_STALE_DEFAULT_INTRODUCTION",
+            "first_stale_default": _first_sample_with_failure(samples, "RESULT_STATE_STALE_OR_DEFAULT"),
+            "first_correct_identity": _first_correct_identity_sample(samples),
+            "stale_or_default_result_stabilized": handoff_diagnostics.get("stale_or_default_result_stabilized"),
+        },
+        "h7_settled_context_state": {
+            "checkpoint": "H7_SETTLED_CONTEXT_STATE",
+            "settled_state_reached": handoff_diagnostics.get("settled_state_reached"),
+            "selected_context_id": handoff_diagnostics.get("selected_context_id"),
+            "failure_taxonomy": handoff_diagnostics.get("result_state_failure_taxonomy"),
+            "diagnostic_root_cause_class": handoff_diagnostics.get("diagnostic_root_cause_class"),
+            "context_match": handoff_diagnostics.get("context_match"),
+        },
+        "h8_strict_identity": {
+            "checkpoint": "H8_STRICT_IDENTITY",
+            "route_match": handoff_diagnostics.get("route_match"),
+            "date_match": handoff_diagnostics.get("date_match"),
+            "context_match": handoff_diagnostics.get("context_match"),
+            "query_identity_decision": handoff_diagnostics.get("query_identity_decision"),
+            "selection_reason": handoff_diagnostics.get("selection_reason"),
+            "mismatch_dimension": handoff_diagnostics.get("mismatch_dimension"),
+        },
+        "public_overlay_evidence": {
+            "modal_presence": _modal_presence_from_diagnostics(diagnostics),
+            "permission_prompt_presence": _permission_prompt_presence_from_diagnostics(diagnostics),
+            "blocking_evidence": "not_proven",
+        },
+    }
+
+
+def _source_state_changed_at_submit(requested: dict[str, Any], observed: dict[str, Any]) -> bool | str:
+    keys = ("origin", "destination", "departure_date")
+    if any(requested.get(key) is None or observed.get(key) is None for key in keys):
+        return "insufficient"
+    return any(requested.get(key) != observed.get(key) for key in keys)
+
+
+def _first_sample_with_failure(samples: tuple[dict[str, Any], ...], failure_taxonomy: str) -> dict[str, Any] | None:
+    return next((sample for sample in samples if sample.get("failure_taxonomy") == failure_taxonomy), None)
+
+
+def _first_correct_identity_sample(samples: tuple[dict[str, Any], ...]) -> dict[str, Any] | None:
+    return next(
+        (
+            sample
+            for sample in samples
+            if sample.get("selected_context_id") is not None
+            or (sample.get("route_match") is True and sample.get("date_match") is True and sample.get("result_surface_present") is True)
+        ),
+        None,
+    )
+
+
+def _modal_presence_from_diagnostics(diagnostics: dict[str, Any]) -> bool | str:
+    readiness = diagnostics.get("search_form_readiness")
+    if not isinstance(readiness, dict):
+        return "insufficient"
+    overlay = readiness.get("overlay_evidence")
+    if not isinstance(overlay, list):
+        return "insufficient"
+    return any("modal" in str(item).lower() or "dialog" in str(item).lower() for item in overlay)
+
+
+def _permission_prompt_presence_from_diagnostics(diagnostics: dict[str, Any]) -> bool | str:
+    readiness = diagnostics.get("search_form_readiness")
+    if not isinstance(readiness, dict):
+        return "insufficient"
+    overlay = readiness.get("overlay_evidence")
+    if not isinstance(overlay, list):
+        return "insufficient"
+    return any("permission" in str(item).lower() or "location" in str(item).lower() for item in overlay)
+
+
+def _diag_u6_root_cause_class(diag_u6: dict[str, Any]) -> str:
+    h0 = diag_u6["h0_verified_source_query"]
+    h1 = diag_u6["h1_source_public_state"]
+    h2 = diag_u6["h2_submit_trigger"]
+    h3 = diag_u6["h3_handoff_event"]
+    h4 = diag_u6["h4_new_context_initial_state"]
+    h6 = diag_u6["h6_stale_default_introduction"]
+    h7 = diag_u6["h7_settled_context_state"]
+    h8 = diag_u6["h8_strict_identity"]
+    overlay = diag_u6["public_overlay_evidence"]
+    if h0.get("verified") is not True or h1.get("matches_h0") is not True:
+        return "SOURCE_PUBLIC_STATE_NOT_COMMITTED"
+    if h2.get("source_state_changed_at_submit") is True:
+        return "SOURCE_STATE_RESET_ON_SUBMIT"
+    if overlay.get("blocking_evidence") == "modal":
+        return "MODAL_BLOCKS_QUERY_INITIALIZATION"
+    if overlay.get("blocking_evidence") == "permission":
+        return "PERMISSION_PROMPT_BLOCKS_QUERY_INITIALIZATION"
+    if h6.get("first_correct_identity") is not None and h8.get("context_match") is not True:
+        if h7.get("failure_taxonomy") == "RESULT_STATE_STALE_OR_DEFAULT":
+            return "RESULT_STATE_READER_OBSERVES_WRONG_CONTEXT"
+        return "CORRECT_CONTEXT_EXISTS_BUT_NOT_SELECTED"
+    first_sample = h4.get("first_sample")
+    if isinstance(first_sample, dict) and first_sample.get("failure_taxonomy") == "RESULT_STATE_STALE_OR_DEFAULT":
+        if first_sample.get("attempt") == 1:
+            return "NEW_CONTEXT_INITIALIZED_STALE"
+        return "STALE_DEFAULT_RESTORED_DURING_INITIALIZATION"
+    first_stale = h6.get("first_stale_default")
+    if first_stale is not None:
+        return "STALE_DEFAULT_RESTORED_DURING_INITIALIZATION"
+    if h3.get("popup_or_new_page_event") is True and h8.get("context_match") is not True:
+        return "SUBMIT_HANDOFF_QUERY_STATE_MISSING"
+    return "INCONCLUSIVE"
 
 
 def _q3_post_submit_nav_state(handoff_diagnostics: dict[str, Any]) -> dict[str, Any]:
