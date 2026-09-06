@@ -1408,6 +1408,7 @@ async def run_fliggy_level2_live_validation(
                 probe_input=probe_input,
                 page_error_type=PlaywrightError,
                 page_count_before_submit=page_count_before_submit,
+                page_count_after_input_before_submit=query_state_diagnostics.get("page_count_after_input_before_submit"),
                 wait_ms=min(5000, max(500, _remaining_ms(started, probe_input.overall_deadline_seconds) - 500)),
             )
             diagnostics["result_context_handoff"] = handoff_diagnostics
@@ -1778,7 +1779,9 @@ async def run_fliggy_browser_probe(probe_input: ProbeInput) -> ProbeRunResult:
         "submit_sequence": None,
         "result_context_handoff": {
             "page_count_before_submit": None,
+            "page_count_after_input_before_submit": None,
             "page_count_after_submit": None,
+            "pre_submit_context_count_changed": None,
             "popup_or_new_page_event": False,
             "candidate_pages": [],
             "selected_page_index": None,
@@ -1855,7 +1858,7 @@ async def run_fliggy_browser_probe(probe_input: ProbeInput) -> ProbeRunResult:
                     recorder.mark(BrowserProbeStage.SEARCH_INPUT, "public flight-search controls detected")
                     page_count_before_submit = len(context.pages)
                     diagnostics["result_context_handoff"]["page_count_before_submit"] = page_count_before_submit
-                    diagnostics["submit_sequence"] = "origin_enter,date_force_fill_enter,destination_enter,submit_fallback_if_needed"
+                    diagnostics["submit_sequence"] = "origin_enter,date_force_fill_enter,destination_enter,verified_public_search_button_once"
                     submit_allowed, query_state_diagnostics = await _submit_verified_public_flight_search(context, page, probe_input)
                     diagnostics.update(query_state_diagnostics)
                     diagnostics["search_input_succeeded"] = submit_allowed
@@ -1877,6 +1880,7 @@ async def run_fliggy_browser_probe(probe_input: ProbeInput) -> ProbeRunResult:
                             probe_input=probe_input,
                             page_error_type=PlaywrightError,
                             page_count_before_submit=page_count_before_submit,
+                            page_count_after_input_before_submit=query_state_diagnostics.get("page_count_after_input_before_submit"),
                             wait_ms=min(5000, max(500, _remaining_ms(started, probe_input.overall_deadline_seconds) - 500)),
                         )
                         diagnostics["result_context_handoff"] = handoff_diagnostics
@@ -2309,18 +2313,17 @@ async def _write_public_flight_search_fields(page: Any, probe_input: ProbeInput)
 
 
 async def _submit_public_flight_search(context: Any, page: Any, probe_input: ProbeInput) -> None:
-    page_count_before_submit = len(context.pages)
     write_diagnostics = await _write_public_flight_search_fields(page, probe_input)
     destination_commitment = write_diagnostics.get("destination_commitment")
     if not (isinstance(destination_commitment, dict) and destination_commitment.get("commitment_status") == "confirmed"):
         return
-    if len(context.pages) == page_count_before_submit:
-        await page.locator(".rc-flight-searchbar button.search-button").nth(0).click()
+    await page.locator(".rc-flight-searchbar button.search-button").nth(0).click()
 
 
 async def _submit_verified_public_flight_search(context: Any, page: Any, probe_input: ProbeInput) -> tuple[bool, dict[str, Any]]:
     page_count_before_submit = len(context.pages)
     write_diagnostics = await _write_public_flight_search_fields(page, probe_input)
+    page_count_after_input_before_submit = len(context.pages)
     query_state = await _capture_public_search_query_state(page, probe_input)
     verification = _verify_pre_submit_query_state(query_state)
     destination_commitment = write_diagnostics.get("destination_commitment")
@@ -2329,14 +2332,18 @@ async def _submit_verified_public_flight_search(context: Any, page: Any, probe_i
         **write_diagnostics,
         "pre_submit_query_state": query_state.to_dict(),
         "pre_submit_query_verification": verification.to_dict(),
+        "page_count_before_submit": page_count_before_submit,
+        "page_count_after_input_before_submit": page_count_after_input_before_submit,
+        "pre_submit_context_count_changed": page_count_after_input_before_submit != page_count_before_submit,
         "submit_allowed": verification.submit_allowed and destination_committed,
         "submit_executed": False,
+        "public_submit_button_clicked_once": False,
     }
     if diagnostics["submit_allowed"] is not True:
         return False, diagnostics
-    if len(context.pages) == page_count_before_submit:
-        await page.locator(".rc-flight-searchbar button.search-button").nth(0).click()
+    await page.locator(".rc-flight-searchbar button.search-button").nth(0).click()
     diagnostics["submit_executed"] = True
+    diagnostics["public_submit_button_clicked_once"] = True
     return True, diagnostics
 
 
@@ -3186,6 +3193,8 @@ def _diag_u6_h0_h8(diagnostics: dict[str, Any], handoff_diagnostics: dict[str, A
     }
     h3_event = {
         "page_count_before_submit": handoff_diagnostics.get("page_count_before_submit"),
+        "page_count_after_input_before_submit": handoff_diagnostics.get("page_count_after_input_before_submit"),
+        "pre_submit_context_count_changed": handoff_diagnostics.get("pre_submit_context_count_changed"),
         "page_count_after_submit": handoff_diagnostics.get("page_count_after_submit"),
         "popup_or_new_page_event": handoff_diagnostics.get("popup_or_new_page_event"),
         "context_inventory": context_candidates,
@@ -3542,6 +3551,7 @@ async def _select_result_context_page(
     page_error_type: type[Exception],
     page_count_before_submit: int,
     wait_ms: int,
+    page_count_after_input_before_submit: Any = None,
 ) -> tuple[Any, dict[str, Any]]:
     selected: ResultContextCandidate | None = None
     candidates: list[ResultContextCandidate] = []
@@ -3595,6 +3605,11 @@ async def _select_result_context_page(
     )
     diagnostics = {
         "page_count_before_submit": page_count_before_submit,
+        "page_count_after_input_before_submit": page_count_after_input_before_submit,
+        "pre_submit_context_count_changed": (
+            isinstance(page_count_after_input_before_submit, int)
+            and page_count_after_input_before_submit != page_count_before_submit
+        ),
         "page_count_after_submit": len(pages),
         "popup_or_new_page_event": len(pages) > 1,
         "result_state_sampling_attempts": len(samples),

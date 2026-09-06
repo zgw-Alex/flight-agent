@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import time
 from datetime import UTC, date, datetime
 from pathlib import Path
@@ -48,6 +49,7 @@ from flight_agent.adapters.flight_providers.fliggy.browser_probe import (
     _result_state_sample,
     _settled_state_reached,
     _stable_stale_or_default_result_state,
+    _submit_verified_public_flight_search,
     _StageRecorder,
     _verify_pre_submit_query_state,
     assess_dom_coverage,
@@ -2245,6 +2247,338 @@ def test_ru6_18_scope_remains_provider_local_without_downstream_or_shared_change
     assert "_stable_stale_or_default_result_state" in source
     assert "CommonNormalizer" not in source
     assert "CandidateMerger" not in source
+
+
+def test_ru7_01_verified_public_submit_clicks_once_after_input_context_growth(monkeypatch) -> None:
+    class FakeButton:
+        def __init__(self, page: FakePage) -> None:
+            self.page = page
+
+        def nth(self, index: int) -> FakeButton:
+            assert index == 0
+            return self
+
+        async def click(self) -> None:
+            self.page.clicks += 1
+
+    class FakePage:
+        def __init__(self) -> None:
+            self.clicks = 0
+
+        def locator(self, selector: str) -> FakeButton:
+            assert selector == ".rc-flight-searchbar button.search-button"
+            return FakeButton(self)
+
+    class FakeContext:
+        def __init__(self) -> None:
+            self.pages = [object()]
+
+    async def fake_write(page: FakePage, probe_input: ProbeInput) -> dict[str, object]:
+        assert probe_input.destination_text == "上海"
+        context.pages.append(object())
+        return {"destination_commitment": {"commitment_status": "confirmed"}}
+
+    async def fake_capture(page: FakePage, probe_input: ProbeInput) -> PublicSearchQueryState:
+        return _query_state()
+
+    context = FakeContext()
+    page = FakePage()
+    monkeypatch.setattr(fliggy_browser_probe, "_write_public_flight_search_fields", fake_write)
+    monkeypatch.setattr(fliggy_browser_probe, "_capture_public_search_query_state", fake_capture)
+
+    allowed, diagnostics = asyncio.run(_submit_verified_public_flight_search(context, page, ProbeInput("北京", "上海", date(2026, 9, 14))))
+
+    assert allowed is True
+    assert page.clicks == 1
+    assert diagnostics["submit_executed"] is True
+    assert diagnostics["public_submit_button_clicked_once"] is True
+    assert diagnostics["page_count_before_submit"] == 1
+    assert diagnostics["page_count_after_input_before_submit"] == 2
+    assert diagnostics["pre_submit_context_count_changed"] is True
+
+
+def test_ru7_02_verified_public_submit_does_not_click_when_q1_fails(monkeypatch) -> None:
+    class FakeButton:
+        def __init__(self, page: FakePage) -> None:
+            self.page = page
+
+        def nth(self, index: int) -> FakeButton:
+            return self
+
+        async def click(self) -> None:
+            self.page.clicks += 1
+
+    class FakePage:
+        def __init__(self) -> None:
+            self.clicks = 0
+
+        def locator(self, selector: str) -> FakeButton:
+            return FakeButton(self)
+
+    class FakeContext:
+        pages = [object()]
+
+    async def fake_write(page: FakePage, probe_input: ProbeInput) -> dict[str, object]:
+        return {"destination_commitment": {"commitment_status": "confirmed"}}
+
+    async def fake_capture(page: FakePage, probe_input: ProbeInput) -> PublicSearchQueryState:
+        return _query_state(form_destination="杭州")
+
+    page = FakePage()
+    monkeypatch.setattr(fliggy_browser_probe, "_write_public_flight_search_fields", fake_write)
+    monkeypatch.setattr(fliggy_browser_probe, "_capture_public_search_query_state", fake_capture)
+
+    allowed, diagnostics = asyncio.run(_submit_verified_public_flight_search(FakeContext(), page, ProbeInput("北京", "上海", date(2026, 9, 14))))
+
+    assert allowed is False
+    assert page.clicks == 0
+    assert diagnostics["submit_executed"] is False
+    assert diagnostics["public_submit_button_clicked_once"] is False
+    assert diagnostics["pre_submit_query_verification"]["failure_taxonomy"] == "FORM_ROUTE_MISMATCH"
+
+
+def test_ru7_03_newest_page_heuristic_remains_insufficient() -> None:
+    correct_first = _result_context_candidate(
+        index=1,
+        url="https://sjipiao.fliggy.com/homeow/trip_flight_search.htm",
+        title="北京到上海机票预订",
+        identity=FliggyPageIdentity.FLIGHT_RESULT_CANDIDATE,
+        is_current=False,
+    )
+    stale_newest = _result_context_candidate(
+        index=2,
+        url="https://sjipiao.fliggy.com/homeow/trip_flight_search.htm",
+        title="北京到杭州机票预订",
+        identity=FliggyPageIdentity.FLIGHT_RESULT_CANDIDATE,
+        is_current=False,
+        route_conflict=True,
+        date_conflict=True,
+    )
+    stale_newest.search_plan_evidence["normalized_expected_date"] = "2026-09-14"
+    stale_newest.search_plan_evidence["normalized_observed_date"] = "2026-01-08"
+
+    assert choose_result_context_candidate((correct_first, stale_newest)) == correct_first
+
+
+def test_ru7_04_correct_deterministic_successor_can_be_followed() -> None:
+    source = _result_context_candidate(
+        index=0,
+        url="https://www.fliggy.com/?tab=flight",
+        title="飞机票查询-机票预订【飞猪旅行】",
+        identity=FliggyPageIdentity.EXPECTED_FLIGHT_SEARCH,
+        is_current=True,
+        result_surface=False,
+    )
+    successor = _result_context_candidate(
+        index=1,
+        url="https://sjipiao.fliggy.com/homeow/trip_flight_search.htm",
+        title="北京到上海航班查询 09月14日",
+        identity=FliggyPageIdentity.FLIGHT_RESULT_CANDIDATE,
+        is_current=False,
+    )
+
+    assert choose_result_context_candidate((source, successor)) == successor
+
+
+def test_ru7_05_ambiguous_successors_are_not_guessed() -> None:
+    first = _result_context_candidate(
+        index=1,
+        url="https://sjipiao.fliggy.com/homeow/trip_flight_search.htm",
+        title="北京到上海机票预订",
+        identity=FliggyPageIdentity.FLIGHT_RESULT_CANDIDATE,
+        is_current=False,
+    )
+    second = _result_context_candidate(
+        index=2,
+        url="https://sjipiao.fliggy.com/alternate/trip_flight_search.htm",
+        title="北京到上海航班查询预订",
+        identity=FliggyPageIdentity.FLIGHT_RESULT_CANDIDATE,
+        is_current=False,
+    )
+
+    assert choose_result_context_candidate((first, second)) is None
+
+
+def test_ru7_06_stale_default_20260108_never_passes_requested_20260914() -> None:
+    stale = _result_context_candidate(
+        index=1,
+        url="https://sjipiao.fliggy.com/homeow/trip_flight_search.htm",
+        title="北京到上海机票预订",
+        identity=FliggyPageIdentity.FLIGHT_RESULT_CANDIDATE,
+        is_current=False,
+        date_conflict=True,
+    )
+    stale.search_plan_evidence["normalized_expected_date"] = "2026-09-14"
+    stale.search_plan_evidence["normalized_observed_date"] = "2026-01-08"
+    stale.search_plan_evidence["date_parse_status"] = "ambiguous"
+
+    assert choose_result_context_candidate((stale,)) is None
+    assert _result_state_failure_taxonomy((stale,), None) == "RESULT_STATE_STALE_OR_DEFAULT"
+
+
+def test_ru7_07_all_stale_candidates_fail_explicitly() -> None:
+    stale = _result_context_candidate(
+        index=1,
+        url="https://sjipiao.fliggy.com/homeow/trip_flight_search.htm",
+        title="北京到上海机票预订",
+        identity=FliggyPageIdentity.FLIGHT_RESULT_CANDIDATE,
+        is_current=False,
+        date_conflict=True,
+    )
+    stale.search_plan_evidence["normalized_expected_date"] = "2026-09-14"
+    stale.search_plan_evidence["normalized_observed_date"] = "2026-01-08"
+    stale.search_plan_evidence["date_parse_status"] = "ambiguous"
+
+    assert _result_state_failure_taxonomy((stale,), None) == "RESULT_STATE_STALE_OR_DEFAULT"
+
+
+def test_ru7_08_stabilized_stale_context_does_not_extend_window() -> None:
+    stale = _stale_default_sample(attempt=1)
+
+    assert _stable_stale_or_default_result_state((stale, stale)) is True
+    assert _result_state_forward_progress([stale, stale]) is False
+
+
+def test_ru7_09_loading_then_query_correct_candidate_can_extend_once() -> None:
+    loading = _result_context_candidate(
+        index=1,
+        url="https://sjipiao.fliggy.com/homeow/trip_flight_search.htm",
+        title="航班查询",
+        identity=FliggyPageIdentity.FLIGHT_RESULT_CANDIDATE,
+        is_current=False,
+    )
+    loading.search_plan_evidence["date_match"] = "insufficient"
+    correct = _result_context_candidate(
+        index=1,
+        url="https://sjipiao.fliggy.com/homeow/trip_flight_search.htm",
+        title="北京到上海航班查询 09月14日",
+        identity=FliggyPageIdentity.FLIGHT_RESULT_CANDIDATE,
+        is_current=False,
+    )
+    first = _result_state_sample(attempt=1, window="base", candidates=(loading,), selected=None, failure_taxonomy="RESULT_STATE_QUERY_UNREADABLE")
+    second = _result_state_sample(attempt=2, window="base", candidates=(correct,), selected=correct, failure_taxonomy="RESULT_STATE_READY")
+
+    assert _result_state_forward_progress([first, second]) is True
+    assert _result_state_extension_reason([first, second]) == "route_date_marker_changed"
+
+
+def test_ru7_10_q1_strict_route_date_verification_preserved() -> None:
+    verification = _verify_pre_submit_query_state(_query_state())
+
+    assert verification.submit_allowed is True
+    assert verification.query_state_decision == "match"
+
+
+def test_ru7_11_q1_strict_destination_mismatch_blocks_submit() -> None:
+    verification = _verify_pre_submit_query_state(_query_state(form_destination="杭州"))
+
+    assert verification.submit_allowed is False
+    assert verification.failure_taxonomy == "FORM_ROUTE_MISMATCH"
+
+
+def test_ru7_12_q1_strict_date_mismatch_blocks_submit() -> None:
+    verification = _verify_pre_submit_query_state(_query_state(form_date="2026-01-08"))
+
+    assert verification.submit_allowed is False
+    assert verification.failure_taxonomy == "FORM_DATE_MISMATCH"
+
+
+def test_ru7_13_q5_requires_route_and_date_identity() -> None:
+    handoff = _post_submit_handoff(route_match=True, date_match=False, context_match=False)
+    diagnostics = _build_post_submit_query_state_diagnostics(_post_submit_base_diagnostics(), handoff)
+
+    assert diagnostics["q5_result_context"]["route_match"] is True
+    assert diagnostics["q5_result_context"]["date_match"] is False
+    assert diagnostics["q5_result_context"]["context_match"] is False
+
+
+def test_ru7_14_source_identity_remains_comparison_only_not_injected() -> None:
+    source = (
+        REPO_ROOT / "apps" / "backend" / "src" / "flight_agent" / "adapters" / "flight_providers" / "fliggy" / "browser_probe.py"
+    ).read_text(encoding="utf-8")
+
+    assert "_capture_public_search_query_state" in source
+    assert "write_verified_source_query" not in source
+    assert "inject" not in source.lower()
+
+
+def test_ru7_15_verified_submit_no_longer_uses_page_count_as_skip_gate() -> None:
+    source = (
+        REPO_ROOT / "apps" / "backend" / "src" / "flight_agent" / "adapters" / "flight_providers" / "fliggy" / "browser_probe.py"
+    ).read_text(encoding="utf-8")
+    function_body = source.split("async def _submit_verified_public_flight_search", 1)[1].split("async def _commit_public_destination", 1)[0]
+
+    assert "len(context.pages) == page_count_before_submit" not in function_body
+    assert "public_submit_button_clicked_once" in function_body
+
+
+def test_ru7_16_submit_sequence_documents_verified_public_button_once() -> None:
+    source = (
+        REPO_ROOT / "apps" / "backend" / "src" / "flight_agent" / "adapters" / "flight_providers" / "fliggy" / "browser_probe.py"
+    ).read_text(encoding="utf-8")
+
+    assert "verified_public_search_button_once" in source
+    assert "submit_fallback_if_needed" not in source
+
+
+def test_ru7_17_handoff_diagnostics_keep_input_before_submit_boundary() -> None:
+    handoff = _post_submit_handoff()
+    handoff["page_count_before_submit"] = 1
+    handoff["page_count_after_input_before_submit"] = 2
+    handoff["pre_submit_context_count_changed"] = True
+
+    payload = _diag_u6_h0_h8(_post_submit_base_diagnostics(), handoff)
+
+    assert payload["h3_handoff_event"]["page_count_before_submit"] == 1
+    assert payload["h3_handoff_event"]["page_count_after_input_before_submit"] == 2
+    assert payload["h3_handoff_event"]["pre_submit_context_count_changed"] is True
+    assert payload["h3_handoff_event"]["page_count_after_submit"] == handoff["page_count_after_submit"]
+
+
+def test_ru7_18_d0_d9_destination_commitment_path_is_unchanged() -> None:
+    result = _destination_commitment_result(
+        requested_destination="上海",
+        destination_control_ready=True,
+        typed_destination="上海",
+        candidates=(DestinationSuggestionCandidate(selector=".city", index=0, label="上海"),),
+        suggestion_surface_present=True,
+        selected_candidate=DestinationSuggestionCandidate(selector=".city", index=0, label="上海"),
+        selection_method="click",
+        commit_readback="上海",
+        failure_taxonomy=None,
+    )
+
+    assert result.commitment_status == "confirmed"
+    assert result.destination_stability_diagnostics["d9_pre_submit_stability"]["stable_readback"] == "上海"
+
+
+def test_ru7_19_h0_h8_diagnostics_remain_available() -> None:
+    payload = _diag_u6_h0_h8(_post_submit_base_diagnostics(), _post_submit_handoff())
+
+    assert set(payload) == {
+        "h0_verified_source_query",
+        "h1_source_public_state",
+        "h2_submit_trigger",
+        "h3_handoff_event",
+        "h4_new_context_initial_state",
+        "h5_initialization_transitions",
+        "h6_stale_default_introduction",
+        "h7_settled_context_state",
+        "h8_strict_identity",
+        "public_overlay_evidence",
+    }
+
+
+def test_ru7_20_scope_remains_fliggy_provider_local_without_shared_changes() -> None:
+    source = (
+        REPO_ROOT / "apps" / "backend" / "src" / "flight_agent" / "adapters" / "flight_providers" / "fliggy" / "browser_probe.py"
+    ).read_text(encoding="utf-8")
+
+    assert "_submit_verified_public_flight_search" in source
+    assert "CommonNormalizer" not in source
+    assert "CandidateMerger" not in source
+    assert "localStorage" not in source
+    assert "HAR" not in source
 
 
 def test_hd6_01_h1_source_public_state_matches_q1_at_submit_boundary() -> None:
