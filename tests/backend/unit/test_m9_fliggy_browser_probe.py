@@ -4661,7 +4661,7 @@ def test_dr1_04_point_outside_input_inside_wrapper_is_classified() -> None:
 
 
 def test_dr1_05_standard_hit_test_uses_only_public_dom_summary() -> None:
-    source = _fliggy_source_text().split("async def _public_hit_test", 1)[1]
+    source = _fliggy_source_text().split("async def _public_element_summary", 1)[1]
     source = source.split("async def _diagnose_public_destination_hit_target", 1)[0]
     assert "document.elementFromPoint" in source
     assert all(field in source for field in ("tag", "role", "id", "class", "text"))
@@ -4714,8 +4714,9 @@ def test_dr1_09_human_annotation_requires_explicit_local_diagnostic_mode() -> No
 def test_dr1_10_controlled_click_targets_only_resolved_hit_element() -> None:
     body = _fliggy_source_text().split("async def _diagnose_public_destination_hit_target", 1)[1]
     body = body.split("async def _write_destination_input_text", 1)[0]
-    assert body.count("await hit_element.click()") == 1
-    assert 'hit_matches_input is False' in body
+    assert body.count("await region_target.click()") == 1
+    assert "region_target_matches_input is False" in body
+    assert "_public_hit_region_element(page, selected_region)" in body
 
 
 def test_dr1_11_no_ancestor_cascade_or_repeated_click_loop() -> None:

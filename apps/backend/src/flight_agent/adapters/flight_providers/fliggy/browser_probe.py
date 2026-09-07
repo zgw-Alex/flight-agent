@@ -3215,12 +3215,7 @@ async def _write_public_hit_region_visual_map(
     return {"raw_screenshot": str(raw_path), "annotated_screenshot": str(annotated_path)}
 
 
-async def _public_hit_test(page: Any, point: tuple[float, float]) -> tuple[Any | None, dict[str, Any] | None]:
-    handle = await page.evaluate_handle("([x, y]) => document.elementFromPoint(x, y)", list(point))
-    element = handle.as_element()
-    if element is None:
-        await handle.dispose()
-        return None, None
+async def _public_element_summary(element: Any) -> dict[str, Any]:
     summary = await element.evaluate(
         """node => {
             const input = document.querySelector('.rc-flight-searchbar input#form_arrCity');
@@ -3234,11 +3229,98 @@ async def _public_hit_test(page: Any, point: tuple[float, float]) -> tuple[Any |
             };
         }"""
     )
-    return element, {
+    return {
         **summary,
         "text": _truncate_diagnostic_text(str(summary.get("text") or "")),
         "class": _truncate_diagnostic_text(str(summary.get("class") or "")),
         "id": _truncate_diagnostic_text(str(summary.get("id") or "")),
+    }
+
+
+async def _public_hit_test(page: Any, point: tuple[float, float]) -> tuple[Any | None, dict[str, Any] | None]:
+    handle = await page.evaluate_handle("([x, y]) => document.elementFromPoint(x, y)", list(point))
+    element = handle.as_element()
+    if element is None:
+        await handle.dispose()
+        return None, None
+    return element, await _public_element_summary(element)
+
+
+async def _public_hit_region_element(page: Any, region: dict[str, Any] | None) -> Any | None:
+    if region is None:
+        return None
+    kind = region.get("kind")
+    if kind == "input":
+        handle = await page.evaluate_handle(
+            "() => document.querySelector('.rc-flight-searchbar input#form_arrCity')"
+        )
+    elif kind == "ancestor" and isinstance(region.get("depth"), int):
+        handle = await page.evaluate_handle(
+            """depth => {
+                let node = document.querySelector('.rc-flight-searchbar input#form_arrCity');
+                for (let index = 0; node && index < depth; index += 1) node = node.parentElement;
+                return node;
+            }""",
+            region["depth"],
+        )
+    else:
+        return None
+    element = handle.as_element()
+    if element is None:
+        await handle.dispose()
+    return element
+
+
+async def _public_city_panel_snapshot(page: Any, requested_destination: str) -> dict[str, Any]:
+    snapshot = await page.evaluate(
+        """requested => {
+            const visible = node => {
+                const rect = node.getBoundingClientRect();
+                const computed = getComputedStyle(node);
+                return rect.width > 0 && rect.height > 0
+                    && computed.display !== 'none' && computed.visibility !== 'hidden';
+            };
+            const markerSets = ['热门城市', 'ABCDE', 'FGHJ', 'KLMNP', 'QRSTW', 'XYZ'];
+            const surfaces = [...document.querySelectorAll('body *')].filter(node => {
+                if (!visible(node)) return false;
+                const text = String(node.innerText || '').replace(/\\s+/g, ' ').trim();
+                return markerSets.every(marker => text.includes(marker));
+            }).sort((left, right) => {
+                const a = left.getBoundingClientRect();
+                const b = right.getBoundingClientRect();
+                return a.width * a.height - b.width * b.height;
+            });
+            const surface = surfaces[0];
+            if (!surface) return {surface_present: false, candidate_labels: [], requested_visible: false};
+            const labels = [];
+            for (const node of surface.querySelectorAll('*')) {
+                if (!visible(node)) continue;
+                const text = String(node.innerText || '').replace(/\\s+/g, ' ').trim();
+                if (!/^[\\u4e00-\\u9fff]{2,8}$/.test(text)) continue;
+                if (['热门城市', '出发城市', '到达城市'].includes(text)) continue;
+                const childHasSameText = [...node.children].some(child => String(child.innerText || '').trim() === text);
+                if (!childHasSameText && !labels.includes(text)) labels.push(text);
+            }
+            return {
+                surface_present: true,
+                candidate_labels: labels.slice(0, 64),
+                requested_visible: labels.includes(requested)
+            };
+        }""",
+        requested_destination,
+    )
+    if not isinstance(snapshot, dict):
+        return {"surface_present": False, "candidate_labels": [], "requested_visible": False}
+    labels = snapshot.get("candidate_labels")
+    safe_labels = [
+        _truncate_diagnostic_text(str(label))
+        for label in labels
+        if isinstance(label, str)
+    ] if isinstance(labels, list) else []
+    return {
+        "surface_present": snapshot.get("surface_present") is True,
+        "candidate_labels": safe_labels,
+        "requested_visible": snapshot.get("requested_visible") is True,
     }
 
 
@@ -3267,40 +3349,63 @@ async def _diagnose_public_destination_hit_target(
         region_id=human_hit_region_id,
         point=human_hit_point,
     )
-    hit_element = None
+    selected_region = next(
+        (item for item in regions if item.get("region_id") == resolved_region_id),
+        None,
+    )
+    region_target = None
+    region_target_summary = None
+    if probe_mode == "differential_click" and selected_region is not None:
+        region_target = await _public_hit_region_element(page, selected_region)
+        if region_target is not None:
+            region_target_summary = await _public_element_summary(region_target)
     hit_summary = None
     if probe_mode == "differential_click" and resolved_point is not None:
-        hit_element, hit_summary = await _public_hit_test(page, resolved_point)
+        _, hit_summary = await _public_hit_test(page, resolved_point)
     hit_matches_input = hit_summary.get("matches_input") if isinstance(hit_summary, dict) else None
+    region_target_matches_input = (
+        region_target_summary.get("matches_input")
+        if isinstance(region_target_summary, dict)
+        else hit_matches_input
+    )
     differential_class = _classify_human_hit_differential(
         regions,
         point=resolved_point,
-        hit_matches_input=hit_matches_input if isinstance(hit_matches_input, bool) else None,
+        hit_matches_input=(
+            region_target_matches_input if isinstance(region_target_matches_input, bool) else None
+        ),
     )
     interaction_completed = False
     interaction_error: str | None = None
     samples: list[dict[str, Any]] = []
     if (
         probe_mode == "differential_click"
-        and hit_element is not None
-        and hit_matches_input is False
+        and region_target is not None
+        and region_target_matches_input is False
         and differential_class in {"HUMAN_POINT_OUTSIDE_INPUT", "HUMAN_TARGET_DIFFERS"}
     ):
         try:
-            await hit_element.click()
+            await region_target.click()
             interaction_completed = True
         except PlaywrightError as exc:
             interaction_error = type(exc).__name__
         for attempt in range(_FLIGGY_DESTINATION_SUGGESTION_ATTEMPTS):
             candidates = await _collect_destination_suggestion_candidates(page, max_candidates=64)
-            surface_present = bool(candidates) or await _public_destination_city_selector_surface_present(page)
+            panel = await _public_city_panel_snapshot(page, requested_destination)
+            surface_present = (
+                bool(candidates)
+                or await _public_destination_city_selector_surface_present(page)
+                or panel["surface_present"]
+            )
+            candidate_labels = panel["candidate_labels"] or [candidate.label for candidate in candidates]
             samples.append(
                 {
                     "sample_index": attempt,
                     "elapsed_ms": max(0, int((time.monotonic() - started) * 1000)),
                     "surface_present": surface_present,
-                    "candidate_count": len(candidates),
-                    "candidate_labels": [candidate.label for candidate in candidates],
+                    "candidate_count": len(candidate_labels),
+                    "candidate_labels": candidate_labels,
+                    "requested_candidate_visible": panel["requested_visible"],
                 }
             )
             if surface_present:
@@ -3332,13 +3437,16 @@ async def _diagnose_public_destination_hit_target(
         "b5_standard_hit_test": {"target": hit_summary},
         "b6_automated_target_compare": {
             "automated_target": "input#form_arrCity",
-            "hit_matches_input": hit_matches_input,
+            "human_region_target": region_target_summary,
+            "region_target_matches_input": region_target_matches_input,
+            "standard_hit_target_matches_input": hit_matches_input,
         },
         "b7_optional_controlled_click_probe": {
             "attempted": interaction_completed or interaction_error is not None,
             "interaction_completed": interaction_completed,
             "framework_error": interaction_error,
             "target_count": 1 if interaction_completed or interaction_error is not None else 0,
+            "target_region_id": resolved_region_id,
             "retries": 0,
         },
         "b8_selector_observe": {"samples": samples, "selector_opened": selector_opened},
