@@ -45,6 +45,10 @@ _SENSITIVE_KEY_FRAGMENTS = (
 )
 
 _FLIGGY_DESTINATION_INPUT_SELECTOR = ".rc-flight-searchbar input#form_arrCity"
+_FLIGGY_DESTINATION_WRAPPER_SELECTOR = (
+    ".rc-flight-searchbar .city-select-containder.select-city-container-arr "
+    "div.auto-input:has(input#form_arrCity)"
+)
 _FLIGGY_PUBLIC_DESTINATION_TARGET_SELECTOR = (
     ".rc-flight-searchbar input#form_arrCity,"
     ".rc-flight-searchbar input[name='arrCity'],"
@@ -482,11 +486,11 @@ class PreSubmitQueryVerification:
 @dataclass(frozen=True)
 class DestinationSuggestionCandidate:
     selector: str
-    index: int
+    index: int | None
     label: str
     selectable: bool | str = "unknown"
 
-    def to_dict(self) -> dict[str, str | int]:
+    def to_dict(self) -> dict[str, str | int | bool | None]:
         return {
             "selector": self.selector,
             "index": self.index,
@@ -2555,6 +2559,137 @@ async def _submit_verified_public_flight_search(context: Any, page: Any, probe_i
     return True, diagnostics
 
 
+def _destination_wrapper_binding_status(count: int) -> str:
+    if count == 1:
+        return "BOUND"
+    if count > 1:
+        return "AMBIGUOUS"
+    return "NOT_FOUND"
+
+
+async def _bind_public_destination_wrapper(page: Any) -> tuple[Any | None, dict[str, Any]]:
+    locator = page.locator(_FLIGGY_DESTINATION_WRAPPER_SELECTOR).filter(visible=True)
+    count = await locator.count()
+    status = _destination_wrapper_binding_status(count)
+    return (
+        locator if status == "BOUND" else None,
+        {
+            "selector": _FLIGGY_DESTINATION_WRAPPER_SELECTOR,
+            "visible_match_count": count,
+            "status": status,
+            "arrival_scoped": True,
+            "nested_input": "input#form_arrCity",
+        },
+    )
+
+
+async def _bind_public_city_selector_surface(page: Any) -> tuple[Any | None, dict[str, Any]]:
+    ambiguous: list[dict[str, Any]] = []
+    for selector in _FLIGGY_DESTINATION_CITY_SELECTOR_SURFACES:
+        locator = page.locator(selector).filter(visible=True)
+        count = await locator.count()
+        if count == 1:
+            return locator, {"selector": selector, "visible_match_count": 1, "status": "READY"}
+        if count > 1:
+            ambiguous.append({"selector": selector, "visible_match_count": count})
+    return None, {
+        "selector": None,
+        "visible_match_count": 0,
+        "status": "AMBIGUOUS" if ambiguous else "NOT_READY",
+        "ambiguous_matches": ambiguous,
+    }
+
+
+async def _wait_for_public_city_selector_surface(page: Any) -> tuple[Any | None, dict[str, Any]]:
+    last_binding: dict[str, Any] = {"status": "NOT_READY"}
+    for attempt in range(_FLIGGY_DESTINATION_SUGGESTION_ATTEMPTS):
+        surface, binding = await _bind_public_city_selector_surface(page)
+        last_binding = {**binding, "readiness_attempt": attempt + 1}
+        if surface is not None:
+            return surface, last_binding
+        if attempt < _FLIGGY_DESTINATION_SUGGESTION_ATTEMPTS - 1:
+            await page.wait_for_timeout(_FLIGGY_DESTINATION_SUGGESTION_WAIT_MS)
+    return None, last_binding
+
+
+_FLIGGY_CITY_GROUP_LABELS = frozenset(("热门城市", "ABCDE", "FGHJ", "KLMNP", "QRSTW", "XYZ"))
+_FLIGGY_NON_CITY_LABELS = _FLIGGY_CITY_GROUP_LABELS | frozenset(("出发城市", "到达城市"))
+
+
+def _is_public_city_candidate_label(label: str) -> bool:
+    normalized = _normalize_space(label)
+    return (
+        normalized not in _FLIGGY_NON_CITY_LABELS
+        and re.fullmatch(r"[\u4e00-\u9fff]{2,8}", normalized) is not None
+    )
+
+
+async def _enumerate_public_city_list_candidates(
+    surface: Any,
+    *,
+    surface_selector: str,
+    max_candidates: int = 64,
+) -> tuple[DestinationSuggestionCandidate, ...]:
+    candidates: list[DestinationSuggestionCandidate] = []
+    for item in await surface.locator("*").all():
+        if len(candidates) >= max_candidates:
+            break
+        try:
+            if not await item.is_visible():
+                continue
+            label = _normalize_space(await _read_locator_text(item) or "")
+            if not _is_public_city_candidate_label(label):
+                continue
+            child_has_same_text = await item.evaluate(
+                """node => [...node.children].some(
+                    child => String(child.innerText || '').replace(/\\s+/g, ' ').trim()
+                        === String(node.innerText || '').replace(/\\s+/g, ' ').trim()
+                )"""
+            )
+            if child_has_same_text:
+                continue
+            candidates.append(
+                DestinationSuggestionCandidate(
+                    selector=surface_selector,
+                    index=None,
+                    label=label,
+                    selectable=await item.is_enabled(),
+                )
+            )
+        except PlaywrightError:
+            continue
+    return tuple(candidates)
+
+
+async def _click_unique_public_city_candidate(
+    surface: Any,
+    candidate: DestinationSuggestionCandidate,
+) -> tuple[bool, str | None, int]:
+    locator = surface.get_by_text(candidate.label, exact=True).filter(visible=True)
+    match_count = await locator.count()
+    if match_count != 1:
+        failure = "DESTINATION_CITY_NOT_FOUND" if match_count == 0 else "DESTINATION_CITY_SELECTOR_AMBIGUOUS"
+        return False, failure, match_count
+    try:
+        await locator.click()
+    except PlaywrightError:
+        return False, "DESTINATION_OPTION_SELECTION_FAILED", 1
+    return True, None, 1
+
+
+async def _select_public_city_group_once(surface: Any, group_label: str) -> bool:
+    if group_label not in _FLIGGY_CITY_GROUP_LABELS or group_label == "热门城市":
+        return False
+    locator = surface.get_by_text(group_label, exact=True).filter(visible=True)
+    if await locator.count() != 1:
+        return False
+    try:
+        await locator.click()
+    except PlaywrightError:
+        return False
+    return True
+
+
 async def _commit_public_destination(
     page: Any,
     requested_destination: str,
@@ -2586,32 +2721,47 @@ async def _commit_public_destination(
             headed_observation_pause_seconds=headed_observation_pause_seconds,
         )
     observation_started = time.monotonic()
-    control = page.locator(_FLIGGY_DESTINATION_INPUT_SELECTOR)
-    destination_control_ready = False
     initial_readback: str | None = None
-    try:
-        if await control.count() > 0:
-            field = control.nth(0)
-            destination_control_ready = await field.is_visible() and await field.is_enabled()
-        if not destination_control_ready:
-            return _destination_commitment_result(
-                requested_destination=requested_destination,
-                destination_control_ready=False,
-                typed_destination=None,
-                candidates=(),
-                suggestion_surface_present=False,
-                selected_candidate=None,
-                selection_method="none",
-                commit_readback=None,
-                failure_taxonomy="DESTINATION_CONTROL_NOT_READY",
-            )
-        initial_readback = await _read_control_text(page, _FLIGGY_DESTINATION_INPUT_SELECTOR)
-        await field.click()
-        selector_opened_elapsed_ms = int((time.monotonic() - observation_started) * 1000)
-    except PlaywrightError:
+    wrapper, wrapper_binding = await _bind_public_destination_wrapper(page)
+    activation_diagnostics: dict[str, Any] = {
+        "u10_r1_wrapper_binding": wrapper_binding,
+        "u10_r2_wrapper_activation": {"standard_click_count": 0, "status": "NOT_ATTEMPTED"},
+        "u10_r3_selector_readiness": {"status": "NOT_OBSERVED"},
+        "u10_r4_city_enumeration": {"candidate_count": 0, "candidate_labels": []},
+        "u10_r5_city_resolution": {"match_count": 0, "selected_label": None},
+        "u10_r6_city_selection": {"standard_click_count": 0, "status": "NOT_ATTEMPTED"},
+    }
+    initial_readback = await _read_control_text(page, _FLIGGY_DESTINATION_INPUT_SELECTOR)
+    if wrapper is None:
         return _destination_commitment_result(
             requested_destination=requested_destination,
-            destination_control_ready=destination_control_ready,
+            destination_control_ready=False,
+            typed_destination=None,
+            candidates=(),
+            suggestion_surface_present=False,
+            selected_candidate=None,
+            selection_method="none",
+            commit_readback=initial_readback,
+            failure_taxonomy="DESTINATION_WRAPPER_NOT_READY",
+            initial_destination_readback=initial_readback,
+            activation_diagnostics=activation_diagnostics,
+        )
+
+    try:
+        await wrapper.click()
+        activation_diagnostics["u10_r2_wrapper_activation"] = {
+            "standard_click_count": 1,
+            "status": "CLICKED",
+        }
+        selector_opened_elapsed_ms = int((time.monotonic() - observation_started) * 1000)
+    except PlaywrightError:
+        activation_diagnostics["u10_r2_wrapper_activation"] = {
+            "standard_click_count": 1,
+            "status": "FAILED",
+        }
+        return _destination_commitment_result(
+            requested_destination=requested_destination,
+            destination_control_ready=True,
             typed_destination=None,
             candidates=(),
             suggestion_surface_present=False,
@@ -2619,26 +2769,63 @@ async def _commit_public_destination(
             selection_method="none",
             commit_readback=initial_readback,
             failure_taxonomy="DESTINATION_CITY_SELECTOR_OPEN_FAILED",
+            initial_destination_readback=initial_readback,
+            activation_diagnostics=activation_diagnostics,
         )
 
-    candidates, suggestion_snapshots = await _wait_for_destination_suggestion_candidates(
-        page,
-        max_candidates=64,
-        observation_started=observation_started,
+    surface, surface_binding = await _wait_for_public_city_selector_surface(page)
+    activation_diagnostics["u10_r3_selector_readiness"] = surface_binding
+    if surface is None:
+        commit_readback = await _read_control_text(page, _FLIGGY_DESTINATION_INPUT_SELECTOR)
+        return _destination_commitment_result(
+            requested_destination=requested_destination,
+            destination_control_ready=True,
+            typed_destination=None,
+            candidates=(),
+            suggestion_surface_present=False,
+            selected_candidate=None,
+            selection_method="none",
+            commit_readback=commit_readback,
+            failure_taxonomy="DESTINATION_CITY_SELECTOR_NOT_READY",
+            readback_sequence=(initial_readback, commit_readback),
+            focused_elapsed_ms=selector_opened_elapsed_ms,
+            overlay_evidence=await _overlay_evidence(page),
+            initial_destination_readback=initial_readback,
+            activation_diagnostics=activation_diagnostics,
+        )
+
+    surface_selector = str(surface_binding["selector"])
+    candidates = await _enumerate_public_city_list_candidates(
+        surface,
+        surface_selector=surface_selector,
     )
-    suggestion_surface_present = bool(candidates) or await _public_destination_city_selector_surface_present(page)
+    suggestion_snapshots = (
+        DestinationSuggestionSnapshot(
+            elapsed_ms=int((time.monotonic() - observation_started) * 1000),
+            candidates=candidates,
+        ),
+    )
+    activation_diagnostics["u10_r4_city_enumeration"] = {
+        "candidate_count": len(candidates),
+        "candidate_labels": [candidate.label for candidate in candidates],
+    }
     resolution = _resolve_public_destination_city_candidate(
         candidates,
         requested_destination,
-        selector_surface_present=suggestion_surface_present,
+        selector_surface_present=True,
     )
+    normalized_requested = _normalize_destination_label(requested_destination)
+    match_count = sum(
+        _normalize_destination_label(candidate.label) == normalized_requested for candidate in candidates
+    )
+    activation_diagnostics["u10_r5_city_resolution"] = {
+        "match_count": match_count,
+        "selected_label": (
+            resolution.selected_candidate.label if resolution.selected_candidate is not None else None
+        ),
+        "failure_taxonomy": resolution.failure_taxonomy,
+    }
     if resolution.selected_candidate is None:
-        if candidates and len(suggestion_snapshots) < _FLIGGY_DESTINATION_SUGGESTION_ATTEMPTS:
-            suggestion_snapshots += await _observe_destination_suggestion_tail(
-                page,
-                observation_started=observation_started,
-                attempts=_FLIGGY_DESTINATION_SUGGESTION_ATTEMPTS - len(suggestion_snapshots),
-            )
         if headed_observation_pause_seconds > 0:
             await page.wait_for_timeout(int(headed_observation_pause_seconds * 1000))
         commit_readback = await _read_control_text(page, _FLIGGY_DESTINATION_INPUT_SELECTOR)
@@ -2647,7 +2834,7 @@ async def _commit_public_destination(
             destination_control_ready=True,
             typed_destination=None,
             candidates=candidates,
-            suggestion_surface_present=suggestion_surface_present,
+            suggestion_surface_present=True,
             selected_candidate=None,
             selection_method="none",
             commit_readback=commit_readback,
@@ -2659,26 +2846,36 @@ async def _commit_public_destination(
             typed_elapsed_ms=None,
             headed_pause_ms=int(headed_observation_pause_seconds * 1000),
             overlay_evidence=await _overlay_evidence(page),
-            city_selector_opened=suggestion_surface_present,
+            city_selector_opened=True,
             initial_destination_readback=initial_readback,
+            activation_diagnostics=activation_diagnostics,
         )
 
     if headed_observation_pause_seconds > 0:
         await page.wait_for_timeout(int(headed_observation_pause_seconds * 1000))
-    try:
-        await page.locator(resolution.selected_candidate.selector).nth(resolution.selected_candidate.index).click()
+    clicked, click_failure, click_match_count = await _click_unique_public_city_candidate(
+        surface,
+        resolution.selected_candidate,
+    )
+    activation_diagnostics["u10_r6_city_selection"] = {
+        "standard_click_count": 1 if click_match_count == 1 else 0,
+        "status": "CLICKED" if clicked else "BLOCKED",
+        "visible_match_count": click_match_count,
+        "failure_taxonomy": click_failure,
+    }
+    if clicked:
         await page.wait_for_timeout(300)
-    except PlaywrightError:
+    else:
         return _destination_commitment_result(
             requested_destination=requested_destination,
             destination_control_ready=True,
             typed_destination=None,
             candidates=candidates,
-            suggestion_surface_present=suggestion_surface_present,
+            suggestion_surface_present=True,
             selected_candidate=resolution.selected_candidate,
             selection_method="click",
             commit_readback=await _read_control_text(page, _FLIGGY_DESTINATION_INPUT_SELECTOR),
-            failure_taxonomy="DESTINATION_OPTION_SELECTION_FAILED",
+            failure_taxonomy=click_failure,
             readback_sequence=(initial_readback,),
             input_text_after_write=None,
             suggestion_snapshots=suggestion_snapshots,
@@ -2686,8 +2883,9 @@ async def _commit_public_destination(
             typed_elapsed_ms=None,
             headed_pause_ms=int(headed_observation_pause_seconds * 1000),
             overlay_evidence=await _overlay_evidence(page),
-            city_selector_opened=suggestion_surface_present,
+            city_selector_opened=True,
             initial_destination_readback=initial_readback,
+            activation_diagnostics=activation_diagnostics,
         )
 
     commit_readback = await _read_control_text(page, _FLIGGY_DESTINATION_INPUT_SELECTOR)
@@ -2701,7 +2899,7 @@ async def _commit_public_destination(
         destination_control_ready=True,
         typed_destination=None,
         candidates=candidates,
-        suggestion_surface_present=suggestion_surface_present,
+        suggestion_surface_present=True,
         selected_candidate=resolution.selected_candidate,
         selection_method="click",
         commit_readback=commit_readback,
@@ -2715,8 +2913,9 @@ async def _commit_public_destination(
         typed_elapsed_ms=None,
         headed_pause_ms=int(headed_observation_pause_seconds * 1000),
         overlay_evidence=await _overlay_evidence(page),
-        city_selector_opened=suggestion_surface_present,
+        city_selector_opened=True,
         initial_destination_readback=initial_readback,
+        activation_diagnostics=activation_diagnostics,
     )
 
 
@@ -4034,7 +4233,7 @@ def _destination_suggestion_lifecycle_diagnostics(
     initial_destination_readback: str | None = None,
 ) -> dict[str, Any]:
     inventory: list[DestinationSuggestionCandidate] = []
-    seen: set[tuple[str, int, str]] = set()
+    seen: set[tuple[str, int | None, str]] = set()
     for snapshot in snapshots:
         for candidate in snapshot.candidates:
             key = (candidate.selector, candidate.index, _normalize_destination_label(candidate.label))

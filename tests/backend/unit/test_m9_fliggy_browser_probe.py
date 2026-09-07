@@ -4260,10 +4260,21 @@ def test_ru9_01_public_arrival_control_opens_selector_and_records_surface(monkey
         async def wait_for_timeout(self, milliseconds: int) -> None:
             assert milliseconds >= 0
 
-    candidate = DestinationSuggestionCandidate(".city", 0, "上海", selectable=True)
+    candidate = DestinationSuggestionCandidate(".city", None, "上海", selectable=True)
+    surface = object()
 
-    async def fake_wait(*args, **kwargs):
-        return (candidate,), (DestinationSuggestionSnapshot(1, (candidate,)),)
+    async def fake_bind_wrapper(page):
+        return FakeLocator(page, "arrival-wrapper"), {"status": "BOUND", "selector": "arrival-wrapper"}
+
+    async def fake_wait_surface(*args, **kwargs):
+        return surface, {"status": "READY", "selector": ".citys-flight"}
+
+    async def fake_enumerate(*args, **kwargs):
+        return (candidate,)
+
+    async def fake_click_city(_surface, _candidate):
+        page.clicks.append(".city")
+        return True, None, 1
 
     readbacks = iter(("杭州", "上海"))
 
@@ -4276,13 +4287,16 @@ def test_ru9_01_public_arrival_control_opens_selector_and_records_surface(monkey
     async def fake_overlay(*args, **kwargs):
         return ()
 
-    monkeypatch.setattr(fliggy_browser_probe, "_wait_for_destination_suggestion_candidates", fake_wait)
+    monkeypatch.setattr(fliggy_browser_probe, "_bind_public_destination_wrapper", fake_bind_wrapper)
+    monkeypatch.setattr(fliggy_browser_probe, "_wait_for_public_city_selector_surface", fake_wait_surface)
+    monkeypatch.setattr(fliggy_browser_probe, "_enumerate_public_city_list_candidates", fake_enumerate)
+    monkeypatch.setattr(fliggy_browser_probe, "_click_unique_public_city_candidate", fake_click_city)
     monkeypatch.setattr(fliggy_browser_probe, "_read_control_text", fake_read)
     monkeypatch.setattr(fliggy_browser_probe, "_observe_destination_readback_stability", fake_stability)
     monkeypatch.setattr(fliggy_browser_probe, "_overlay_evidence", fake_overlay)
     page = FakePage()
     result = asyncio.run(_commit_public_destination(page, "上海"))
-    assert page.clicks == [".rc-flight-searchbar input#form_arrCity", ".city"]
+    assert page.clicks == ["arrival-wrapper", ".city"]
     assert result.commitment_status == "confirmed"
     assert result.destination_suggestion_diagnostics["u9_public_city_selector"]["selector_opened"] is True
 
@@ -4327,7 +4341,7 @@ def test_ru9_08_stable_shanghai_readback_confirms_d9_commit() -> None:
 
 def test_ru9_09_input_triggered_suggestion_is_not_required() -> None:
     body = _fliggy_source_text().split("async def _commit_public_destination", 1)[1].split("async def _write_destination_input_text", 1)[0]
-    assert "_write_destination_input_text" not in body and "field.click()" in body
+    assert "_write_destination_input_text" not in body and "wrapper.click()" in body
 
 
 def test_ru9_10_visible_text_without_public_selection_is_insufficient() -> None:
@@ -4549,10 +4563,11 @@ def test_du10_15_headed_headless_difference_is_explicit() -> None:
     assert classify_destination_activation_mode((headed, headless)) == "MODE_DEPENDENT_SELECTOR_ACTIVATION_LOCALIZED"
 
 
-def test_du10_16_existing_u9_destination_commit_gate_is_unchanged() -> None:
+def test_du10_16_destination_commit_gate_is_replaced_only_by_authorized_u10_path() -> None:
     body = _fliggy_source_text().split("async def _commit_public_destination", 1)[1].split("def _bind_public_destination_target", 1)[0]
-    assert "await field.click()" in body
-    assert "await page.locator(resolution.selected_candidate.selector).nth(resolution.selected_candidate.index).click()" in body
+    assert "await wrapper.click()" in body
+    assert "_click_unique_public_city_candidate" in body
+    assert "await field.click()" not in body
 
 
 def test_du10_17_date_d0_d9_q1_q5_contracts_are_preserved() -> None:
@@ -4740,12 +4755,13 @@ def test_dr1_13_same_target_without_activation_is_classified() -> None:
     )
 
 
-def test_dr1_14_default_u9_interaction_path_is_not_replaced() -> None:
+def test_dr1_14_u10_replaces_only_default_path_and_preserves_diagnostics() -> None:
     body = _fliggy_source_text().split("async def _commit_public_destination", 1)[1]
     body = body.split("def _bind_public_destination_target", 1)[0]
     assert "if diagnostic_hit_target_probe is not None" in body
-    assert "await field.click()" in body
-    assert "resolution.selected_candidate.selector" in body
+    assert "if diagnostic_activation_probe is not None" in body
+    assert "await wrapper.click()" in body
+    assert "await field.click()" not in body
 
 
 def test_dr1_15_u9_destination_commit_gate_remains_unchanged() -> None:
@@ -4787,3 +4803,298 @@ def test_dr1_18_unicode_preflight_aborts_before_provider_access() -> None:
     )
     with pytest.raises(UnicodeError):
         _live_observation_preflight(query)
+
+
+def _u10_commit_source() -> str:
+    return _fliggy_source_text().split("async def _commit_public_destination", 1)[1].split(
+        "def _bind_public_destination_target", 1
+    )[0]
+
+
+class _FakeCityItem:
+    def __init__(self, label: str) -> None:
+        self.label = label
+
+    async def is_visible(self) -> bool:
+        return True
+
+    async def is_enabled(self) -> bool:
+        return True
+
+    async def evaluate(self, expression: str):
+        if "node.children" in expression:
+            return False
+        if "node.textContent" in expression:
+            return self.label
+        return None
+
+
+class _FakeCityDescendants:
+    def __init__(self, labels: tuple[str, ...]) -> None:
+        self.labels = labels
+
+    async def all(self) -> list[_FakeCityItem]:
+        return [_FakeCityItem(label) for label in self.labels]
+
+
+class _FakeCityMatch:
+    def __init__(self, count: int = 1) -> None:
+        self.match_count = count
+        self.click_count = 0
+
+    def filter(self, **kwargs):
+        assert kwargs == {"visible": True}
+        return self
+
+    async def count(self) -> int:
+        return self.match_count
+
+    async def click(self) -> None:
+        self.click_count += 1
+
+
+class _FakeCitySurface:
+    def __init__(self, labels: tuple[str, ...]) -> None:
+        self.labels = labels
+        self.match = _FakeCityMatch()
+
+    def locator(self, selector: str) -> _FakeCityDescendants:
+        assert selector == "*"
+        return _FakeCityDescendants(self.labels)
+
+    def get_by_text(self, label: str, *, exact: bool) -> _FakeCityMatch:
+        assert exact is True and label in self.labels
+        return self.match
+
+
+def test_ru10_01_unique_arrival_wrapper_binding_is_bound() -> None:
+    assert fliggy_browser_probe._destination_wrapper_binding_status(1) == "BOUND"
+
+
+def test_ru10_02_generic_first_auto_input_is_rejected_when_wrappers_coexist() -> None:
+    assert fliggy_browser_probe._destination_wrapper_binding_status(2) == "AMBIGUOUS"
+    assert fliggy_browser_probe._FLIGGY_DESTINATION_WRAPPER_SELECTOR != ".auto-input"
+
+
+def test_ru10_03_wrapper_activation_is_exactly_one_standard_public_click() -> None:
+    selector = fliggy_browser_probe._FLIGGY_DESTINATION_WRAPPER_SELECTOR
+    assert ".select-city-container-arr" in selector
+    assert "div.auto-input:has(input#form_arrCity)" in selector
+    body = _u10_commit_source()
+    assert body.count("await wrapper.click()") == 1
+    assert "page.mouse" not in body and "dispatchEvent" not in body
+
+
+def test_ru10_04_nested_input_is_not_used_as_u10_activation_path() -> None:
+    body = _u10_commit_source()
+    assert "await field.click()" not in body
+    assert "_FLIGGY_DESTINATION_INPUT_SELECTOR).click" not in body
+
+
+def test_ru10_05_selector_readiness_is_independent_of_candidate_count() -> None:
+    body = _fliggy_source_text().split("async def _bind_public_city_selector_surface", 1)[1].split(
+        "async def _wait_for_public_city_selector_surface", 1
+    )[0]
+    assert '"status": "READY"' in body
+    assert "candidate" not in body
+
+
+def test_ru10_06_missing_selector_surface_blocks_without_blind_click() -> None:
+    body = _u10_commit_source()
+    missing_branch = body.split("if surface is None:", 1)[1].split("surface_selector =", 1)[0]
+    assert 'failure_taxonomy="DESTINATION_CITY_SELECTOR_NOT_READY"' in missing_branch
+    assert "_click_unique_public_city_candidate" not in missing_branch
+
+
+def test_ru10_07_hot_city_visible_nodes_enumerate() -> None:
+    surface = _FakeCitySurface(("热门城市", "北京", "上海"))
+    candidates = asyncio.run(
+        fliggy_browser_probe._enumerate_public_city_list_candidates(
+            surface, surface_selector=".citys-flight"
+        )
+    )
+    assert tuple(candidate.label for candidate in candidates) == ("北京", "上海")
+
+
+def test_ru10_08_alphabet_group_visible_nodes_enumerate() -> None:
+    surface = _FakeCitySurface(("FGHJ", "广州", "杭州"))
+    candidates = asyncio.run(
+        fliggy_browser_probe._enumerate_public_city_list_candidates(
+            surface, surface_selector=".citys-flight"
+        )
+    )
+    assert tuple(candidate.label for candidate in candidates) == ("广州", "杭州")
+
+
+def test_ru10_09_group_headers_are_not_city_candidates() -> None:
+    assert all(
+        not fliggy_browser_probe._is_public_city_candidate_label(label)
+        for label in ("热门城市", "ABCDE", "FGHJ", "KLMNP", "QRSTW", "XYZ")
+    )
+
+
+def test_ru10_10_visible_shanghai_resolves_and_is_clicked_once() -> None:
+    candidate = DestinationSuggestionCandidate(".citys-flight", None, "上海", True)
+    resolution = _resolve_public_destination_city_candidate(
+        (candidate,), "上海", selector_surface_present=True
+    )
+    assert resolution.selected_candidate is candidate
+    surface = _FakeCitySurface(("上海",))
+    clicked, failure, match_count = asyncio.run(
+        fliggy_browser_probe._click_unique_public_city_candidate(surface, candidate)
+    )
+    assert (clicked, failure, match_count, surface.match.click_count) == (True, None, 1, 1)
+
+
+def test_ru10_11_non_shanghai_city_uses_same_resolution_path() -> None:
+    candidate = DestinationSuggestionCandidate(".citys-flight", None, "广州", True)
+    resolution = _resolve_public_destination_city_candidate(
+        (candidate,), "广州", selector_surface_present=True
+    )
+    assert resolution.selected_candidate is candidate
+
+
+def test_ru10_12_missing_city_blocks_without_blind_first_choice() -> None:
+    resolution = _resolve_public_destination_city_candidate(
+        (DestinationSuggestionCandidate(".citys-flight", None, "北京", True),),
+        "上海",
+        selector_surface_present=True,
+    )
+    assert resolution.failure_taxonomy == "DESTINATION_CITY_NOT_FOUND"
+
+
+def test_ru10_13_duplicate_city_match_is_ambiguous() -> None:
+    candidates = tuple(
+        DestinationSuggestionCandidate(".citys-flight", None, "上海", True) for _ in range(2)
+    )
+    resolution = _resolve_public_destination_city_candidate(
+        candidates, "上海", selector_surface_present=True
+    )
+    assert resolution.failure_taxonomy == "DESTINATION_CITY_SELECTOR_AMBIGUOUS"
+
+
+def test_ru10_14_whitespace_normalization_preserves_city_identity() -> None:
+    candidate = DestinationSuggestionCandidate(".citys-flight", None, " 上 海 ", True)
+    resolution = _resolve_public_destination_city_candidate(
+        (candidate,), "上海", selector_surface_present=True
+    )
+    assert resolution.selected_candidate is candidate
+
+
+def test_ru10_15_city_selection_has_no_nth_index_or_coordinate_fallback() -> None:
+    body = _u10_commit_source()
+    assert ".nth(" not in body
+    assert "selected_candidate.index" not in body
+    assert "page.mouse" not in body
+
+
+def test_ru10_16_group_selection_and_reenumeration_are_bounded() -> None:
+    body = _fliggy_source_text().split("async def _select_public_city_group_once", 1)[1].split(
+        "async def _commit_public_destination", 1
+    )[0]
+    assert "group_label not in _FLIGGY_CITY_GROUP_LABELS" in body
+    assert body.count("await locator.click()") == 1
+    surface = _FakeCitySurface(("FGHJ", "广州"))
+    assert asyncio.run(fliggy_browser_probe._select_public_city_group_once(surface, "FGHJ")) is True
+    candidates = asyncio.run(
+        fliggy_browser_probe._enumerate_public_city_list_candidates(
+            surface, surface_selector=".citys-flight"
+        )
+    )
+    assert surface.match.click_count == 1 and candidates[0].label == "广州"
+
+
+def test_ru10_17_destination_readback_mismatch_remains_blocking() -> None:
+    result = _destination_commitment_result(
+        requested_destination="上海",
+        destination_control_ready=True,
+        typed_destination=None,
+        candidates=(DestinationSuggestionCandidate(".citys-flight", None, "上海", True),),
+        suggestion_surface_present=True,
+        selected_candidate=DestinationSuggestionCandidate(".citys-flight", None, "上海", True),
+        selection_method="click",
+        commit_readback="杭州",
+        failure_taxonomy=None,
+    )
+    assert result.commitment_status != "confirmed"
+    assert result.failure_taxonomy == "FORM_DESTINATION_MISMATCH"
+
+
+def test_ru10_18_stable_matching_readback_confirms_d9_commitment() -> None:
+    candidate = DestinationSuggestionCandidate(".citys-flight", None, "上海", True)
+    result = _destination_commitment_result(
+        requested_destination="上海",
+        destination_control_ready=True,
+        typed_destination=None,
+        candidates=(candidate,),
+        suggestion_surface_present=True,
+        selected_candidate=candidate,
+        selection_method="click",
+        commit_readback="上海",
+        failure_taxonomy=None,
+    )
+    assert result.commitment_status == "confirmed"
+
+
+def test_ru10_19_public_date_commitment_gate_is_preserved() -> None:
+    result = _public_date_commitment(
+        requested_date="2026-09-14",
+        typed_date="2026-09-14",
+        commit_readback="2026-09-14",
+        action_performed=True,
+    )
+    assert result["commitment_status"] == "confirmed"
+
+
+def test_ru10_20_q1_pre_submit_query_gate_is_preserved() -> None:
+    assert _verify_pre_submit_query_state(_query_state()).submit_allowed is True
+
+
+def test_ru10_21_submit_cannot_execute_before_destination_date_and_q1() -> None:
+    body = _fliggy_source_text().split("async def _submit_verified_public_flight_search", 1)[1].split(
+        "async def _bind_public_destination_wrapper", 1
+    )[0]
+    assert body.count('await page.locator(".rc-flight-searchbar button.search-button").nth(0).click()') == 1
+    assert "verification.submit_allowed and destination_committed and date_committed" in body
+
+
+def test_ru10_22_public_submit_executes_at_most_once() -> None:
+    body = _fliggy_source_text().split("async def _submit_verified_public_flight_search", 1)[1].split(
+        "async def _bind_public_destination_wrapper", 1
+    )[0]
+    assert body.count('await page.locator(".rc-flight-searchbar button.search-button").nth(0).click()') == 1
+
+
+def test_ru10_23_q5_result_context_gate_is_preserved() -> None:
+    diagnostics = _build_post_submit_query_state_diagnostics(
+        _post_submit_base_diagnostics(), _post_submit_handoff()
+    )
+    assert diagnostics["q5_result_context"]["context_match"] is True
+
+
+def test_ru10_24_recovery_diff_is_provider_local_and_test_local() -> None:
+    assert set(_tracked_diff_names()) <= {
+        "apps/backend/src/flight_agent/adapters/flight_providers/fliggy/browser_probe.py",
+        "tests/backend/unit/test_m9_fliggy_browser_probe.py",
+    }
+
+
+def test_ru10_25_unicode_preflight_still_aborts_before_provider_access() -> None:
+    with pytest.raises(UnicodeError):
+        _live_observation_preflight(ProbeInput("北京", "\ud800", date(2026, 9, 14)))
+
+
+def test_ru10_26_forbidden_recovery_techniques_are_absent() -> None:
+    body = _u10_commit_source()
+    assert not any(
+        forbidden in body
+        for forbidden in (
+            "dispatchEvent",
+            "javascript:",
+            "page.mouse",
+            "selected_candidate.index",
+            'requested_destination == "上海"',
+            "sessionStorage",
+            "localStorage",
+        )
+    )
