@@ -8,6 +8,8 @@ canonical FlightSegment, Itinerary, Offer, or ProviderSearchResult objects.
 from __future__ import annotations
 
 import argparse
+import base64
+import html
 import json
 import re
 import time
@@ -206,6 +208,10 @@ class ProbeInput:
     evidence_output_path: str | None = None
     headed_observation_pause_seconds: float = 0.0
     destination_activation_probe: str | None = None
+    destination_hit_target_probe: str | None = None
+    human_hit_region_id: str | None = None
+    human_hit_point_x: float | None = None
+    human_hit_point_y: float | None = None
 
     def __post_init__(self) -> None:
         if self.origin_text.strip() == "":
@@ -222,6 +228,27 @@ class ProbeInput:
             raise ValueError("ProbeInput destination_activation_probe must be current_click or pointer_mouse")
         if self.destination_activation_probe is not None and self.planned_observation is None:
             raise ValueError("ProbeInput destination_activation_probe requires a planned observation")
+        if self.destination_hit_target_probe not in {None, "visual_map", "differential_click"}:
+            raise ValueError("ProbeInput destination_hit_target_probe must be visual_map or differential_click")
+        if self.destination_activation_probe is not None and self.destination_hit_target_probe is not None:
+            raise ValueError("ProbeInput diagnostic probe modes are mutually exclusive")
+        if self.destination_hit_target_probe is not None and self.planned_observation is None:
+            raise ValueError("ProbeInput destination_hit_target_probe requires a planned observation")
+        if self.destination_hit_target_probe == "visual_map" and self.headless:
+            raise ValueError("ProbeInput visual_map requires headed mode")
+        point_supplied = self.human_hit_point_x is not None or self.human_hit_point_y is not None
+        if point_supplied and (self.human_hit_point_x is None or self.human_hit_point_y is None):
+            raise ValueError("ProbeInput human hit point requires both x and y")
+        if self.human_hit_region_id is not None and point_supplied:
+            raise ValueError("ProbeInput human hit region and point are mutually exclusive")
+        if self.destination_hit_target_probe == "differential_click" and not (
+            self.human_hit_region_id is not None or point_supplied
+        ):
+            raise ValueError("ProbeInput differential_click requires a human-supplied region or point")
+        if self.destination_hit_target_probe != "differential_click" and (
+            self.human_hit_region_id is not None or point_supplied
+        ):
+            raise ValueError("ProbeInput human hit evidence requires differential_click")
 
     @classmethod
     def from_args(cls, args: argparse.Namespace) -> Self:
@@ -239,6 +266,10 @@ class ProbeInput:
             evidence_output_path=str(evidence_output.resolve()) if evidence_output is not None else None,
             headed_observation_pause_seconds=args.headed_observation_pause_seconds,
             destination_activation_probe=args.destination_activation_probe,
+            destination_hit_target_probe=args.destination_hit_target_probe,
+            human_hit_region_id=args.human_hit_region_id,
+            human_hit_point_x=args.human_hit_point_x,
+            human_hit_point_y=args.human_hit_point_y,
         )
 
 
@@ -2181,6 +2212,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--planned-observation", type=int)
     parser.add_argument("--headed-observation-pause-seconds", type=float, default=0.0)
     parser.add_argument("--destination-activation-probe", choices=("current_click", "pointer_mouse"))
+    parser.add_argument("--destination-hit-target-probe", choices=("visual_map", "differential_click"))
+    parser.add_argument("--human-hit-region-id")
+    parser.add_argument("--human-hit-point-x", type=float)
+    parser.add_argument("--human-hit-point-y", type=float)
     args = parser.parse_args(argv)
     if args.output_json is not None:
         args.output_json = args.output_json.resolve()
@@ -2460,6 +2495,14 @@ async def _write_public_flight_search_fields(page: Any, probe_input: ProbeInput)
             probe_input.headed_observation_pause_seconds if not probe_input.headless else 0.0
         ),
         diagnostic_activation_probe=probe_input.destination_activation_probe,
+        diagnostic_hit_target_probe=probe_input.destination_hit_target_probe,
+        evidence_output_path=probe_input.evidence_output_path,
+        human_hit_region_id=probe_input.human_hit_region_id,
+        human_hit_point=(
+            (probe_input.human_hit_point_x, probe_input.human_hit_point_y)
+            if probe_input.human_hit_point_x is not None and probe_input.human_hit_point_y is not None
+            else None
+        ),
         headless=probe_input.headless,
     )
     return {
@@ -2518,8 +2561,22 @@ async def _commit_public_destination(
     *,
     headed_observation_pause_seconds: float = 0.0,
     diagnostic_activation_probe: str | None = None,
+    diagnostic_hit_target_probe: str | None = None,
+    evidence_output_path: str | None = None,
+    human_hit_region_id: str | None = None,
+    human_hit_point: tuple[float, float] | None = None,
     headless: bool = True,
 ) -> DestinationCommitmentResult:
+    if diagnostic_hit_target_probe is not None:
+        return await _diagnose_public_destination_hit_target(
+            page,
+            requested_destination,
+            probe_mode=diagnostic_hit_target_probe,
+            evidence_output_path=evidence_output_path,
+            human_hit_region_id=human_hit_region_id,
+            human_hit_point=human_hit_point,
+            headed_observation_pause_seconds=headed_observation_pause_seconds,
+        )
     if diagnostic_activation_probe is not None:
         return await _diagnose_public_destination_activation(
             page,
@@ -2927,6 +2984,387 @@ async def _diagnose_public_destination_activation(
         city_selector_opened=any(sample["surface_present"] for sample in samples),
         initial_destination_readback=initial_readback,
         activation_diagnostics=activation_diagnostics,
+    )
+
+
+def _rect_contains_point(rect: dict[str, float], point: tuple[float, float]) -> bool:
+    x, y = point
+    return (
+        rect["x"] <= x <= rect["x"] + rect["width"]
+        and rect["y"] <= y <= rect["y"] + rect["height"]
+    )
+
+
+def _rect_contains_rect(outer: dict[str, float], inner: dict[str, float]) -> bool:
+    return (
+        outer["x"] <= inner["x"]
+        and outer["y"] <= inner["y"]
+        and outer["x"] + outer["width"] >= inner["x"] + inner["width"]
+        and outer["y"] + outer["height"] >= inner["y"] + inner["height"]
+    )
+
+
+def _rect_overlap_ratio(first: dict[str, float], second: dict[str, float]) -> float:
+    overlap_width = max(
+        0.0,
+        min(first["x"] + first["width"], second["x"] + second["width"])
+        - max(first["x"], second["x"]),
+    )
+    overlap_height = max(
+        0.0,
+        min(first["y"] + first["height"], second["y"] + second["height"])
+        - max(first["y"], second["y"]),
+    )
+    smaller_area = min(first["width"] * first["height"], second["width"] * second["height"])
+    return round((overlap_width * overlap_height) / smaller_area, 4) if smaller_area > 0 else 0.0
+
+
+def _assign_public_hit_region_ids(candidates: Sequence[dict[str, Any]]) -> tuple[dict[str, Any], ...]:
+    kind_rank = {"input": 0, "ancestor": 1, "overlap": 2, "nearby": 3}
+    ordered = sorted(
+        candidates,
+        key=lambda item: (
+            kind_rank.get(str(item.get("kind")), 9),
+            int(item.get("depth", 99)),
+            str(item.get("tag") or ""),
+            str(item.get("id") or ""),
+            str(item.get("class") or ""),
+            float(item.get("rect", {}).get("x", 0)),
+            float(item.get("rect", {}).get("y", 0)),
+        ),
+    )
+    return tuple({**item, "region_id": f"REGION-{index:02d}"} for index, item in enumerate(ordered))
+
+
+def _public_hit_region_relationships(regions: Sequence[dict[str, Any]]) -> tuple[dict[str, Any], ...]:
+    input_region = next((item for item in regions if item.get("kind") == "input"), None)
+    if input_region is None:
+        return ()
+    input_rect = input_region["rect"]
+    return tuple(
+        {
+            "region_id": item["region_id"],
+            "contains_input": _rect_contains_rect(item["rect"], input_rect),
+            "inside_input": _rect_contains_rect(input_rect, item["rect"]),
+            "input_overlap_ratio": _rect_overlap_ratio(item["rect"], input_rect),
+        }
+        for item in regions
+    )
+
+
+def _human_hit_point_from_evidence(
+    regions: Sequence[dict[str, Any]],
+    *,
+    region_id: str | None,
+    point: tuple[float, float] | None,
+) -> tuple[tuple[float, float] | None, str | None]:
+    if point is not None:
+        return point, None
+    region = next((item for item in regions if item.get("region_id") == region_id), None)
+    if region is None:
+        return None, None
+    rect = region["rect"]
+    return (rect["x"] + rect["width"] / 2, rect["y"] + rect["height"] / 2), str(region_id)
+
+
+def _classify_human_hit_differential(
+    regions: Sequence[dict[str, Any]],
+    *,
+    point: tuple[float, float] | None,
+    hit_matches_input: bool | None,
+) -> str:
+    if point is None or hit_matches_input is None:
+        return "HUMAN_TARGET_AMBIGUOUS"
+    input_region = next((item for item in regions if item.get("kind") == "input"), None)
+    if input_region is None:
+        return "HUMAN_TARGET_AMBIGUOUS"
+    if hit_matches_input and _rect_contains_point(input_region["rect"], point):
+        return "SAME_GEOMETRIC_INPUT_REGION"
+    ancestor_hits = [
+        item
+        for item in regions
+        if item.get("kind") == "ancestor" and _rect_contains_point(item["rect"], point)
+    ]
+    if not _rect_contains_point(input_region["rect"], point) and ancestor_hits:
+        return "HUMAN_POINT_OUTSIDE_INPUT"
+    if not hit_matches_input:
+        return "HUMAN_TARGET_DIFFERS"
+    return "HUMAN_TARGET_AMBIGUOUS"
+
+
+def _public_hit_target_root_class(differential_class: str, *, selector_opened: bool) -> str:
+    if selector_opened and differential_class in {"HUMAN_POINT_OUTSIDE_INPUT", "HUMAN_TARGET_DIFFERS"}:
+        return "PUBLIC_WRAPPER_ACTIVATION_LOCALIZED"
+    if differential_class in {"HUMAN_POINT_OUTSIDE_INPUT", "HUMAN_TARGET_DIFFERS"}:
+        return "PUBLIC_HIT_TARGET_MISMATCH_LOCALIZED"
+    if differential_class == "SAME_GEOMETRIC_INPUT_REGION":
+        return "SAME_PUBLIC_TARGET_NO_ACTIVATION"
+    return "PUBLIC_HIT_TARGET_AMBIGUITY_LOCALIZED"
+
+
+async def _public_destination_hit_region_inventory(page: Any) -> tuple[dict[str, Any], ...]:
+    candidates = await page.evaluate(
+        """() => {
+            const input = document.querySelector('.rc-flight-searchbar input#form_arrCity');
+            if (!input) return [];
+            const inputRect = input.getBoundingClientRect();
+            const scope = input.closest('.rc-flight-searchbar') || input.parentElement;
+            const seen = new Set();
+            const rows = [];
+            const add = (node, kind, depth) => {
+                if (!node || seen.has(node)) return;
+                const rect = node.getBoundingClientRect();
+                const computed = getComputedStyle(node);
+                if (rect.width <= 0 || rect.height <= 0 || computed.visibility === 'hidden' || computed.display === 'none') return;
+                seen.add(node);
+                const rawText = node.value || node.getAttribute('aria-label') || node.innerText || '';
+                rows.push({
+                    kind, depth, tag: node.tagName.toLowerCase(), role: node.getAttribute('role'),
+                    id: node.id || null, class: typeof node.className === 'string' ? node.className : null,
+                    text: String(rawText).replace(/\\s+/g, ' ').trim().slice(0, 120),
+                    cursor: computed.cursor, pointer_events: computed.pointerEvents,
+                    rect: {x: rect.x, y: rect.y, width: rect.width, height: rect.height}
+                });
+            };
+            add(input, 'input', 0);
+            let ancestor = input.parentElement;
+            for (let depth = 1; ancestor && depth <= 4; depth += 1, ancestor = ancestor.parentElement) {
+                add(ancestor, 'ancestor', depth);
+                if (ancestor === scope) break;
+            }
+            if (scope) {
+                for (const node of scope.querySelectorAll('*')) {
+                    if (seen.has(node)) continue;
+                    const rect = node.getBoundingClientRect();
+                    const overlap = Math.max(0, Math.min(rect.right, inputRect.right) - Math.max(rect.left, inputRect.left))
+                        * Math.max(0, Math.min(rect.bottom, inputRect.bottom) - Math.max(rect.top, inputRect.top));
+                    const near = rect.right >= inputRect.left - 24 && rect.left <= inputRect.right + 24
+                        && rect.bottom >= inputRect.top - 24 && rect.top <= inputRect.bottom + 24;
+                    if (overlap > 0 || near) add(node, overlap > 0 ? 'overlap' : 'nearby', 0);
+                    if (rows.length >= 24) break;
+                }
+            }
+            return rows;
+        }"""
+    )
+    normalized: list[dict[str, Any]] = []
+    for candidate in candidates if isinstance(candidates, list) else []:
+        if not isinstance(candidate, dict) or not isinstance(candidate.get("rect"), dict):
+            continue
+        normalized.append(
+            {
+                **candidate,
+                "text": _truncate_diagnostic_text(str(candidate.get("text") or "")),
+                "class": _truncate_diagnostic_text(str(candidate.get("class") or "")),
+                "id": _truncate_diagnostic_text(str(candidate.get("id") or "")),
+            }
+        )
+    return _assign_public_hit_region_ids(normalized)
+
+
+def _annotated_region_svg(
+    png_bytes: bytes,
+    *,
+    clip: dict[str, float],
+    regions: Sequence[dict[str, Any]],
+) -> str:
+    encoded = base64.b64encode(png_bytes).decode("ascii")
+    overlays: list[str] = []
+    colors = ("#e53935", "#1e88e5", "#43a047", "#8e24aa", "#fb8c00", "#00897b")
+    for index, region in enumerate(regions):
+        rect = region["rect"]
+        x = rect["x"] - clip["x"]
+        y = rect["y"] - clip["y"]
+        color = colors[index % len(colors)]
+        label = html.escape(str(region["region_id"]))
+        overlays.append(
+            f'<rect x="{x:.2f}" y="{y:.2f}" width="{rect["width"]:.2f}" height="{rect["height"]:.2f}" '
+            f'fill="none" stroke="{color}" stroke-width="3"/><text x="{x + 3:.2f}" y="{max(14, y + 14):.2f}" '
+            f'font-family="Arial" font-size="13" font-weight="bold" fill="{color}">{label}</text>'
+        )
+    return (
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{clip["width"]:.0f}" height="{clip["height"]:.0f}" '
+        f'viewBox="0 0 {clip["width"]:.2f} {clip["height"]:.2f}">'
+        f'<image href="data:image/png;base64,{encoded}" width="100%" height="100%"/>{"".join(overlays)}</svg>'
+    )
+
+
+async def _write_public_hit_region_visual_map(
+    page: Any,
+    regions: Sequence[dict[str, Any]],
+    evidence_output_path: str,
+) -> dict[str, str]:
+    output = Path(evidence_output_path)
+    raw_path = output.with_name(f"{output.stem}.regions.raw.png")
+    annotated_path = output.with_name(f"{output.stem}.regions.svg")
+    left = min(item["rect"]["x"] for item in regions)
+    top = min(item["rect"]["y"] for item in regions)
+    right = max(item["rect"]["x"] + item["rect"]["width"] for item in regions)
+    bottom = max(item["rect"]["y"] + item["rect"]["height"] for item in regions)
+    clip = {
+        "x": max(0.0, left - 12),
+        "y": max(0.0, top - 12),
+        "width": right - left + 24,
+        "height": bottom - top + 24,
+    }
+    await page.screenshot(path=str(raw_path), clip=clip)
+    annotated_path.write_text(
+        _annotated_region_svg(raw_path.read_bytes(), clip=clip, regions=regions),
+        encoding="utf-8",
+    )
+    return {"raw_screenshot": str(raw_path), "annotated_screenshot": str(annotated_path)}
+
+
+async def _public_hit_test(page: Any, point: tuple[float, float]) -> tuple[Any | None, dict[str, Any] | None]:
+    handle = await page.evaluate_handle("([x, y]) => document.elementFromPoint(x, y)", list(point))
+    element = handle.as_element()
+    if element is None:
+        await handle.dispose()
+        return None, None
+    summary = await element.evaluate(
+        """node => {
+            const input = document.querySelector('.rc-flight-searchbar input#form_arrCity');
+            const rawText = node.value || node.getAttribute('aria-label') || node.innerText || '';
+            return {
+                tag: node.tagName.toLowerCase(), role: node.getAttribute('role'), id: node.id || null,
+                class: typeof node.className === 'string' ? node.className : null,
+                text: String(rawText).replace(/\\s+/g, ' ').trim().slice(0, 120),
+                matches_input: node === input,
+                contains_input: Boolean(input && node.contains(input))
+            };
+        }"""
+    )
+    return element, {
+        **summary,
+        "text": _truncate_diagnostic_text(str(summary.get("text") or "")),
+        "class": _truncate_diagnostic_text(str(summary.get("class") or "")),
+        "id": _truncate_diagnostic_text(str(summary.get("id") or "")),
+    }
+
+
+async def _diagnose_public_destination_hit_target(
+    page: Any,
+    requested_destination: str,
+    *,
+    probe_mode: str,
+    evidence_output_path: str | None,
+    human_hit_region_id: str | None,
+    human_hit_point: tuple[float, float] | None,
+    headed_observation_pause_seconds: float,
+) -> DestinationCommitmentResult:
+    started = time.monotonic()
+    regions = await _public_destination_hit_region_inventory(page)
+    relationships = _public_hit_region_relationships(regions)
+    initial_readback = await _read_control_text(page, _FLIGGY_DESTINATION_INPUT_SELECTOR)
+    visual_map: dict[str, str] = {}
+    if regions and evidence_output_path is not None:
+        visual_map = await _write_public_hit_region_visual_map(page, regions, evidence_output_path)
+    if headed_observation_pause_seconds > 0:
+        await page.wait_for_timeout(int(headed_observation_pause_seconds * 1000))
+
+    resolved_point, resolved_region_id = _human_hit_point_from_evidence(
+        regions,
+        region_id=human_hit_region_id,
+        point=human_hit_point,
+    )
+    hit_element = None
+    hit_summary = None
+    if probe_mode == "differential_click" and resolved_point is not None:
+        hit_element, hit_summary = await _public_hit_test(page, resolved_point)
+    hit_matches_input = hit_summary.get("matches_input") if isinstance(hit_summary, dict) else None
+    differential_class = _classify_human_hit_differential(
+        regions,
+        point=resolved_point,
+        hit_matches_input=hit_matches_input if isinstance(hit_matches_input, bool) else None,
+    )
+    interaction_completed = False
+    interaction_error: str | None = None
+    samples: list[dict[str, Any]] = []
+    if (
+        probe_mode == "differential_click"
+        and hit_element is not None
+        and hit_matches_input is False
+        and differential_class in {"HUMAN_POINT_OUTSIDE_INPUT", "HUMAN_TARGET_DIFFERS"}
+    ):
+        try:
+            await hit_element.click()
+            interaction_completed = True
+        except PlaywrightError as exc:
+            interaction_error = type(exc).__name__
+        for attempt in range(_FLIGGY_DESTINATION_SUGGESTION_ATTEMPTS):
+            candidates = await _collect_destination_suggestion_candidates(page, max_candidates=64)
+            surface_present = bool(candidates) or await _public_destination_city_selector_surface_present(page)
+            samples.append(
+                {
+                    "sample_index": attempt,
+                    "elapsed_ms": max(0, int((time.monotonic() - started) * 1000)),
+                    "surface_present": surface_present,
+                    "candidate_count": len(candidates),
+                    "candidate_labels": [candidate.label for candidate in candidates],
+                }
+            )
+            if surface_present:
+                break
+            if attempt < _FLIGGY_DESTINATION_SUGGESTION_ATTEMPTS - 1:
+                await page.wait_for_timeout(_FLIGGY_DESTINATION_SUGGESTION_WAIT_MS)
+    selector_opened = any(sample["surface_present"] for sample in samples)
+    root_class = (
+        "HUMAN_REFERENCE_INSUFFICIENT"
+        if probe_mode == "visual_map"
+        else _public_hit_target_root_class(differential_class, selector_opened=selector_opened)
+    )
+    diagnostics = {
+        "b0_target_snapshot": {"regions": list(regions)},
+        "b1_geometry_map": {"relationships": list(relationships)},
+        "b2_visual_label_map": {
+            "labels": [item["text"] for item in regions if item.get("text")],
+        },
+        "b3_human_reference_frame": {
+            **visual_map,
+            "headed": True,
+            "human_observation_is_semantic_truth": False,
+        },
+        "b4_human_point_region": {
+            "evidence_type": "HUMAN-SUPPLIED EVIDENCE" if resolved_point is not None else "NOT SUPPLIED",
+            "region_id": resolved_region_id,
+            "point": list(resolved_point) if resolved_point is not None else None,
+        },
+        "b5_standard_hit_test": {"target": hit_summary},
+        "b6_automated_target_compare": {
+            "automated_target": "input#form_arrCity",
+            "hit_matches_input": hit_matches_input,
+        },
+        "b7_optional_controlled_click_probe": {
+            "attempted": interaction_completed or interaction_error is not None,
+            "interaction_completed": interaction_completed,
+            "framework_error": interaction_error,
+            "target_count": 1 if interaction_completed or interaction_error is not None else 0,
+            "retries": 0,
+        },
+        "b8_selector_observe": {"samples": samples, "selector_opened": selector_opened},
+        "b9_differential_class": {"differential_class": differential_class},
+        "b10_root_verdict": {"root_class": root_class},
+    }
+    commit_readback = await _read_control_text(page, _FLIGGY_DESTINATION_INPUT_SELECTOR)
+    return _destination_commitment_result(
+        requested_destination=requested_destination,
+        destination_control_ready=bool(regions),
+        typed_destination=None,
+        candidates=(),
+        suggestion_surface_present=selector_opened,
+        selected_candidate=None,
+        selection_method="diagnostic_only_hit_target_differential",
+        commit_readback=commit_readback,
+        failure_taxonomy=f"DIAG_U10_R1_{root_class}",
+        readback_sequence=(initial_readback, commit_readback),
+        suggestion_snapshots=tuple(DestinationSuggestionSnapshot(sample["elapsed_ms"], ()) for sample in samples),
+        focused_elapsed_ms=samples[0]["elapsed_ms"] if samples else None,
+        typed_elapsed_ms=None,
+        headed_pause_ms=int(headed_observation_pause_seconds * 1000),
+        overlay_evidence=await _overlay_evidence(page),
+        city_selector_opened=selector_opened,
+        initial_destination_readback=initial_readback,
+        activation_diagnostics=diagnostics,
     )
 
 

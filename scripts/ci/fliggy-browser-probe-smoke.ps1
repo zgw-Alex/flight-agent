@@ -10,7 +10,12 @@ param(
     [ValidateRange(0, 300)]
     [double] $HeadedObservationPauseSeconds = 0,
     [ValidateSet("", "current_click", "pointer_mouse")]
-    [string] $DestinationActivationProbe = ""
+    [string] $DestinationActivationProbe = "",
+    [ValidateSet("", "visual_map", "differential_click")]
+    [string] $DestinationHitTargetProbe = "",
+    [string] $HumanHitRegionId = "",
+    [string] $HumanHitPointX = "",
+    [string] $HumanHitPointY = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -82,6 +87,18 @@ try {
     }
     if (-not [string]::IsNullOrWhiteSpace($DestinationActivationProbe)) {
         $Args += @("--destination-activation-probe", $DestinationActivationProbe)
+    }
+    if (-not [string]::IsNullOrWhiteSpace($DestinationHitTargetProbe)) {
+        $Args += @("--destination-hit-target-probe", $DestinationHitTargetProbe)
+    }
+    if (-not [string]::IsNullOrWhiteSpace($HumanHitRegionId)) {
+        $Args += @("--human-hit-region-id", $HumanHitRegionId)
+    }
+    if (-not [string]::IsNullOrWhiteSpace($HumanHitPointX)) {
+        $Args += @("--human-hit-point-x", $HumanHitPointX)
+    }
+    if (-not [string]::IsNullOrWhiteSpace($HumanHitPointY)) {
+        $Args += @("--human-hit-point-y", $HumanHitPointY)
     }
     if ($null -eq $ResolvedOutputPath) {
         uv run python @Args

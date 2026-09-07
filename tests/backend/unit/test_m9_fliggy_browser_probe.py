@@ -19,13 +19,13 @@ from flight_agent.adapters.flight_providers.fliggy.browser_probe import (
     DestinationSuggestionCandidate,
     DestinationSuggestionSnapshot,
     DestinationSuggestionSurfaceClassification,
-    PublicDestinationActivationClass,
     DomTraversalAssessment,
     ExperimentDiagnosis,
     FliggyPageIdentity,
     ProbeInput,
     ProbeRunResult,
     ProviderMarketCompleteness,
+    PublicDestinationActivationClass,
     PublicQueryClassification,
     PublicSearchQueryState,
     ResultContextCandidate,
@@ -33,9 +33,13 @@ from flight_agent.adapters.flight_providers.fliggy.browser_probe import (
     StageDiagnostic,
     _annotate_destination_s8,
     _annotate_post_submit_query_propagation,
+    _annotated_region_svg,
+    _assign_public_hit_region_ids,
+    _bind_public_destination_target,
     _browser_failure_taxonomy,
     _build_post_submit_query_state_diagnostics,
     _classify_destination_suggestion_surface,
+    _classify_human_hit_differential,
     _classify_public_destination_activation,
     _classify_public_query_state,
     _combine_destination_extension_reasons,
@@ -61,7 +65,8 @@ from flight_agent.adapters.flight_providers.fliggy.browser_probe import (
     _public_commit_state_classification,
     _public_date_commitment,
     _public_destination_activation_root_class,
-    _bind_public_destination_target,
+    _public_hit_region_relationships,
+    _public_hit_target_root_class,
     _resolve_destination_candidate,
     _resolve_public_destination_city_candidate,
     _result_state_extension_reason,
@@ -76,8 +81,8 @@ from flight_agent.adapters.flight_providers.fliggy.browser_probe import (
     _verify_pre_submit_query_state,
     assess_dom_coverage,
     choose_result_context_candidate,
-    classify_destination_suggestion_mode,
     classify_destination_activation_mode,
+    classify_destination_suggestion_mode,
     classify_experiment_diagnosis,
     classify_fliggy_page_identity,
     classify_result_state,
@@ -4583,5 +4588,201 @@ def test_du10_19_diff_scope_excludes_l1_l2_and_shared_contracts() -> None:
 
 def test_du10_20_unicode_preflight_failure_aborts_locally() -> None:
     query = ProbeInput("\ud800", "上海", date(2026, 9, 14))
+    with pytest.raises(UnicodeError):
+        _live_observation_preflight(query)
+
+
+def _hit_regions() -> tuple[dict[str, object], ...]:
+    return _assign_public_hit_region_ids(
+        (
+            {
+                "kind": "ancestor",
+                "depth": 1,
+                "tag": "div",
+                "id": "form_arrCity",
+                "class": "arrival-wrapper",
+                "text": "杭州",
+                "rect": {"x": 10.0, "y": 10.0, "width": 140.0, "height": 40.0},
+            },
+            {
+                "kind": "input",
+                "depth": 0,
+                "tag": "input",
+                "id": "form_arrCity",
+                "class": "arrival-input",
+                "text": "杭州",
+                "rect": {"x": 40.0, "y": 10.0, "width": 90.0, "height": 40.0},
+            },
+            {
+                "kind": "overlap",
+                "depth": 0,
+                "tag": "label",
+                "id": "",
+                "class": "arrival-label",
+                "text": "到达城市",
+                "rect": {"x": 10.0, "y": 10.0, "width": 30.0, "height": 40.0},
+            },
+        )
+    )
+
+
+def test_dr1_01_nearby_public_inventory_is_deterministic_and_sanitized() -> None:
+    first = _hit_regions()
+    second = _hit_regions()
+    assert first == second
+    assert [item["region_id"] for item in first] == ["REGION-00", "REGION-01", "REGION-02"]
+    assert "Cookie:" not in str(sanitize_probe_payload(first))
+
+
+def test_dr1_02_input_and_wrapper_geometry_relationships_are_recorded() -> None:
+    relationships = _public_hit_region_relationships(_hit_regions())
+    input_relation, wrapper_relation = relationships[:2]
+    assert input_relation["contains_input"] is True
+    assert wrapper_relation["contains_input"] is True
+    assert wrapper_relation["input_overlap_ratio"] == 1.0
+
+
+def test_dr1_03_point_inside_input_classifies_same_geometric_region() -> None:
+    assert (
+        _classify_human_hit_differential(
+            _hit_regions(), point=(80.0, 30.0), hit_matches_input=True
+        )
+        == "SAME_GEOMETRIC_INPUT_REGION"
+    )
+
+
+def test_dr1_04_point_outside_input_inside_wrapper_is_classified() -> None:
+    assert (
+        _classify_human_hit_differential(
+            _hit_regions(), point=(20.0, 30.0), hit_matches_input=False
+        )
+        == "HUMAN_POINT_OUTSIDE_INPUT"
+    )
+
+
+def test_dr1_05_standard_hit_test_uses_only_public_dom_summary() -> None:
+    source = _fliggy_source_text().split("async def _public_hit_test", 1)[1]
+    source = source.split("async def _diagnose_public_destination_hit_target", 1)[0]
+    assert "document.elementFromPoint" in source
+    assert all(field in source for field in ("tag", "role", "id", "class", "text"))
+    assert "getEventListeners" not in source and "__react" not in source.lower()
+
+
+def test_dr1_06_different_hit_element_classifies_human_target_differs() -> None:
+    assert (
+        _classify_human_hit_differential(
+            _hit_regions(), point=(160.0, 30.0), hit_matches_input=False
+        )
+        == "HUMAN_TARGET_DIFFERS"
+    )
+
+
+def test_dr1_07_missing_or_unresolved_hit_target_is_ambiguous() -> None:
+    assert (
+        _classify_human_hit_differential(_hit_regions(), point=None, hit_matches_input=None)
+        == "HUMAN_TARGET_AMBIGUOUS"
+    )
+
+
+def test_dr1_08_highlighted_region_ids_map_to_inventory() -> None:
+    regions = _hit_regions()
+    svg = _annotated_region_svg(
+        b"png",
+        clip={"x": 0.0, "y": 0.0, "width": 180.0, "height": 70.0},
+        regions=regions,
+    )
+    assert all(str(item["region_id"]) in svg for item in regions)
+
+
+def test_dr1_09_human_annotation_requires_explicit_local_diagnostic_mode() -> None:
+    output_path = str((REPO_ROOT / ".u10-r1-local-evidence.json").resolve())
+    query = ProbeInput(
+        "北京",
+        "上海",
+        date(2026, 9, 14),
+        headless=False,
+        planned_observation=2,
+        evidence_output_path=output_path,
+        destination_hit_target_probe="differential_click",
+        human_hit_region_id="REGION-01",
+    )
+    assert query.human_hit_region_id == "REGION-01"
+    with pytest.raises(ValueError):
+        ProbeInput("北京", "上海", date(2026, 9, 14), human_hit_region_id="REGION-01")
+
+
+def test_dr1_10_controlled_click_targets_only_resolved_hit_element() -> None:
+    body = _fliggy_source_text().split("async def _diagnose_public_destination_hit_target", 1)[1]
+    body = body.split("async def _write_destination_input_text", 1)[0]
+    assert body.count("await hit_element.click()") == 1
+    assert 'hit_matches_input is False' in body
+
+
+def test_dr1_11_no_ancestor_cascade_or_repeated_click_loop() -> None:
+    body = _fliggy_source_text().split("async def _diagnose_public_destination_hit_target", 1)[1]
+    body = body.split("async def _write_destination_input_text", 1)[0]
+    assert body.count(".click()") == 1
+    assert "parentElement.click" not in body and "for ancestor" not in body
+
+
+def test_dr1_12_wrapper_activation_localizes_root() -> None:
+    assert (
+        _public_hit_target_root_class("HUMAN_POINT_OUTSIDE_INPUT", selector_opened=True)
+        == "PUBLIC_WRAPPER_ACTIVATION_LOCALIZED"
+    )
+
+
+def test_dr1_13_same_target_without_activation_is_classified() -> None:
+    assert (
+        _public_hit_target_root_class("SAME_GEOMETRIC_INPUT_REGION", selector_opened=False)
+        == "SAME_PUBLIC_TARGET_NO_ACTIVATION"
+    )
+
+
+def test_dr1_14_default_u9_interaction_path_is_not_replaced() -> None:
+    body = _fliggy_source_text().split("async def _commit_public_destination", 1)[1]
+    body = body.split("def _bind_public_destination_target", 1)[0]
+    assert "if diagnostic_hit_target_probe is not None" in body
+    assert "await field.click()" in body
+    assert "resolution.selected_candidate.selector" in body
+
+
+def test_dr1_15_u9_destination_commit_gate_remains_unchanged() -> None:
+    body = _fliggy_source_text().split("async def _submit_verified_public_flight_search", 1)[1]
+    body = body.split("async def _commit_public_destination", 1)[0]
+    assert 'destination_commitment.get("commitment_status") == "confirmed"' in body
+    assert "verification.submit_allowed and destination_committed and date_committed" in body
+
+
+def test_dr1_16_prior_diagnostic_contracts_remain_regression_safe() -> None:
+    source = _fliggy_source_text()
+    assert all(
+        marker in source
+        for marker in (
+            '"d9_pre_submit_stability"',
+            '"p7_query_identity"',
+            '"h8_strict_identity"',
+            '"c8_strict_q5"',
+            '"a10_root_class"',
+        )
+    )
+
+
+def test_dr1_17_screenshot_and_diagnostics_have_no_private_session_fields() -> None:
+    source = _fliggy_source_text().split("def _annotated_region_svg", 1)[1]
+    source = source.split("async def _write_destination_input_text", 1)[0]
+    assert not any(term in source.lower() for term in ("cookie", "localstorage", "sessionstorage", "token"))
+
+
+def test_dr1_18_unicode_preflight_aborts_before_provider_access() -> None:
+    query = ProbeInput(
+        "\ud800",
+        "上海",
+        date(2026, 9, 14),
+        headless=False,
+        planned_observation=1,
+        evidence_output_path=str((REPO_ROOT / ".u10-r1-evidence.json").resolve()),
+        destination_hit_target_probe="visual_map",
+    )
     with pytest.raises(UnicodeError):
         _live_observation_preflight(query)
