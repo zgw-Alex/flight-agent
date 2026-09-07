@@ -131,6 +131,10 @@ To mark a document as superseded, record:
 - affected scope
 - date of change
 
+## M9 Validation Unit Authority Addendum
+
+- The M9 CTRIP Bounded Live Revalidation Unit Specification V1.0 is the formal Bounded Live Revalidation Unit Specification / Validation Unit Authority for `M9-CTRIP-BOUNDED-LIVE-REVALIDATION-U1`. Canonical path: `project-docs/03_implementation-roadmap/milestones/M9/机票筛选Agent_M9_CTRIP_Bounded_Live_Revalidation_Unit_Specification_V1.0.docx`. Unit status: AUTHORIZED / READY FOR BOUNDED LIVE REVALIDATION. It follows `M9-CTRIP-RUNTIME-INTEGRATION-U1` PASS and keeps Contract Amendment: NONE. It authorizes only bounded, validation-only CTRIP live runtime revalidation with maximum live budget <= 6 total calls, max headed = 4, max headless = 2, human observation, sanitized textual evidence, runtime logs, and screenshots/local reports as LOCAL-ONLY evidence. It must use the existing explicit `FLIGHT_PROVIDER=ctrip` runtime/provider command path and existing probe/sanitizer/mapper/canonical/candidate integration. It does not authorize source, test, fixture, shared semantic, implementation, CI, public API, frontend, database/schema, provider ranking/selection, anti-bot/challenge bypass, stealth/fingerprint spoofing, private endpoint replay, unlimited retry, raw session/HAR/secret persistence, Git commit/push of live evidence, or M9 final Provider selection. Revalidation results may be `LIVE_REVALIDATION_PASS`, `INCONCLUSIVE_NETWORK_ENVIRONMENT`, `ACCESS_CHALLENGE_OBSERVED`, `SELECTOR_OR_PAGE_DRIFT`, `RUNTIME_INTEGRATION_REGRESSION`, or `INSUFFICIENT_EVIDENCE`; only selector/page drift or runtime integration regression requires a separate repair/diagnosis Unit before closure. Bounded live revalidation has not been executed by this governance registration.
+
 ## Contract Amendment Rules
 
 Codex must stop and report evidence before changing any stable Product or Architecture Contract. This includes Domain semantics, Ports, Public APIs, Workflow State, Schema or Migration behavior, Architecture Rules, Security Policy, provider contracts, LLM integration contracts, or persistence contracts.
