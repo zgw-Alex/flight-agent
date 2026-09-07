@@ -43,6 +43,12 @@ _SENSITIVE_KEY_FRAGMENTS = (
 )
 
 _FLIGGY_DESTINATION_INPUT_SELECTOR = ".rc-flight-searchbar input#form_arrCity"
+_FLIGGY_PUBLIC_DESTINATION_TARGET_SELECTOR = (
+    ".rc-flight-searchbar input#form_arrCity,"
+    ".rc-flight-searchbar input[name='arrCity'],"
+    ".rc-flight-searchbar input[placeholder*='到达'],"
+    ".rc-flight-searchbar [aria-label*='到达城市']"
+)
 _FLIGGY_DESTINATION_SUGGESTION_ATTEMPTS = 5
 _FLIGGY_DESTINATION_SUGGESTION_WAIT_MS = 300
 _FLIGGY_DESTINATION_CITY_SELECTOR_SURFACES = (
@@ -166,6 +172,16 @@ class DestinationSuggestionSurfaceClassification(str, Enum):
     UNKNOWN_SURFACE = "UNKNOWN_SURFACE"
 
 
+class PublicDestinationActivationClass(str, Enum):
+    OPENED = "OPENED"
+    TARGET_MISMATCH = "TARGET_MISMATCH"
+    TARGET_AMBIGUOUS = "TARGET_AMBIGUOUS"
+    TARGET_REPLACED = "TARGET_REPLACED"
+    CLICK_NO_ACTIVATION = "CLICK_NO_ACTIVATION"
+    DELAYED_ACTIVATION = "DELAYED_ACTIVATION"
+    UNKNOWN = "UNKNOWN"
+
+
 class DomTraversalAssessment(str, Enum):
     COMPLETE_OBSERVED = "COMPLETE_OBSERVED"
     PARTIAL_OBSERVED = "PARTIAL_OBSERVED"
@@ -189,6 +205,7 @@ class ProbeInput:
     planned_observation: int | None = None
     evidence_output_path: str | None = None
     headed_observation_pause_seconds: float = 0.0
+    destination_activation_probe: str | None = None
 
     def __post_init__(self) -> None:
         if self.origin_text.strip() == "":
@@ -201,6 +218,10 @@ class ProbeInput:
             raise ValueError("ProbeInput planned_observation must be between 1 and 6")
         if self.headed_observation_pause_seconds < 0:
             raise ValueError("ProbeInput headed_observation_pause_seconds must be non-negative")
+        if self.destination_activation_probe not in {None, "current_click", "pointer_mouse"}:
+            raise ValueError("ProbeInput destination_activation_probe must be current_click or pointer_mouse")
+        if self.destination_activation_probe is not None and self.planned_observation is None:
+            raise ValueError("ProbeInput destination_activation_probe requires a planned observation")
 
     @classmethod
     def from_args(cls, args: argparse.Namespace) -> Self:
@@ -217,6 +238,7 @@ class ProbeInput:
             planned_observation=args.planned_observation,
             evidence_output_path=str(evidence_output.resolve()) if evidence_output is not None else None,
             headed_observation_pause_seconds=args.headed_observation_pause_seconds,
+            destination_activation_probe=args.destination_activation_probe,
         )
 
 
@@ -477,6 +499,7 @@ class DestinationCommitmentResult:
     failure_taxonomy: str | None
     destination_stability_diagnostics: dict[str, Any] = field(default_factory=dict)
     destination_suggestion_diagnostics: dict[str, Any] = field(default_factory=dict)
+    destination_activation_diagnostics: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -494,6 +517,7 @@ class DestinationCommitmentResult:
             "failure_taxonomy": self.failure_taxonomy,
             "destination_stability_diagnostics": self.destination_stability_diagnostics,
             "destination_suggestion_diagnostics": self.destination_suggestion_diagnostics,
+            "destination_activation_diagnostics": self.destination_activation_diagnostics,
         }
 
 
@@ -1835,7 +1859,7 @@ def _live_observation_preflight(probe_input: ProbeInput) -> dict[str, Any]:
         or probe_input.destination_text != "\u4e0a\u6d77"
         or probe_input.departure_date != date(2026, 9, 14)
     ):
-        raise ValueError("DIAG-U8 planned observation query identity preflight failed before provider access")
+        raise ValueError("Planned observation query identity preflight failed before provider access")
     if probe_input.planned_observation is not None and not output_path_absolute:
         raise ValueError("A planned diagnostic observation requires an absolute evidence output path")
     return {
@@ -2156,6 +2180,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--evidence-output-path", type=Path)
     parser.add_argument("--planned-observation", type=int)
     parser.add_argument("--headed-observation-pause-seconds", type=float, default=0.0)
+    parser.add_argument("--destination-activation-probe", choices=("current_click", "pointer_mouse"))
     args = parser.parse_args(argv)
     if args.output_json is not None:
         args.output_json = args.output_json.resolve()
@@ -2434,6 +2459,8 @@ async def _write_public_flight_search_fields(page: Any, probe_input: ProbeInput)
         headed_observation_pause_seconds=(
             probe_input.headed_observation_pause_seconds if not probe_input.headless else 0.0
         ),
+        diagnostic_activation_probe=probe_input.destination_activation_probe,
+        headless=probe_input.headless,
     )
     return {
         "destination_commitment": destination_commitment.to_dict(),
@@ -2490,7 +2517,17 @@ async def _commit_public_destination(
     requested_destination: str,
     *,
     headed_observation_pause_seconds: float = 0.0,
+    diagnostic_activation_probe: str | None = None,
+    headless: bool = True,
 ) -> DestinationCommitmentResult:
+    if diagnostic_activation_probe is not None:
+        return await _diagnose_public_destination_activation(
+            page,
+            requested_destination,
+            interaction_path=diagnostic_activation_probe,
+            headless=headless,
+            headed_observation_pause_seconds=headed_observation_pause_seconds,
+        )
     observation_started = time.monotonic()
     control = page.locator(_FLIGGY_DESTINATION_INPUT_SELECTOR)
     destination_control_ready = False
@@ -2623,6 +2660,273 @@ async def _commit_public_destination(
         overlay_evidence=await _overlay_evidence(page),
         city_selector_opened=suggestion_surface_present,
         initial_destination_readback=initial_readback,
+    )
+
+
+def _bind_public_destination_target(inventory: Sequence[dict[str, Any]]) -> dict[str, Any]:
+    plausible = [item for item in inventory if item.get("visible") is True and item.get("semantic_excluded") is not True]
+    exact_matches = [item for item in plausible if item.get("current_locator_match") is True]
+    if len(exact_matches) > 1:
+        return {
+            "status": "TARGET_AMBIGUOUS",
+            "bound_index": None,
+            "plausible_count": len(plausible),
+            "exact_match_count": len(exact_matches),
+        }
+    if len(exact_matches) == 1:
+        return {
+            "status": "BOUND",
+            "bound_index": exact_matches[0]["index"],
+            "plausible_count": len(plausible),
+            "exact_match_count": 1,
+        }
+    status = "TARGET_AMBIGUOUS" if len(plausible) > 1 else "TARGET_MISMATCH"
+    return {"status": status, "bound_index": None, "plausible_count": len(plausible), "exact_match_count": 0}
+
+
+def _classify_public_destination_activation(
+    *,
+    binding_status: str,
+    target_ready: bool,
+    target_replaced: bool,
+    interaction_completed: bool,
+    samples: Sequence[dict[str, Any]],
+) -> PublicDestinationActivationClass:
+    if binding_status == "TARGET_AMBIGUOUS":
+        return PublicDestinationActivationClass.TARGET_AMBIGUOUS
+    if binding_status != "BOUND" or not target_ready:
+        return PublicDestinationActivationClass.TARGET_MISMATCH
+    if target_replaced:
+        return PublicDestinationActivationClass.TARGET_REPLACED
+    opened_indexes = [index for index, sample in enumerate(samples) if sample.get("surface_present") is True]
+    if opened_indexes:
+        return PublicDestinationActivationClass.OPENED if opened_indexes[0] == 0 else PublicDestinationActivationClass.DELAYED_ACTIVATION
+    if interaction_completed:
+        return PublicDestinationActivationClass.CLICK_NO_ACTIVATION
+    return PublicDestinationActivationClass.UNKNOWN
+
+
+def _public_destination_activation_root_class(
+    activation_class: PublicDestinationActivationClass,
+    interaction_path: str,
+) -> str:
+    if activation_class is PublicDestinationActivationClass.TARGET_MISMATCH:
+        return "PUBLIC_TARGET_MISMATCH_LOCALIZED"
+    if activation_class is PublicDestinationActivationClass.TARGET_AMBIGUOUS:
+        return "PUBLIC_TARGET_AMBIGUITY_LOCALIZED"
+    if activation_class is PublicDestinationActivationClass.TARGET_REPLACED:
+        return "PUBLIC_TARGET_LIFECYCLE_REPLACEMENT_LOCALIZED"
+    if activation_class is PublicDestinationActivationClass.DELAYED_ACTIVATION:
+        return "PUBLIC_SELECTOR_ACTIVATION_DELAY_LOCALIZED"
+    if activation_class is PublicDestinationActivationClass.OPENED and interaction_path == "pointer_mouse":
+        return "PUBLIC_INTERACTION_SEMANTICS_LOCALIZED"
+    return "DIAGNOSTIC_INSUFFICIENT"
+
+
+def classify_destination_activation_mode(results: Sequence[dict[str, Any]]) -> str:
+    roots_by_mode: dict[bool, set[str]] = {True: set(), False: set()}
+    for result in results:
+        diagnostics = result.get("diagnostics") if isinstance(result, dict) else None
+        if not isinstance(diagnostics, dict) or not isinstance(diagnostics.get("headless"), bool):
+            continue
+        commitment = diagnostics.get("destination_commitment")
+        activation = commitment.get("destination_activation_diagnostics") if isinstance(commitment, dict) else None
+        root_class = activation.get("a10_root_class", {}).get("root_class") if isinstance(activation, dict) else None
+        if isinstance(root_class, str):
+            roots_by_mode[diagnostics["headless"]].add(root_class)
+    if roots_by_mode[True] and roots_by_mode[False] and roots_by_mode[True] != roots_by_mode[False]:
+        return "MODE_DEPENDENT_SELECTOR_ACTIVATION_LOCALIZED"
+    roots = roots_by_mode[True] | roots_by_mode[False]
+    return next(iter(roots)) if len(roots) == 1 else "DIAGNOSTIC_INSUFFICIENT"
+
+
+async def _public_destination_target_inventory(page: Any) -> tuple[dict[str, Any], ...]:
+    locator = page.locator(_FLIGGY_PUBLIC_DESTINATION_TARGET_SELECTOR)
+    count = min(await locator.count(), 8)
+    inventory: list[dict[str, Any]] = []
+    for index in range(count):
+        item = locator.nth(index)
+        evidence: dict[str, Any] = {
+            "index": index,
+            "visible_label": None,
+            "tag": None,
+            "role": None,
+            "visible": False,
+            "enabled": False,
+            "attached": False,
+            "bounding_box_present": False,
+            "current_locator_match": False,
+            "semantic_excluded": False,
+        }
+        with suppress(PlaywrightError):
+            evidence["visible_label"] = await _read_locator_text(item)
+            evidence["tag"] = await item.evaluate("node => node.tagName.toLowerCase()")
+            evidence["role"] = await item.get_attribute("role")
+            evidence["visible"] = await item.is_visible()
+            evidence["enabled"] = await item.is_enabled()
+            evidence["attached"] = await item.evaluate("node => node.isConnected")
+            evidence["bounding_box_present"] = await item.bounding_box() is not None
+            evidence["current_locator_match"] = await item.evaluate(
+                f"node => node.matches({json.dumps(_FLIGGY_DESTINATION_INPUT_SELECTOR)})"
+            )
+            evidence["semantic_excluded"] = "交换" in str(evidence["visible_label"] or "")
+        inventory.append(evidence)
+    return tuple(inventory)
+
+
+async def _public_destination_target_readiness(target: Any) -> dict[str, bool]:
+    readiness = {"visible": False, "enabled": False, "attached": False, "bounding_box_present": False, "ready": False}
+    with suppress(PlaywrightError):
+        readiness.update(
+            {
+                "visible": await target.is_visible(),
+                "enabled": await target.is_enabled(),
+                "attached": await target.evaluate("node => node.isConnected"),
+                "bounding_box_present": await target.bounding_box() is not None,
+            }
+        )
+    readiness["ready"] = all(readiness[key] for key in ("visible", "enabled", "attached", "bounding_box_present"))
+    return readiness
+
+
+async def _public_target_has_focus(target: Any) -> bool | str:
+    try:
+        return bool(await target.evaluate("node => node === document.activeElement"))
+    except PlaywrightError:
+        return "unknown"
+
+
+async def _diagnose_public_destination_activation(
+    page: Any,
+    requested_destination: str,
+    *,
+    interaction_path: str,
+    headless: bool,
+    headed_observation_pause_seconds: float,
+) -> DestinationCommitmentResult:
+    started = time.monotonic()
+    inventory = await _public_destination_target_inventory(page)
+    binding = _bind_public_destination_target(inventory)
+    target = None
+    if binding["status"] == "BOUND" and isinstance(binding["bound_index"], int):
+        target = page.locator(_FLIGGY_PUBLIC_DESTINATION_TARGET_SELECTOR).nth(binding["bound_index"])
+    readiness_before = await _public_destination_target_readiness(target) if target is not None else {}
+    focus_before = await _public_target_has_focus(target) if target is not None else "unknown"
+    initial_readback = await _read_control_text(page, _FLIGGY_DESTINATION_INPUT_SELECTOR)
+    context_count_before = len(page.context.pages)
+    target_handle = await target.element_handle() if target is not None else None
+    pause_ms = int(headed_observation_pause_seconds * 1000) if not headless else 0
+    if pause_ms > 0:
+        await page.wait_for_timeout(pause_ms)
+
+    interaction_completed = False
+    interaction_error: str | None = None
+    if target is not None and readiness_before.get("ready") is True:
+        try:
+            if interaction_path == "current_click":
+                await target.click()
+            else:
+                box = await target.bounding_box()
+                if box is None:
+                    raise PlaywrightError("public target bounding box unavailable")
+                await page.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+                await page.mouse.down()
+                await page.mouse.up()
+            interaction_completed = True
+        except PlaywrightError as exc:
+            interaction_error = type(exc).__name__
+    if pause_ms > 0:
+        await page.wait_for_timeout(pause_ms)
+
+    focus_after = await _public_target_has_focus(target) if target is not None else "unknown"
+    target_connected_after: bool | str = "unknown"
+    if target_handle is not None:
+        with suppress(PlaywrightError):
+            target_connected_after = bool(await target_handle.evaluate("node => node.isConnected"))
+    readiness_after = await _public_destination_target_readiness(target) if target is not None else {}
+    target_replaced = target_connected_after is False
+    samples: list[dict[str, Any]] = []
+    all_candidates: list[DestinationSuggestionCandidate] = []
+    for attempt in range(_FLIGGY_DESTINATION_SUGGESTION_ATTEMPTS):
+        candidates = await _collect_destination_suggestion_candidates(page, max_candidates=64)
+        surface_present = bool(candidates) or await _public_destination_city_selector_surface_present(page)
+        samples.append(
+            {
+                "sample_index": attempt,
+                "elapsed_ms": max(0, int((time.monotonic() - started) * 1000)),
+                "surface_present": surface_present,
+                "candidate_count": len(candidates),
+                "candidate_labels": [candidate.label for candidate in candidates],
+            }
+        )
+        all_candidates.extend(candidates)
+        if surface_present:
+            if pause_ms > 0:
+                await page.wait_for_timeout(pause_ms)
+            break
+        if attempt < _FLIGGY_DESTINATION_SUGGESTION_ATTEMPTS - 1:
+            await page.wait_for_timeout(_FLIGGY_DESTINATION_SUGGESTION_WAIT_MS)
+
+    activation_class = _classify_public_destination_activation(
+        binding_status=str(binding["status"]),
+        target_ready=readiness_before.get("ready") is True,
+        target_replaced=target_replaced,
+        interaction_completed=interaction_completed,
+        samples=samples,
+    )
+    root_class = _public_destination_activation_root_class(activation_class, interaction_path)
+    activation_diagnostics = {
+        "a0_target_inventory": {"locator_multiplicity": len(inventory), "targets": list(inventory)},
+        "a1_target_bind": binding,
+        "a2_target_readiness": {"before": readiness_before, "after": readiness_after},
+        "a3_pre_click_focus": {"target_had_focus": focus_before},
+        "a4_interaction_path": {"path": interaction_path, "same_semantic_public_control": binding["status"] == "BOUND"},
+        "a5_post_click_receipt": {
+            "interaction_completed": interaction_completed,
+            "framework_error": interaction_error,
+            "target_connected_after": target_connected_after,
+        },
+        "a6_focus_lifecycle_delta": {
+            "focus_before": focus_before,
+            "focus_after": focus_after,
+            "context_count_before": context_count_before,
+            "context_count_after": len(page.context.pages),
+            "target_replaced": target_replaced,
+        },
+        "a7_selector_marker_sampling": {"samples": samples, "bounded_attempts": len(samples), "retries": 0},
+        "a8_activation_class": {"activation_class": activation_class.value},
+        "a9_human_visual_correlation": {
+            "headed": not headless,
+            "observation_pause_ms": pause_ms,
+            "screenshot_supplied": False,
+            "human_observation_is_semantic_truth": False,
+        },
+        "a10_root_class": {"root_class": root_class},
+    }
+    unique_candidates = tuple(dict.fromkeys((candidate.selector, candidate.index, candidate.label, candidate.selectable) for candidate in all_candidates))
+    candidates = tuple(DestinationSuggestionCandidate(*candidate) for candidate in unique_candidates)
+    commit_readback = await _read_control_text(page, _FLIGGY_DESTINATION_INPUT_SELECTOR)
+    return _destination_commitment_result(
+        requested_destination=requested_destination,
+        destination_control_ready=readiness_before.get("ready") is True,
+        typed_destination=None,
+        candidates=candidates,
+        suggestion_surface_present=any(sample["surface_present"] for sample in samples),
+        selected_candidate=None,
+        selection_method="diagnostic_only_no_candidate_selection",
+        commit_readback=commit_readback,
+        failure_taxonomy=f"DIAG_U10_{activation_class.value}",
+        readback_sequence=(initial_readback, commit_readback),
+        suggestion_snapshots=tuple(
+            DestinationSuggestionSnapshot(sample["elapsed_ms"], ()) for sample in samples
+        ),
+        focused_elapsed_ms=samples[0]["elapsed_ms"] if samples else None,
+        typed_elapsed_ms=None,
+        headed_pause_ms=pause_ms,
+        overlay_evidence=await _overlay_evidence(page),
+        city_selector_opened=any(sample["surface_present"] for sample in samples),
+        initial_destination_readback=initial_readback,
+        activation_diagnostics=activation_diagnostics,
     )
 
 
@@ -2821,6 +3125,7 @@ def _destination_commitment_result(
     overlay_evidence: tuple[str, ...] = (),
     city_selector_opened: bool = False,
     initial_destination_readback: str | None = None,
+    activation_diagnostics: dict[str, Any] | None = None,
 ) -> DestinationCommitmentResult:
     destination_match = _destination_readback_matches(commit_readback, requested_destination)
     commitment_status = _destination_commitment_status(
@@ -2881,6 +3186,7 @@ def _destination_commitment_result(
         failure_taxonomy=effective_failure,
         destination_stability_diagnostics=stability_diagnostics,
         destination_suggestion_diagnostics=suggestion_diagnostics,
+        destination_activation_diagnostics=activation_diagnostics or {},
     )
 
 

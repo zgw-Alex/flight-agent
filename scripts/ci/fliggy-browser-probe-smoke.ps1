@@ -8,7 +8,9 @@ param(
     [ValidateRange(0, 6)]
     [int] $PlannedObservation = 0,
     [ValidateRange(0, 300)]
-    [double] $HeadedObservationPauseSeconds = 0
+    [double] $HeadedObservationPauseSeconds = 0,
+    [ValidateSet("", "current_click", "pointer_mouse")]
+    [string] $DestinationActivationProbe = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -41,7 +43,7 @@ if ($PlannedObservation -gt 0) {
         $Destination -cne $ExpectedDestination -or
         $DepartureDate -cne "2026-09-14"
     ) {
-        throw "DIAG-U8 query identity preflight failed before provider access."
+        throw "Planned observation query identity preflight failed before provider access."
     }
 }
 
@@ -77,6 +79,9 @@ try {
     }
     if ($HeadedObservationPauseSeconds -gt 0) {
         $Args += @("--headed-observation-pause-seconds", "$HeadedObservationPauseSeconds")
+    }
+    if (-not [string]::IsNullOrWhiteSpace($DestinationActivationProbe)) {
+        $Args += @("--destination-activation-probe", $DestinationActivationProbe)
     }
     if ($null -eq $ResolvedOutputPath) {
         uv run python @Args

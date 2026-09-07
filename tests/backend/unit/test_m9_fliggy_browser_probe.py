@@ -19,6 +19,7 @@ from flight_agent.adapters.flight_providers.fliggy.browser_probe import (
     DestinationSuggestionCandidate,
     DestinationSuggestionSnapshot,
     DestinationSuggestionSurfaceClassification,
+    PublicDestinationActivationClass,
     DomTraversalAssessment,
     ExperimentDiagnosis,
     FliggyPageIdentity,
@@ -35,6 +36,7 @@ from flight_agent.adapters.flight_providers.fliggy.browser_probe import (
     _browser_failure_taxonomy,
     _build_post_submit_query_state_diagnostics,
     _classify_destination_suggestion_surface,
+    _classify_public_destination_activation,
     _classify_public_query_state,
     _combine_destination_extension_reasons,
     _commit_public_destination,
@@ -58,6 +60,8 @@ from flight_agent.adapters.flight_providers.fliggy.browser_probe import (
     _marker_transition_count,
     _public_commit_state_classification,
     _public_date_commitment,
+    _public_destination_activation_root_class,
+    _bind_public_destination_target,
     _resolve_destination_candidate,
     _resolve_public_destination_city_candidate,
     _result_state_extension_reason,
@@ -73,6 +77,7 @@ from flight_agent.adapters.flight_providers.fliggy.browser_probe import (
     assess_dom_coverage,
     choose_result_context_candidate,
     classify_destination_suggestion_mode,
+    classify_destination_activation_mode,
     classify_experiment_diagnosis,
     classify_fliggy_page_identity,
     classify_result_state,
@@ -4416,7 +4421,7 @@ def test_ru9_20_existing_diagnostics_contracts_remain_present() -> None:
 
 
 def test_ru9_21_recovery_diff_stays_provider_local() -> None:
-    assert set(_tracked_diff_names()) <= {"apps/backend/src/flight_agent/adapters/flight_providers/fliggy/browser_probe.py", "tests/backend/unit/test_m9_fliggy_browser_probe.py"}
+    assert set(_tracked_diff_names()) <= {"apps/backend/src/flight_agent/adapters/flight_providers/fliggy/browser_probe.py", "tests/backend/unit/test_m9_fliggy_browser_probe.py", "scripts/ci/fliggy-browser-probe-smoke.ps1"}
 
 
 def test_ru9_22_unicode_live_preflight_does_not_change_query_semantics() -> None:
@@ -4425,3 +4430,158 @@ def test_ru9_22_unicode_live_preflight_does_not_change_query_semantics() -> None
     preflight = _live_observation_preflight(query)
     assert preflight["unicode_safe"] is True
     assert (preflight["origin"], preflight["destination"], preflight["departure_date"]) == ("北京", "上海", "2026-09-14")
+
+
+def test_du10_01_single_correct_visible_destination_target_is_bound() -> None:
+    binding = _bind_public_destination_target(({"index": 0, "visible": True, "current_locator_match": True},))
+    assert binding == {"status": "BOUND", "bound_index": 0, "plausible_count": 1, "exact_match_count": 1}
+
+
+def test_du10_02_multiple_plausible_targets_are_ambiguous() -> None:
+    binding = _bind_public_destination_target(
+        (
+            {"index": 0, "visible": True, "current_locator_match": True},
+            {"index": 1, "visible": True, "current_locator_match": True},
+        )
+    )
+    assert binding["status"] == "TARGET_AMBIGUOUS" and binding["bound_index"] is None
+
+
+def test_du10_03_hidden_or_wrong_target_is_not_human_equivalent() -> None:
+    hidden = _bind_public_destination_target(({"index": 0, "visible": False, "current_locator_match": True},))
+    wrong = _bind_public_destination_target(({"index": 0, "visible": True, "current_locator_match": False},))
+    assert hidden["status"] == wrong["status"] == "TARGET_MISMATCH"
+
+
+def test_du10_04_target_readiness_requires_all_public_signals() -> None:
+    classification = _classify_public_destination_activation(
+        binding_status="BOUND", target_ready=False, target_replaced=False, interaction_completed=False, samples=()
+    )
+    assert classification is PublicDestinationActivationClass.TARGET_MISMATCH
+
+
+def test_du10_05_replaced_target_is_classified_before_activation() -> None:
+    classification = _classify_public_destination_activation(
+        binding_status="BOUND", target_ready=True, target_replaced=True, interaction_completed=True, samples=()
+    )
+    assert classification is PublicDestinationActivationClass.TARGET_REPLACED
+
+
+def test_du10_06_completed_click_without_selector_is_classified() -> None:
+    classification = _classify_public_destination_activation(
+        binding_status="BOUND",
+        target_ready=True,
+        target_replaced=False,
+        interaction_completed=True,
+        samples=({"surface_present": False},),
+    )
+    assert classification is PublicDestinationActivationClass.CLICK_NO_ACTIVATION
+
+
+def test_du10_07_immediate_selector_activation_is_opened() -> None:
+    classification = _classify_public_destination_activation(
+        binding_status="BOUND",
+        target_ready=True,
+        target_replaced=False,
+        interaction_completed=True,
+        samples=({"surface_present": True},),
+    )
+    assert classification is PublicDestinationActivationClass.OPENED
+
+
+def test_du10_08_bounded_later_selector_activation_is_delayed() -> None:
+    classification = _classify_public_destination_activation(
+        binding_status="BOUND",
+        target_ready=True,
+        target_replaced=False,
+        interaction_completed=True,
+        samples=({"surface_present": False}, {"surface_present": True}),
+    )
+    assert classification is PublicDestinationActivationClass.DELAYED_ACTIVATION
+    assert _public_destination_activation_root_class(classification, "current_click") == "PUBLIC_SELECTOR_ACTIVATION_DELAY_LOCALIZED"
+
+
+def test_du10_09_focus_evidence_is_public_and_read_only() -> None:
+    source = _fliggy_source_text()
+    assert "node === document.activeElement" in source
+    assert "private provider" not in source.lower()
+
+
+def test_du10_10_target_and_candidate_labels_are_sanitized() -> None:
+    payload = {"a0_target_inventory": {"targets": [{"visible_label": "杭州 Cookie: a=b"}]}}
+    assert "Cookie: a=b" not in str(sanitize_probe_payload(payload))
+
+
+def test_du10_11_diagnostic_probe_does_not_replace_default_u9_path() -> None:
+    source = _fliggy_source_text()
+    signature = source.split("async def _commit_public_destination", 1)[1].split(") -> DestinationCommitmentResult", 1)[0]
+    assert "diagnostic_activation_probe: str | None = None" in signature
+
+
+def test_du10_12_no_forced_javascript_event_or_dom_mutation_helper() -> None:
+    body = _fliggy_source_text().split("async def _diagnose_public_destination_activation", 1)[1].split("async def _write_destination_input_text", 1)[0]
+    assert "dispatchEvent" not in body
+    assert ".evaluate(\"node => node.click" not in body
+    assert "style." not in body and "classList" not in body
+
+
+def test_du10_13_one_interaction_attempt_has_no_click_retry_loop() -> None:
+    body = _fliggy_source_text().split("async def _diagnose_public_destination_activation", 1)[1].split("async def _write_destination_input_text", 1)[0]
+    assert body.count("await target.click()") == 1
+    assert body.count("await page.mouse.down()") == 1
+    assert body.count("await page.mouse.up()") == 1
+
+
+def test_du10_14_human_visual_metadata_is_not_semantic_truth() -> None:
+    body = _fliggy_source_text().split("async def _diagnose_public_destination_activation", 1)[1].split("async def _write_destination_input_text", 1)[0]
+    assert '"screenshot_supplied": False' in body
+    assert '"human_observation_is_semantic_truth": False' in body
+
+
+def test_du10_15_headed_headless_difference_is_explicit() -> None:
+    headed = {"diagnostics": {"headless": False, "destination_commitment": {"destination_activation_diagnostics": {"a10_root_class": {"root_class": "PUBLIC_INTERACTION_SEMANTICS_LOCALIZED"}}}}}
+    headless = {"diagnostics": {"headless": True, "destination_commitment": {"destination_activation_diagnostics": {"a10_root_class": {"root_class": "DIAGNOSTIC_INSUFFICIENT"}}}}}
+    assert classify_destination_activation_mode((headed, headless)) == "MODE_DEPENDENT_SELECTOR_ACTIVATION_LOCALIZED"
+
+
+def test_du10_16_existing_u9_destination_commit_gate_is_unchanged() -> None:
+    body = _fliggy_source_text().split("async def _commit_public_destination", 1)[1].split("def _bind_public_destination_target", 1)[0]
+    assert "await field.click()" in body
+    assert "await page.locator(resolution.selected_candidate.selector).nth(resolution.selected_candidate.index).click()" in body
+
+
+def test_du10_17_date_d0_d9_q1_q5_contracts_are_preserved() -> None:
+    commitment = _destination_commitment_result(
+        requested_destination="上海",
+        destination_control_ready=True,
+        typed_destination=None,
+        candidates=(_destination_candidate("上海"),),
+        suggestion_surface_present=True,
+        selected_candidate=_destination_candidate("上海"),
+        selection_method="click",
+        commit_readback="上海",
+        failure_taxonomy=None,
+    ).to_dict()
+    assert all(any(key.startswith(f"d{i}_") for key in commitment["destination_stability_diagnostics"]) for i in range(10))
+    assert _public_date_commitment(requested_date="2026-09-14", typed_date="2026-09-14", commit_readback="2026-09-14", action_performed=True)["commitment_status"] == "confirmed"
+    assert _verify_pre_submit_query_state(_query_state()).submit_allowed is True
+    assert _build_post_submit_query_state_diagnostics(_post_submit_base_diagnostics(), _post_submit_handoff())["q5_result_context"]["context_match"] is True
+
+
+def test_du10_18_p_h_c_diagnostic_builders_are_preserved() -> None:
+    source = _fliggy_source_text()
+    assert all(name in source for name in ("_diag_u4_p0_p7", "_diag_u6_h0_h8", "_diag_u7_root_cause_class", "_public_commit_state_classification"))
+
+
+def test_du10_19_diff_scope_excludes_l1_l2_and_shared_contracts() -> None:
+    assert set(_tracked_diff_names()) <= {
+        "apps/backend/src/flight_agent/adapters/flight_providers/fliggy/browser_probe.py",
+        "tests/backend/unit/test_m9_fliggy_browser_probe.py",
+        "scripts/ci/fliggy-browser-probe-smoke.ps1",
+    }
+
+
+def test_du10_20_unicode_preflight_failure_aborts_locally() -> None:
+    query = ProbeInput("\ud800", "上海", date(2026, 9, 14))
+    with pytest.raises(UnicodeError):
+        _live_observation_preflight(query)
